@@ -35,3 +35,4 @@ O app usa Supabase para banco de dados, auth e tempo real.
 - **Realtime (lista em tempo real):** a tabela `players` precisa estar na publicação. Execute `supabase/enable_realtime.sql` ou em **Dashboard > Database > Replication** adicione `players` e `session` à publicação `supabase_realtime`.
 # bsknext
 # bsknext
+# bskranking
