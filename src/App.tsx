@@ -66,14 +66,6 @@ type SortKey = 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points';
 const ADMIN_PASSWORD = '1710';
 const ADMIN_STORAGE_KEY = 'basquete_admin';
 
-const MOCK_STATS = [
-  { name: 'LeBron', wins: 15, points: 250, blocks: 45, steals: 30, clutch_points: 12 },
-  { name: 'Curry', wins: 12, points: 310, blocks: 5, steals: 45, clutch_points: 20 },
-  { name: 'Giannis', wins: 14, points: 280, blocks: 60, steals: 20, clutch_points: 8 },
-  { name: 'Durant', wins: 13, points: 295, blocks: 35, steals: 15, clutch_points: 15 },
-  { name: 'Luka', wins: 10, points: 270, blocks: 10, steals: 25, clutch_points: 18 },
-];
-
 export default function App() {
   const { user, isGuest, signOut, leaveGuestMode } = useAuth();
   const isLoggedIn = !!user;
@@ -132,15 +124,7 @@ export default function App() {
     }
     const statsData = (data ?? []) as PlayerStats[];
     setStats(statsData);
-
-    if (statsData.length === 0 && !loading) {
-      for (const s of MOCK_STATS) {
-        await supabase.from('stats').insert(s);
-      }
-      const { data: newData } = await supabase.from('stats').select('*');
-      setStats((newData ?? []) as PlayerStats[]);
-    }
-  }, [loading]);
+  }, []);
 
   const fetchSession = useCallback(async () => {
     const { data, error: err } = await supabase
@@ -213,6 +197,24 @@ export default function App() {
   useEffect(() => {
     fetchPartidaSessao(currentPartidaSessaoId);
   }, [currentPartidaSessaoId, fetchPartidaSessao]);
+
+  // Admin por email no banco (basquete_users.admin): se usuário logado for admin, ativa modo admin
+  useEffect(() => {
+    if (!user?.email) return;
+    const checkAdmin = async () => {
+      const { data } = await supabase
+        .from('basquete_users')
+        .select('admin')
+        .eq('email', user.email)
+        .eq('admin', true)
+        .maybeSingle();
+      if (data?.admin) {
+        setIsAdminMode(true);
+        localStorage.setItem(ADMIN_STORAGE_KEY, 'true');
+      }
+    };
+    checkAdmin();
+  }, [user?.email]);
 
   // Polling do placar: fonte única de verdade para admin e visitante (Realtime pode falhar em guests)
   const shouldPollPlacar = activeTab === 'lista' && !!currentPartidaSessaoId;
