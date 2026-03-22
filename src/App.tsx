@@ -94,6 +94,7 @@ export default function App() {
   });
   const [timerStartedOnce, setTimerStartedOnce] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
+  const [userProfile, setUserProfile] = useState<{ display_name: string | null; avatar_url: string | null } | null>(null);
   const lastPlacarUpdateAt = useRef<number>(0);
 
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
@@ -264,6 +265,24 @@ export default function App() {
       supabase.removeChannel(channel);
     };
   }, [fetchStats]);
+
+  // Perfil do usuário (avatar e nome do bucket/basquete_users)
+  const fetchUserProfile = useCallback(async () => {
+    if (!user?.id) {
+      setUserProfile(null);
+      return;
+    }
+    const { data } = await supabase
+      .from('basquete_users')
+      .select('display_name, avatar_url')
+      .eq('auth_id', user.id)
+      .maybeSingle();
+    setUserProfile(data ? { display_name: data.display_name, avatar_url: data.avatar_url } : null);
+  }, [user?.id]);
+
+  useEffect(() => {
+    fetchUserProfile();
+  }, [fetchUserProfile]);
 
   // Realtime: session
   useEffect(() => {
@@ -1671,7 +1690,10 @@ export default function App() {
               <EditarPerfil
                 darkMode={darkMode}
                 onBack={() => setEditingProfile(false)}
-                onSaved={() => setEditingProfile(false)}
+                onSaved={() => {
+                  setEditingProfile(false);
+                  fetchUserProfile();
+                }}
               />
             ) : isGuest ? (
               <>
@@ -1703,9 +1725,13 @@ export default function App() {
               <>
                 <div className="flex flex-col items-center text-center space-y-4">
                   <div className="relative">
-                    <div className="w-24 h-24 bg-gradient-to-tr from-orange-500 to-yellow-400 rounded-full p-1 shadow-xl">
-                      <div className={cn('w-full h-full rounded-full flex items-center justify-center', darkMode ? 'bg-slate-900' : 'bg-white')}>
-                        <User className={cn('w-12 h-12', darkMode ? 'text-slate-700' : 'text-slate-200')} />
+                    <div className="w-24 h-24 bg-gradient-to-tr from-orange-500 to-yellow-400 rounded-full p-1 shadow-xl overflow-hidden">
+                      <div className={cn('w-full h-full rounded-full flex items-center justify-center overflow-hidden', darkMode ? 'bg-slate-900' : 'bg-white')}>
+                        {userProfile?.avatar_url ? (
+                          <img src={userProfile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+                        ) : (
+                          <User className={cn('w-12 h-12', darkMode ? 'text-slate-700' : 'text-slate-200')} />
+                        )}
                       </div>
                     </div>
                     <button className="absolute bottom-0 right-0 bg-orange-500 text-white p-2 rounded-full shadow-lg hover:bg-orange-600 transition-all">
@@ -1713,7 +1739,9 @@ export default function App() {
                     </button>
                   </div>
                   <div>
-                    <h2 className={cn('text-2xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>Seu Perfil</h2>
+                    <h2 className={cn('text-2xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>
+                      {userProfile?.display_name || 'Seu Perfil'}
+                    </h2>
                     <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>{user?.email ?? ''}</p>
                   </div>
                 </div>

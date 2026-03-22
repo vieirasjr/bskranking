@@ -183,6 +183,9 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
 
       const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(path);
       setAvatarUrl(publicUrl);
+      if (profileId) {
+        await supabase.from('basquete_users').update({ avatar_url: publicUrl, updated_at: new Date().toISOString() }).eq('id', profileId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao enviar imagem.');
     } finally {
@@ -194,6 +197,11 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.id || !profileId) return;
+    const nome = form.display_name.trim() || form.full_name.trim();
+    if (!nome) {
+      setError('Nome ou apelido é obrigatório.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setSuccess(false);
@@ -333,10 +341,10 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
           </p>
         </div>
 
-        {/* Nome / Apelido */}
+        {/* Nome / Apelido - único campo obrigatório */}
         <div className="space-y-2">
           <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
-            Nome ou apelido *
+            Nome ou apelido <span className="text-orange-500">*</span>
           </label>
           <div className="relative">
             <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -346,7 +354,6 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
               onChange={(e) => setForm((f) => ({ ...f, display_name: e.target.value }))}
               placeholder="Como te chamam na quadra"
               maxLength={50}
-              required
               className={cn(
                 'w-full pl-10 pr-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50',
                 darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
