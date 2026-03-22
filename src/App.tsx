@@ -48,11 +48,13 @@ interface Player {
   status: 'waiting' | 'team1' | 'team2';
   joined_at: string;
   admin?: boolean;
+  user_id?: string | null;
 }
 
 interface PlayerStats {
   id: string;
   name: string;
+  user_id?: string | null;
   wins: number;
   points: number;
   blocks: number;
@@ -76,7 +78,6 @@ export default function App() {
   const [currentPartidaSessaoId, setCurrentPartidaSessaoId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('inicio');
   const [sortKey, setSortKey] = useState<SortKey>('points');
-  const [newName, setNewName] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(false);
@@ -94,9 +95,9 @@ export default function App() {
   });
   const [timerStartedOnce, setTimerStartedOnce] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
-  const [userProfile, setUserProfile] = useState<{ display_name: string | null; avatar_url: string | null } | null>(null);
-  const lastPlacarUpdateAt = useRef<number>(0);
-
+  const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null } | null>(null);
+  const [adminAddName, setAdminAddName] = useState('');
+  const [unregisteredAddName, setUnregisteredAddName] = useState('');
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
     activeTab === 'lista' && !isAdminMode
   );
@@ -123,7 +124,8 @@ export default function App() {
       console.error('Supabase stats error:', err);
       return;
     }
-    const statsData = (data ?? []) as PlayerStats[];
+    const allStats = (data ?? []) as PlayerStats[];
+    const statsData = allStats.filter((s) => s.user_id != null);
     setStats(statsData);
   }, []);
 
@@ -205,7 +207,7 @@ export default function App() {
     const checkAdmin = async () => {
       const { data, error } = await supabase
         .from('basquete_users')
-        .select('admin')
+        .select('*')
         .eq('email', user.email)
         .maybeSingle();
       if (!error && data?.admin === true) {
@@ -216,16 +218,15 @@ export default function App() {
     checkAdmin();
   }, [user?.email]);
 
-  // Polling do placar: fonte única de verdade para admin e visitante (Realtime pode falhar em guests)
+  // Polling do placar: atualização em tempo real para todos (logados ou não)
   const shouldPollPlacar = activeTab === 'lista' && !!currentPartidaSessaoId;
   useEffect(() => {
     if (!shouldPollPlacar) return;
-    const doFetch = () => {
-      if (Date.now() - lastPlacarUpdateAt.current < 1500) return;
+    // Busca imediata ao exibir a aba
+    fetchPartidaSessao(currentPartidaSessaoId);
+    const interval = setInterval(() => {
       fetchPartidaSessao(currentPartidaSessaoId);
-    };
-    doFetch();
-    const interval = setInterval(doFetch, 2000);
+    }, 1000);
     return () => clearInterval(interval);
   }, [shouldPollPlacar, currentPartidaSessaoId, fetchPartidaSessao]);
 
@@ -271,13 +272,34 @@ export default function App() {
       setUserProfile(null);
       return;
     }
-    const { data } = await supabase
+    let { data } = await supabase
       .from('basquete_users')
-      .select('display_name, avatar_url')
+      .select('id, display_name, avatar_url')
       .eq('auth_id', user.id)
       .maybeSingle();
-    setUserProfile(data ? { display_name: data.display_name, avatar_url: data.avatar_url } : null);
-  }, [user?.id]);
+    if (!data) {
+      const { data: upserted } = await supabase
+        .from('basquete_users')
+        .upsert(
+          {
+            auth_id: user.id,
+            email: user.email ?? '',
+            display_name: user.user_metadata?.full_name || user.user_metadata?.name || user.user_metadata?.user_name || null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'email', ignoreDuplicates: false }
+        )
+        .select('id, display_name, avatar_url')
+        .single();
+      if (upserted) data = upserted;
+      else {
+        const { data: byAuth } = await supabase.from('basquete_users').select('id, display_name, avatar_url').eq('auth_id', user.id).maybeSingle();
+        const { data: byEmail } = user?.email ? await supabase.from('basquete_users').select('id, display_name, avatar_url').eq('email', user.email).maybeSingle() : { data: null };
+        data = byAuth ?? byEmail ?? undefined;
+      }
+    }
+    setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url } : null);
+  }, [user?.id, user?.email, user?.user_metadata]);
 
   useEffect(() => {
     fetchUserProfile();
@@ -297,14 +319,18 @@ export default function App() {
     };
   }, [fetchSession]);
 
-  // Realtime: placar (para não-admin fechar o modal quando admin iniciar próxima partida)
+  // Realtime: placar - atualização instantânea para todos os usuários (logados ou não)
   useEffect(() => {
     const channel = supabase
       .channel('partida-sessoes-changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'partida_sessoes' }, () => {
         if (currentPartidaSessaoId) fetchPartidaSessao(currentPartidaSessaoId);
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.warn('Realtime placar: reconectando...');
+        }
+      });
 
     return () => {
       supabase.removeChannel(channel);
@@ -314,6 +340,30 @@ export default function App() {
   const team1 = useMemo(() => players.filter((p) => p.status === 'team1'), [players]);
   const team2 = useMemo(() => players.filter((p) => p.status === 'team2'), [players]);
   const waitingList = useMemo(() => players.filter((p) => p.status === 'waiting'), [players]);
+
+  // Corrige sessão sem partida: se partida em andamento (5+5) mas currentPartidaSessaoId é null
+  const repairPartidaRef = useRef(false);
+  useEffect(() => {
+    if (
+      repairPartidaRef.current ||
+      !isMatchStarted ||
+      currentPartidaSessaoId ||
+      team1.length !== 5 ||
+      team2.length !== 5
+    )
+      return;
+    repairPartidaRef.current = true;
+    (async () => {
+      const { data: novaPartida, error } = await supabase.from('partida_sessoes').insert({}).select('id').single();
+      if (!error && novaPartida?.id) {
+        await supabase.from('session').update({ current_partida_sessao_id: novaPartida.id }).eq('id', 'current');
+        setCurrentPartidaSessaoId(novaPartida.id);
+        fetchPartidaSessao(novaPartida.id);
+      }
+    })().finally(() => {
+      repairPartidaRef.current = false;
+    });
+  }, [isMatchStarted, currentPartidaSessaoId, team1.length, team2.length, fetchPartidaSessao]);
 
   const autoAssignInProgress = useRef(false);
   useEffect(() => {
@@ -363,12 +413,19 @@ export default function App() {
 
   const PLAYERS_PER_TEAM = 5;
 
-  const addPlayer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newName.trim() || !canAddToList) return;
+  const addPlayerAsRegistered = async () => {
+    if (!canAddToList || !userProfile?.display_name?.trim() || isGuest) return;
 
     const canAdd = isMatchStarted || waitingList.length < 10;
-    if (!canAdd || !canAddToList) return;
+    if (!canAdd) return;
+
+    const alreadyInList = players.some(
+      (p) => p.user_id === userProfile.id || p.name.toLowerCase().trim() === userProfile.display_name?.toLowerCase().trim()
+    );
+    if (alreadyInList) {
+      setError('Você já está na lista.');
+      return;
+    }
 
     setError(null);
 
@@ -384,12 +441,15 @@ export default function App() {
 
       const { data: newPlayer, error: err } = await supabase
         .from('players')
-        .insert({ name: newName.trim(), status })
+        .insert({
+          name: userProfile.display_name.trim(),
+          status,
+          user_id: userProfile.id,
+        })
         .select()
         .single();
 
       if (err) throw err;
-      setNewName('');
 
       if (newPlayer) {
         setPlayers((prev) => [...prev, newPlayer as Player].sort(
@@ -397,7 +457,105 @@ export default function App() {
         ));
       }
     } catch (err) {
-      console.error('Error adding player:', err);
+      console.error('Error adding registered player:', err);
+      setError(err instanceof Error ? err.message : 'Erro ao entrar na fila.');
+    }
+  };
+
+  const addPlayerByNameUnregistered = async () => {
+    if (!canAddToList) return;
+    const name = unregisteredAddName.trim();
+    if (!name) return;
+
+    const canAdd = isMatchStarted || waitingList.length < 10;
+    if (!canAdd) {
+      setError('A fila está cheia. Aguarde a partida começar.');
+      return;
+    }
+
+    const alreadyInList = players.some((p) => p.name.toLowerCase().trim() === name.toLowerCase());
+    if (alreadyInList) {
+      setError('Este nome já está na lista.');
+      return;
+    }
+
+    setError(null);
+
+    try {
+      let status: 'waiting' | 'team1' | 'team2';
+      if (isMatchStarted) {
+        if (team1.length < PLAYERS_PER_TEAM) status = 'team1';
+        else if (team2.length < PLAYERS_PER_TEAM) status = 'team2';
+        else status = 'waiting';
+      } else {
+        status = 'waiting';
+      }
+
+      const { data: newPlayer, error: err } = await supabase
+        .from('players')
+        .insert({ name, status, user_id: null })
+        .select()
+        .single();
+
+      if (err) throw err;
+
+      if (newPlayer) {
+        setUnregisteredAddName('');
+        setPlayers((prev) => [...prev, newPlayer as Player].sort(
+          (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime()
+        ));
+      }
+    } catch (err) {
+      console.error('Error adding player by name:', err);
+      setError(err instanceof Error ? err.message : 'Erro ao entrar na fila.');
+    }
+  };
+
+  const addPlayerByNameForAdmin = async () => {
+    if (!isAdminMode || !canAddToList) return;
+    const name = adminAddName.trim();
+    if (!name) return;
+
+    const canAdd = isMatchStarted || waitingList.length < 10;
+    if (!canAdd) {
+      setError('A fila está cheia. Aguarde a partida começar.');
+      return;
+    }
+
+    const alreadyInList = players.some((p) => p.name.toLowerCase().trim() === name.toLowerCase());
+    if (alreadyInList) {
+      setError('Este nome já está na lista.');
+      return;
+    }
+
+    setError(null);
+
+    try {
+      let status: 'waiting' | 'team1' | 'team2';
+      if (isMatchStarted) {
+        if (team1.length < PLAYERS_PER_TEAM) status = 'team1';
+        else if (team2.length < PLAYERS_PER_TEAM) status = 'team2';
+        else status = 'waiting';
+      } else {
+        status = 'waiting';
+      }
+
+      const { data: newPlayer, error: err } = await supabase
+        .from('players')
+        .insert({ name, status, user_id: null })
+        .select()
+        .single();
+
+      if (err) throw err;
+
+      if (newPlayer) {
+        setAdminAddName('');
+        setPlayers((prev) => [...prev, newPlayer as Player].sort(
+          (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime()
+        ));
+      }
+    } catch (err) {
+      console.error('Error adding player by name:', err);
       setError(err instanceof Error ? err.message : 'Erro ao adicionar jogador.');
     }
   };
@@ -568,44 +726,81 @@ export default function App() {
     }
   }, []);
 
-  const pointsBlocked = waitingList.length >= 10 && !timerStartedOnce;
+  const pointsBlockedByTimer = waitingList.length >= 10 && !timerStartedOnce;
+  const pointsBlockedByTeams = isMatchStarted && (team1.length < 5 || team2.length < 5);
+  const pointsBlocked = pointsBlockedByTimer || pointsBlockedByTeams;
+  const pointsBlockedMessage = pointsBlockedByTimer
+    ? (isAdminMode ? 'Inicie o cronômetro para liberar a atribuição de pontos.' : 'Aguardando início da partida.')
+    : pointsBlockedByTeams
+      ? 'Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.'
+      : '';
 
   const addPlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals') => {
     if (pointsBlocked) return;
+    const userId = player.user_id;
+    const isVisitante = !userId;
+
+    // Bloqueios e roubos: só cadastrados (não afetam placar)
+    if (isVisitante && (stat === 'blocks' || stat === 'steals')) {
+      setError('Apenas jogadores cadastrados podem receber bloqueios e roubos no ranking.');
+      return;
+    }
+
     try {
-      const { data: existing } = await supabase.from('stats').select('*').eq('name', player.name).maybeSingle();
+      // Atualizar stats (ranking) apenas para jogadores cadastrados
+      if (userId) {
+        const { data: existing } = await supabase.from('stats').select('*').eq('name', player.name).maybeSingle();
 
-      if (existing) {
-        const updates =
-          stat === 'points_2'
-            ? { points: (existing.points ?? 0) + 2 }
-            : stat === 'points_3'
-              ? { points: (existing.points ?? 0) + 3 }
-              : stat === 'blocks'
-                ? { blocks: (existing.blocks ?? 0) + 1 }
-                : { steals: (existing.steals ?? 0) + 1 };
-        await supabase.from('stats').update(updates).eq('id', existing.id);
-      } else {
-        const inserts =
-          stat === 'points_2'
-            ? { name: player.name, points: 2, wins: 0, blocks: 0, steals: 0, clutch_points: 0 }
-            : stat === 'points_3'
-              ? { name: player.name, points: 3, wins: 0, blocks: 0, steals: 0, clutch_points: 0 }
-              : stat === 'blocks'
-                ? { name: player.name, points: 0, wins: 0, blocks: 1, steals: 0, clutch_points: 0 }
-                : { name: player.name, points: 0, wins: 0, blocks: 0, steals: 1, clutch_points: 0 };
-        await supabase.from('stats').insert(inserts);
+        if (existing) {
+          const updates =
+            stat === 'points_2'
+              ? { points: (existing.points ?? 0) + 2, user_id: userId }
+              : stat === 'points_3'
+                ? { points: (existing.points ?? 0) + 3, user_id: userId }
+                : stat === 'blocks'
+                  ? { blocks: (existing.blocks ?? 0) + 1, user_id: userId }
+                  : { steals: (existing.steals ?? 0) + 1, user_id: userId };
+          const { error: updErr } = await supabase.from('stats').update(updates).eq('id', existing.id);
+          if (updErr) throw updErr;
+        } else {
+          const inserts =
+            stat === 'points_2'
+              ? { name: player.name, user_id: userId, points: 2, wins: 0, blocks: 0, steals: 0, clutch_points: 0 }
+              : stat === 'points_3'
+                ? { name: player.name, user_id: userId, points: 3, wins: 0, blocks: 0, steals: 0, clutch_points: 0 }
+                : stat === 'blocks'
+                  ? { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 1, steals: 0, clutch_points: 0 }
+                  : { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 0, steals: 1, clutch_points: 0 };
+          const { error: insErr } = await supabase.from('stats').insert(inserts);
+          if (insErr) throw insErr;
+        }
+        fetchStats();
       }
-      fetchStats();
-      setStatsModalPlayer(null);
 
-      if (stat === 'points_2' || stat === 'points_3') {
+      // Pontos: sempre atualiza o placar da partida (visitantes só contam para o jogo)
+      if ((stat === 'points_2' || stat === 'points_3') && (player.status === 'team1' || player.status === 'team2')) {
         const pts = stat === 'points_2' ? 2 : 3;
-        if ((player.status === 'team1' || player.status === 'team2') && currentPartidaSessaoId) {
+        let partidaId = currentPartidaSessaoId;
+
+        // Garantir partida_sessao existe (corrige sessão sem current_partida_sessao_id)
+        if (!partidaId && isMatchStarted && (team1.length === 5 && team2.length === 5)) {
+          const { data: novaPartida, error: insErr } = await supabase
+            .from('partida_sessoes')
+            .insert({})
+            .select('id')
+            .single();
+          if (!insErr && novaPartida?.id) {
+            partidaId = novaPartida.id;
+            await supabase.from('session').update({ current_partida_sessao_id: partidaId }).eq('id', 'current');
+            setCurrentPartidaSessaoId(partidaId);
+          }
+        }
+
+        if (partidaId) {
           const { data: sessao, error: fetchErr } = await supabase
             .from('partida_sessoes')
             .select('team1_points, team2_points')
-            .eq('id', currentPartidaSessaoId)
+            .eq('id', partidaId)
             .single();
           if (fetchErr || !sessao) {
             setError('Erro ao buscar placar da partida.');
@@ -615,7 +810,6 @@ export default function App() {
           const t2 = (sessao.team2_points ?? 0) as number;
           const newT1 = player.status === 'team1' ? t1 + pts : t1;
           const newT2 = player.status === 'team2' ? t2 + pts : t2;
-          lastPlacarUpdateAt.current = Date.now();
           setTeam1MatchPoints(newT1);
           setTeam2MatchPoints(newT2);
           if (newT1 >= 12) setShowWinnerModal('team1');
@@ -623,16 +817,20 @@ export default function App() {
           const { error: updErr } = await supabase
             .from('partida_sessoes')
             .update({ team1_points: newT1, team2_points: newT2 })
-            .eq('id', currentPartidaSessaoId);
+            .eq('id', partidaId);
           if (updErr) {
             setTeam1MatchPoints(t1);
             setTeam2MatchPoints(t2);
             setError(updErr.message || 'Erro ao atualizar placar.');
-          } else if (newT1 >= 12 || newT2 >= 12) {
-            await stopAndResetTimer();
+          } else {
+            if (newT1 >= 12 || newT2 >= 12) await stopAndResetTimer();
+            fetchPartidaSessao(partidaId);
           }
+        } else if (!partidaId) {
+          setError('Inicie o cronômetro para registrar pontos.');
         }
       }
+      setStatsModalPlayer(null);
     } catch (err) {
       console.error('Error adding stat:', err);
       setError('Erro ao registrar estatística.');
@@ -662,26 +860,36 @@ export default function App() {
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
 
-      const nextPlayers = waitingList.slice(0, 5);
+      // Pegar até 5 da fila; se faltar, completar com perdedores (ordem: primeiros para os últimos)
+      const nextFromWaiting = waitingList.slice(0, 5);
+      const needFromLosers = 5 - nextFromWaiting.length;
+      const nextFromLosers = needFromLosers > 0 ? losers.slice(0, needFromLosers) : [];
+      const toWaiting = needFromLosers > 0 ? losers.slice(needFromLosers) : losers;
+
       const maxWaitingTime =
         waitingList.length > 5
           ? Math.max(...waitingList.slice(5).map((p) => new Date(p.joined_at).getTime()))
           : Date.now() - 10000;
 
-      for (let i = 0; i < losers.length; i++) {
+      for (let i = 0; i < toWaiting.length; i++) {
         const joinedAt = new Date(maxWaitingTime + (i + 1) * 1000).toISOString();
-        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', losers[i].id);
+        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', toWaiting[i].id);
       }
 
-      for (const p of nextPlayers) {
+      for (const p of nextFromWaiting) {
+        await supabase.from('players').update({ status: losingTeamKey }).eq('id', p.id);
+      }
+      for (const p of nextFromLosers) {
         await supabase.from('players').update({ status: losingTeamKey }).eq('id', p.id);
       }
       for (const p of winners) {
+        const userId = p.user_id;
+        if (!userId) continue;
         const { data: s } = await supabase.from('stats').select('*').eq('name', p.name).maybeSingle();
         if (s) {
-          await supabase.from('stats').update({ wins: (s.wins ?? 0) + 1 }).eq('id', s.id);
+          await supabase.from('stats').update({ wins: (s.wins ?? 0) + 1, user_id: userId }).eq('id', s.id);
         } else {
-          await supabase.from('stats').insert({ name: p.name, wins: 1, points: 0, blocks: 0, steals: 0, clutch_points: 0 });
+          await supabase.from('stats').insert({ name: p.name, user_id: userId, wins: 1, points: 0, blocks: 0, steals: 0, clutch_points: 0 });
         }
       }
       await fetchPlayers();
@@ -1137,7 +1345,7 @@ export default function App() {
                   )}
                 >
                   <AlertCircle className="w-4 h-4 shrink-0" />
-                  {isAdminMode ? 'Inicie o cronômetro para liberar a atribuição de pontos.' : 'Aguardando início da partida.'}
+                  {pointsBlockedMessage}
                 </div>
               )}
               <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
@@ -1433,7 +1641,7 @@ export default function App() {
                 />
                 {pointsBlocked && (
                   <p className={cn('mt-2 text-sm', darkMode ? 'text-amber-400' : 'text-amber-600')}>
-                    {isAdminMode ? 'Inicie o cronômetro para liberar a atribuição de pontos.' : 'Aguardando início da partida.'}
+                    {pointsBlockedMessage}
                   </p>
                 )}
               </div>
@@ -1498,7 +1706,7 @@ export default function App() {
                 !isMatchStarted && waitingList.length >= 10 && 'pointer-events-none select-none opacity-70'
               )}
             >
-            {/* 1. Entrar na Fila - formulário para adicionar nome */}
+            {/* 1. Entrar na Fila - apenas usuários cadastrados */}
             <section
               className={cn(
                 'border rounded-2xl p-4 sm:p-6 shadow-xl transition-all duration-300',
@@ -1509,42 +1717,108 @@ export default function App() {
                 <UserPlus className="w-4 h-4 sm:w-5 h-5 text-orange-500" />
                 Entrar na Fila
               </h2>
-              <form onSubmit={addPlayer} className="flex gap-2">
-                <input
-                  type="text"
-                  value={newName}
-                  disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder={
-                    !canAddToList
-                      ? 'Aproxime-se da quadra para entrar...'
-                      : waitingList.length >= 10 && !isMatchStarted
-                        ? 'Times sendo formados...'
-                        : isMatchStarted
-                          ? 'Seu nome...'
-                          : 'Adicione seu nome à fila...'
+              {(isGuest || !userProfile?.display_name?.trim()) ? (
+                <div className="space-y-2">
+                  <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-600')}>
+                    {isGuest ? 'Você não aparece no ranking. Digite seu nome para entrar na fila:' : 'Edite seu perfil ou digite seu nome para entrar na fila:'}
+                  </p>
+                  <div className={cn('flex gap-2', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                    <input
+                      type="text"
+                      placeholder="Seu nome ou apelido"
+                      value={unregisteredAddName}
+                      onChange={(e) => setUnregisteredAddName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && addPlayerByNameUnregistered()}
+                      disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
+                      maxLength={50}
+                      className={cn(
+                        'flex-1 px-3 py-2 rounded-lg text-sm border outline-none focus:ring-2 focus:ring-orange-500/50',
+                        darkMode ? 'bg-slate-800 border-slate-600 placeholder:text-slate-500' : 'bg-white border-slate-300 placeholder:text-slate-400'
+                      )}
+                    />
+                    <button
+                      type="button"
+                      onClick={addPlayerByNameUnregistered}
+                      disabled={
+                        !canAddToList ||
+                        !unregisteredAddName.trim() ||
+                        (waitingList.length >= 10 && !isMatchStarted)
+                      }
+                      className={cn(
+                        'px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all',
+                        canAddToList &&
+                        unregisteredAddName.trim() &&
+                        !(waitingList.length >= 10 && !isMatchStarted)
+                          ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                          : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                      )}
+                    >
+                      Entrar na fila
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={addPlayerAsRegistered}
+                  disabled={
+                    !canAddToList ||
+                    (waitingList.length >= 10 && !isMatchStarted) ||
+                    players.some(
+                      (p) => p.user_id === userProfile?.id || p.name.toLowerCase().trim() === userProfile?.display_name?.toLowerCase().trim()
+                    )
                   }
                   className={cn(
-                    'flex-1 border rounded-xl px-3 py-2 sm:px-4 sm:py-3 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-orange-500/50 transition-all',
-                    darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200 text-slate-900',
-                    (!canAddToList || (waitingList.length >= 10 && !isMatchStarted)) && 'cursor-not-allowed'
-                  )}
-                />
-                <button
-                  type="submit"
-                  disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
-                  className={cn(
-                    'px-4 sm:px-6 py-2 sm:py-3 rounded-xl font-semibold text-sm sm:text-base flex items-center gap-2 transition-all active:scale-95 shadow-lg',
-                    canAddToList && !(waitingList.length >= 10 && !isMatchStarted)
-                      ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-orange-500/20'
-                      : 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                    'w-full py-3 px-4 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all',
+                    canAddToList &&
+                    !(waitingList.length >= 10 && !isMatchStarted) &&
+                    !players.some(
+                      (p) => p.user_id === userProfile?.id || p.name.toLowerCase().trim() === userProfile?.display_name?.toLowerCase().trim()
+                    )
+                      ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                      : 'bg-slate-300 text-slate-500 cursor-not-allowed'
                   )}
                 >
-                  <Plus className="w-4 h-4 sm:w-5 h-5" />
-                  <span className="hidden xs:inline">Adicionar</span>
-                  <span className="xs:hidden">Add</span>
+                  <User className="w-4 h-4" />
+                  Entrar na fila ({userProfile?.display_name})
                 </button>
-              </form>
+              )}
+              {isAdminMode && (
+                <div className={cn('flex gap-2 mt-3', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                  <input
+                    type="text"
+                    placeholder="Adicionar por nome (sem celular)"
+                    value={adminAddName}
+                    onChange={(e) => setAdminAddName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && addPlayerByNameForAdmin()}
+                    disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
+                    maxLength={50}
+                    className={cn(
+                      'flex-1 px-3 py-2 rounded-lg text-sm border outline-none focus:ring-2 focus:ring-orange-500/50',
+                      darkMode ? 'bg-slate-800 border-slate-600 placeholder:text-slate-500' : 'bg-white border-slate-300 placeholder:text-slate-400'
+                    )}
+                  />
+                  <button
+                    type="button"
+                    onClick={addPlayerByNameForAdmin}
+                    disabled={
+                      !canAddToList ||
+                      !adminAddName.trim() ||
+                      (waitingList.length >= 10 && !isMatchStarted)
+                    }
+                    className={cn(
+                      'px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all',
+                      canAddToList &&
+                      adminAddName.trim() &&
+                      !(waitingList.length >= 10 && !isMatchStarted)
+                        ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                        : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                    )}
+                  >
+                    Adicionar
+                  </button>
+                </div>
+              )}
             </section>
 
             {/* 2. Time 1 e Time 2 - exibidos antes da lista de espera */}
@@ -1665,7 +1939,7 @@ export default function App() {
                       darkMode ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-200'
                     )}
                   >
-                    Ninguém na fila. Adicione seu nome no formulário acima!
+                    Ninguém na fila. Cadastre-se e entre na fila com seu perfil!
                   </div>
                 )}
               </div>
