@@ -1,0 +1,30 @@
+---
+description: Regras do cronômetro de partida quando há 10+ jogadores na fila
+globs: src/App.tsx, src/components/MatchTimer.tsx
+alwaysApply: false
+---
+
+# Cronômetro da Partida (10+ jogadores na fila)
+
+## Condição de ativação
+- O cronômetro aparece quando há **10 ou mais jogadores** na lista de espera (`waitingList.length >= 10`).
+- Após finalizar uma partida, o sistema verifica: se 10+ na fila, o cronômetro é ativado (exibido) para a próxima partida.
+
+## Bloqueio de pontos
+- Atribuição de pontos aos jogadores fica **bloqueada** até que o cronômetro seja **iniciado pela primeira vez** (`timer_started_once`).
+- Ao **pausar** o cronômetro, a atribuição de pontos **não** é bloqueada (apenas antes do primeiro Start).
+- `timer_started_once` reseta apenas em END_MATCH (encerrar sessão).
+
+## Comportamento da partida
+- Quando 10+ na fila e sem partida: admin dá Start no cronômetro → partida inicia.
+- Fluxo após partida terminar: startNextMatch → se 10+ na fila, timer visível → pontos bloqueados até admin iniciar o cronômetro.
+
+## Controles
+- **Start**: inicia a contagem; na primeira vez, desbloqueia pontos.
+- **Pause**: pausa; pontos continuam liberados.
+- **Reset**: zera o display; exige senha; não afeta `timer_started_once`.
+
+## Timeout (10 minutos)
+- Se o cronômetro atingir **10 minutos** sem nenhuma equipe marcar 12 pontos → **ambas perdem**.
+- Ambas vão para a fila: equipe com **mais pontos** entra primeiro (prioridade), equipe com **menos pontos** entra nas últimas posições.
+- Nova partida inicia automaticamente com os primeiros 10 da fila.

@@ -1,0 +1,20 @@
+---
+description: Regras de geolocalização para acesso à lista (50m da quadra)
+globs: src/App.tsx, src/hooks/useLocationCheck.ts
+alwaysApply: false
+---
+
+# Geolocalização do Local de Jogos
+
+## Coordenadas fixas
+- Lat: -15.839174, Lng: -48.014438
+- Raio permitido: 50 metros (Haversine)
+
+## Comportamento para usuário comum
+- **Dentro do raio**: vê a lista completa (times, fila de espera), pode adicionar nome.
+- **Fora do raio**: não vê os nomes; vê apenas "X jogadores em quadra" e "X na fila de espera"; não pode adicionar nome.
+- Admin **não** passa pela verificação (acesso total de qualquer lugar).
+
+## Verificação
+- Ao abrir a aba Lista, solicita permissão de geolocalização.
+- Retry disponível em caso de erro ou permissão negada.

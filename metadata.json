@@ -1,0 +1,5 @@
+{
+  "name": "Basquete Next",
+  "description": "Gerenciamento de partidas de basquete com fila de espera e rotação de times.",
+  "requestFramePermissions": []
+}
