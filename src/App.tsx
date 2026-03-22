@@ -203,13 +203,12 @@ export default function App() {
   useEffect(() => {
     if (!user?.email) return;
     const checkAdmin = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('basquete_users')
         .select('admin')
         .eq('email', user.email)
-        .eq('admin', true)
         .maybeSingle();
-      if (data?.admin) {
+      if (!error && data?.admin === true) {
         setIsAdminMode(true);
         localStorage.setItem(ADMIN_STORAGE_KEY, 'true');
       }
@@ -412,13 +411,24 @@ export default function App() {
   };
 
   const [showPasswordModal, setShowPasswordModal] = useState<{
-    type: 'MOVE' | 'REMOVE' | 'START_MATCH' | 'END_MATCH' | 'ADMIN_ACTIVATE' | 'RESET_TIMER';
+    type: 'MOVE' | 'REMOVE' | 'START_MATCH' | 'END_MATCH' | 'ADMIN_ACTIVATE' | 'RESET_TIMER' | 'CLEAR_MOCK';
     moveInfo?: { playerId: string; direction: 'up' | 'down' };
     removeInfo?: { playerId: string };
   } | null>(null);
   const [statsModalPlayer, setStatsModalPlayer] = useState<Player | null>(null);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
+
+  // Bloquear scroll do body em mobile quando modal de stats aberto (evita que toque scrolle em vez de registrar)
+  useEffect(() => {
+    if (statsModalPlayer) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = prev;
+      };
+    }
+  }, [statsModalPlayer]);
 
   const handleMoveAttempt = (playerId: string, direction: 'up' | 'down') => {
     if (!isAdminMode) return;
@@ -450,6 +460,13 @@ export default function App() {
 
   const handleAdminActivate = () => {
     setShowPasswordModal({ type: 'ADMIN_ACTIVATE' });
+    setPasswordInput('');
+    setPasswordError(false);
+  };
+
+  const handleClearMockData = () => {
+    if (!isAdminMode) return;
+    setShowPasswordModal({ type: 'CLEAR_MOCK' });
     setPasswordInput('');
     setPasswordError(false);
   };
@@ -584,34 +601,34 @@ export default function App() {
 
       if (stat === 'points_2' || stat === 'points_3') {
         const pts = stat === 'points_2' ? 2 : 3;
-        if (player.status === 'team1' && currentPartidaSessaoId) {
-          const newScore = team1MatchPoints + pts;
-          lastPlacarUpdateAt.current = Date.now();
-          setTeam1MatchPoints(newScore);
-          if (newScore >= 12) setShowWinnerModal('team1');
-          const { error: updErr } = await supabase
+        if ((player.status === 'team1' || player.status === 'team2') && currentPartidaSessaoId) {
+          const { data: sessao, error: fetchErr } = await supabase
             .from('partida_sessoes')
-            .update({ team1_points: newScore })
-            .eq('id', currentPartidaSessaoId);
-          if (updErr) {
-            setTeam1MatchPoints(team1MatchPoints);
-            setError(updErr.message || 'Erro ao atualizar placar.');
-          } else if (newScore >= 12) {
-            await stopAndResetTimer();
+            .select('team1_points, team2_points')
+            .eq('id', currentPartidaSessaoId)
+            .single();
+          if (fetchErr || !sessao) {
+            setError('Erro ao buscar placar da partida.');
+            return;
           }
-        } else if (player.status === 'team2' && currentPartidaSessaoId) {
-          const newScore = team2MatchPoints + pts;
+          const t1 = (sessao.team1_points ?? 0) as number;
+          const t2 = (sessao.team2_points ?? 0) as number;
+          const newT1 = player.status === 'team1' ? t1 + pts : t1;
+          const newT2 = player.status === 'team2' ? t2 + pts : t2;
           lastPlacarUpdateAt.current = Date.now();
-          setTeam2MatchPoints(newScore);
-          if (newScore >= 12) setShowWinnerModal('team2');
+          setTeam1MatchPoints(newT1);
+          setTeam2MatchPoints(newT2);
+          if (newT1 >= 12) setShowWinnerModal('team1');
+          else if (newT2 >= 12) setShowWinnerModal('team2');
           const { error: updErr } = await supabase
             .from('partida_sessoes')
-            .update({ team2_points: newScore })
+            .update({ team1_points: newT1, team2_points: newT2 })
             .eq('id', currentPartidaSessaoId);
           if (updErr) {
-            setTeam2MatchPoints(team2MatchPoints);
+            setTeam1MatchPoints(t1);
+            setTeam2MatchPoints(t2);
             setError(updErr.message || 'Erro ao atualizar placar.');
-          } else if (newScore >= 12) {
+          } else if (newT1 >= 12 || newT2 >= 12) {
             await stopAndResetTimer();
           }
         }
@@ -870,6 +887,27 @@ export default function App() {
           .update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now })
           .eq('id', 'current');
         setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
+      } else if (showPasswordModal.type === 'CLEAR_MOCK') {
+        await supabase.from('session').update({
+          is_started: false,
+          started_at: null,
+          current_partida_sessao_id: null,
+          timer_seconds: 0,
+          timer_running: false,
+          timer_last_sync_at: null,
+          timer_started_once: false,
+        }).eq('id', 'current');
+        await supabase.from('partida_sessoes').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.from('players').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.from('stats').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        setIsMatchStarted(false);
+        setCurrentPartidaSessaoId(null);
+        setTeam1MatchPoints(0);
+        setTeam2MatchPoints(0);
+        setPlayers([]);
+        setStats([]);
+        await fetchPlayers();
+        await fetchStats();
       } else if (showPasswordModal.type === 'END_MATCH') {
         if (currentPartidaSessaoId) {
           await supabase
@@ -969,7 +1007,9 @@ export default function App() {
                           ? 'Iniciar Partida'
                           : showPasswordModal.type === 'RESET_TIMER'
                             ? 'Zerar Cronômetro'
-                            : 'Encerrar Partida'}
+                            : showPasswordModal.type === 'CLEAR_MOCK'
+                              ? 'Limpar dados fictícios'
+                              : 'Encerrar Partida'}
                 </h3>
                 <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
                   {showPasswordModal.type === 'ADMIN_ACTIVATE'
@@ -982,7 +1022,9 @@ export default function App() {
                           ? 'Digite a senha para iniciar a sessão de partidas.'
                           : showPasswordModal.type === 'RESET_TIMER'
                             ? 'Digite a senha para zerar o cronômetro.'
-                            : 'Digite a senha para encerrar a sessão de partidas.'}
+                            : showPasswordModal.type === 'CLEAR_MOCK'
+                              ? 'Remove fila, ranking e partida. Senha para confirmar.'
+                              : 'Digite a senha para encerrar a sessão de partidas.'}
                 </p>
               </div>
 
@@ -1056,26 +1098,33 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Modal de estatísticas do jogador */}
+      {/* Modal de estatísticas do jogador - otimizado para touch em mobile */}
       <AnimatePresence>
         {statsModalPlayer && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm overflow-y-auto"
+            style={{ touchAction: 'manipulation', WebkitOverflowScrolling: 'touch' } as React.CSSProperties}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               className={cn(
-                'border p-6 rounded-2xl shadow-2xl max-w-sm w-full space-y-4',
+                'border p-6 rounded-2xl shadow-2xl max-w-sm w-full space-y-4 select-none',
                 darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
               )}
+              onClick={(e) => e.stopPropagation()}
+              style={{ touchAction: 'manipulation' }}
             >
               <div className="flex items-center justify-between">
                 <h3 className={cn('text-lg font-bold', darkMode ? 'text-white' : 'text-slate-900')}>
                   Registrar: {statsModalPlayer.name}
                 </h3>
                 <button
+                  type="button"
                   onClick={() => setStatsModalPlayer(null)}
-                  className={cn('p-1 rounded-lg', darkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100')}
+                  className={cn('p-2 -m-2 rounded-lg min-w-[44px] min-h-[44px] flex items-center justify-center', darkMode ? 'hover:bg-slate-800 active:bg-slate-700' : 'hover:bg-slate-100 active:bg-slate-200')}
+                  aria-label="Fechar"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1091,59 +1140,39 @@ export default function App() {
                   {isAdminMode ? 'Inicie o cronômetro para liberar a atribuição de pontos.' : 'Aguardando início da partida.'}
                 </div>
               )}
-              <div className={cn('grid grid-cols-2 gap-2', pointsBlocked && 'opacity-60 pointer-events-none')}>
-                <button
+              <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
+                <StatButton
                   onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
                   disabled={pointsBlocked}
-                  className={cn(
-                    'p-4 rounded-xl font-bold transition-all',
-                    pointsBlocked
-                      ? 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-500 cursor-not-allowed'
-                      : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30'
-                  )}
+                  className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]'}
                 >
-                  <Target className="w-5 h-5 mx-auto mb-1" />
+                  <Target className="w-6 h-6 mx-auto mb-1" />
                   2 pts
-                </button>
-                <button
+                </StatButton>
+                <StatButton
                   onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
                   disabled={pointsBlocked}
-                  className={cn(
-                    'p-4 rounded-xl font-bold transition-all',
-                    pointsBlocked
-                      ? 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-500 cursor-not-allowed'
-                      : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30'
-                  )}
+                  className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]'}
                 >
-                  <Target className="w-5 h-5 mx-auto mb-1" />
+                  <Target className="w-6 h-6 mx-auto mb-1" />
                   3 pts
-                </button>
-                <button
+                </StatButton>
+                <StatButton
                   onClick={() => addPlayerStat(statsModalPlayer, 'blocks')}
                   disabled={pointsBlocked}
-                  className={cn(
-                    'p-4 rounded-xl font-bold transition-all',
-                    pointsBlocked
-                      ? 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-500 cursor-not-allowed'
-                      : 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30'
-                  )}
+                  className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30 active:scale-[0.98]'}
                 >
-                  🛡️
+                  <span className="text-xl">🛡️</span>
                   <span className="block text-sm">1 bloqueio</span>
-                </button>
-                <button
+                </StatButton>
+                <StatButton
                   onClick={() => addPlayerStat(statsModalPlayer, 'steals')}
                   disabled={pointsBlocked}
-                  className={cn(
-                    'p-4 rounded-xl font-bold transition-all',
-                    pointsBlocked
-                      ? 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-500 cursor-not-allowed'
-                      : 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30'
-                  )}
+                  className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30 active:scale-[0.98]'}
                 >
-                  🏃
+                  <span className="text-xl">🏃</span>
                   <span className="block text-sm">1 roubo</span>
-                </button>
+                </StatButton>
               </div>
             </motion.div>
           </div>
@@ -1234,6 +1263,16 @@ export default function App() {
                   title="Resetar Lista"
                 >
                   <RefreshCw className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={handleClearMockData}
+                  className={cn(
+                    'transition-colors p-2 rounded-lg',
+                    darkMode ? 'text-slate-400 hover:text-orange-400 hover:bg-orange-400/10' : 'text-slate-500 hover:text-orange-500 hover:bg-orange-50'
+                  )}
+                  title="Limpar fila, ranking e partida (remove jogadores fictícios)"
+                >
+                  <Trash2 className="w-5 h-5" />
                 </button>
               </>
             )}
@@ -1459,42 +1498,7 @@ export default function App() {
                 !isMatchStarted && waitingList.length >= 10 && 'pointer-events-none select-none opacity-70'
               )}
             >
-            {/* Match Section */}
-            <div className="grid grid-cols-2 gap-4 sm:gap-8">
-              <TeamCard
-                title="Time 1"
-                players={team1}
-                color="blue"
-                darkMode={darkMode}
-                matchPoints={team1MatchPoints}
-                onRemovePlayer={handleRemoveAttempt}
-                onPlayerClick={isAdminMode ? setStatsModalPlayer : undefined}
-                isAdmin={isAdminMode}
-                showWinnerModal={showWinnerModal}
-                isLosingTeam={showWinnerModal === 'team2'}
-                isWinningTeam={showWinnerModal === 'team1'}
-                onStartNext={isAdminMode ? startNextMatch : undefined}
-                isStartingNext={isStartingNextMatch}
-              />
-
-              <TeamCard
-                title="Time 2"
-                players={team2}
-                color="red"
-                darkMode={darkMode}
-                matchPoints={team2MatchPoints}
-                onRemovePlayer={handleRemoveAttempt}
-                onPlayerClick={isAdminMode ? setStatsModalPlayer : undefined}
-                isAdmin={isAdminMode}
-                showWinnerModal={showWinnerModal}
-                isLosingTeam={showWinnerModal === 'team1'}
-                isWinningTeam={showWinnerModal === 'team2'}
-                onStartNext={isAdminMode ? startNextMatch : undefined}
-                isStartingNext={isStartingNextMatch}
-              />
-            </div>
-
-            {/* Add Player Form */}
+            {/* 1. Entrar na Fila - formulário para adicionar nome */}
             <section
               className={cn(
                 'border rounded-2xl p-4 sm:p-6 shadow-xl transition-all duration-300',
@@ -1543,7 +1547,42 @@ export default function App() {
               </form>
             </section>
 
-            {/* Waiting List */}
+            {/* 2. Time 1 e Time 2 - exibidos antes da lista de espera */}
+            <div className="grid grid-cols-2 gap-4 sm:gap-8">
+              <TeamCard
+                title="Time 1"
+                players={team1}
+                color="blue"
+                darkMode={darkMode}
+                matchPoints={team1MatchPoints}
+                onRemovePlayer={handleRemoveAttempt}
+                onPlayerClick={isAdminMode ? setStatsModalPlayer : undefined}
+                isAdmin={isAdminMode}
+                showWinnerModal={showWinnerModal}
+                isLosingTeam={showWinnerModal === 'team2'}
+                isWinningTeam={showWinnerModal === 'team1'}
+                onStartNext={isAdminMode ? startNextMatch : undefined}
+                isStartingNext={isStartingNextMatch}
+              />
+
+              <TeamCard
+                title="Time 2"
+                players={team2}
+                color="red"
+                darkMode={darkMode}
+                matchPoints={team2MatchPoints}
+                onRemovePlayer={handleRemoveAttempt}
+                onPlayerClick={isAdminMode ? setStatsModalPlayer : undefined}
+                isAdmin={isAdminMode}
+                showWinnerModal={showWinnerModal}
+                isLosingTeam={showWinnerModal === 'team1'}
+                isWinningTeam={showWinnerModal === 'team2'}
+                onStartNext={isAdminMode ? startNextMatch : undefined}
+                isStartingNext={isStartingNextMatch}
+              />
+            </div>
+
+            {/* 3. Lista de Espera - após os times */}
             <section className="space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className={cn('text-sm sm:text-lg font-semibold flex items-center gap-2', darkMode ? 'text-slate-400' : 'text-slate-600')}>
@@ -1568,10 +1607,11 @@ export default function App() {
                     >
                       <div
                         className={cn(
-                          'flex items-center gap-2 overflow-hidden flex-1 min-w-0',
-                          isAdminMode && 'cursor-pointer'
+                          'flex items-center gap-2 overflow-hidden flex-1 min-w-0 min-h-[44px] py-2 -my-2 pr-2 flex items-center',
+                          isAdminMode && 'cursor-pointer active:opacity-80'
                         )}
                         onClick={() => isAdminMode && setStatsModalPlayer(player)}
+                        style={isAdminMode ? { touchAction: 'manipulation' } : undefined}
                       >
                         <span className={cn('text-[10px] sm:text-xs font-mono w-4 shrink-0', darkMode ? 'text-slate-500' : 'text-slate-400')}>
                           #{index + 1}
@@ -1625,7 +1665,7 @@ export default function App() {
                       darkMode ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-200'
                     )}
                   >
-                    Ninguém na fila. Adicione seu nome acima!
+                    Ninguém na fila. Adicione seu nome no formulário acima!
                   </div>
                 )}
               </div>
@@ -1900,8 +1940,12 @@ function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer
                   )}
                 >
                   <div
-                    className={cn('flex items-center gap-2 sm:gap-3 overflow-hidden flex-1 min-w-0', onPlayerClick && 'cursor-pointer')}
+                    className={cn(
+                      'flex items-center gap-2 sm:gap-3 overflow-hidden flex-1 min-w-0 min-h-[44px] py-2 -my-2 px-2 -mx-2',
+                      onPlayerClick && 'cursor-pointer active:opacity-80'
+                    )}
                     onClick={() => onPlayerClick?.(p)}
+                    style={onPlayerClick ? { touchAction: 'manipulation' } : undefined}
                   >
                     <div className={cn('w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full shrink-0', accentColor)} />
                     <span className={cn('font-medium text-xs sm:text-base truncate', darkMode ? 'text-slate-100' : 'text-slate-800')}>{p.name}</span>
@@ -1963,6 +2007,31 @@ function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer
         </div>
       )}
     </div>
+  );
+}
+
+interface StatButtonProps {
+  onClick: () => void;
+  disabled: boolean;
+  className: string;
+  children: React.ReactNode;
+}
+
+function StatButton({ onClick, disabled, className, children }: StatButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        'min-h-[52px] py-4 px-4 rounded-xl font-bold transition-all flex flex-col items-center justify-center',
+        disabled && 'text-slate-500 dark:text-slate-500 cursor-not-allowed',
+        className
+      )}
+      style={{ touchAction: 'manipulation' as const }}
+    >
+      {children}
+    </button>
   );
 }
 

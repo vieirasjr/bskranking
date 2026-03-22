@@ -1,1 +1,7 @@
 @import "tailwindcss";
+
+/* Melhor resposta a toques em mobile - remove delay de 300ms e evita zoom duplo */
+html {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
