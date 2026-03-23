@@ -27,6 +27,9 @@ import {
   X,
   Timer,
   MapPin,
+  Bell,
+  Info,
+  AlertTriangle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -34,8 +37,11 @@ import { twMerge } from 'tailwind-merge';
 import { supabase } from './supabase';
 import { useAuth } from './contexts/AuthContext';
 import EditarPerfil from './pages/EditarPerfil';
+import PerfilDetalhe from './pages/PerfilDetalhe';
 import { MatchTimer, type TimerState } from './components/MatchTimer';
+import { NotificationsPanel } from './components/NotificationsPanel';
 import { useLocationCheck } from './hooks/useLocationCheck';
+import { useNotifications } from './contexts/NotificationContext';
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -70,16 +76,20 @@ const ADMIN_STORAGE_KEY = 'basquete_admin';
 
 export default function App() {
   const { user, isGuest, signOut, leaveGuestMode } = useAuth();
+  const { notifications, visibleToast, addNotification, dismissToast, clearNotification, clearAll } = useNotifications();
   const isLoggedIn = !!user;
 
   const [players, setPlayers] = useState<Player[]>([]);
   const [stats, setStats] = useState<PlayerStats[]>([]);
+  const [showNotificationsPanel, setShowNotificationsPanel] = useState(false);
+  const shownVisitanteRef = useRef(false);
+  const shownRankingRef = useRef(false);
+  const shownLocationRef = useRef(false);
   const [isMatchStarted, setIsMatchStarted] = useState(false);
   const [currentPartidaSessaoId, setCurrentPartidaSessaoId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('inicio');
   const [sortKey, setSortKey] = useState<SortKey>('points');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(false);
   const [isAdminMode, setIsAdminMode] = useState(() => localStorage.getItem(ADMIN_STORAGE_KEY) === 'true');
   const [team1MatchPoints, setTeam1MatchPoints] = useState(0);
@@ -98,12 +108,16 @@ export default function App() {
   const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null } | null>(null);
   const [adminAddName, setAdminAddName] = useState('');
   const [unregisteredAddName, setUnregisteredAddName] = useState('');
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
     activeTab === 'lista' && !isAdminMode
   );
 
   const canSeeList = isAdminMode || isWithinRadius === true;
   const canAddToList = isAdminMode || isWithinRadius === true;
+
+  const profileComplete = !!(userProfile?.display_name?.trim() && userProfile?.avatar_url);
 
   const fetchPlayers = useCallback(async () => {
     const { data, error: err } = await supabase
@@ -112,7 +126,7 @@ export default function App() {
       .order('joined_at', { ascending: true });
     if (err) {
       console.error('Supabase error:', err);
-      setError('Erro ao carregar lista. Verifique as permissões.');
+      addNotification('Erro ao carregar lista. Verifique as permissões.', 'error', { showToastForMs: 5000 });
       return;
     }
     setPlayers((data ?? []) as Player[]);
@@ -175,13 +189,15 @@ export default function App() {
     if (t1 >= 12) {
       setShowWinnerModal('team1');
       const now = new Date().toISOString();
-      await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', 'current');
       setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
+      const { error: updErr } = await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', 'current');
+      if (updErr) console.warn('Session update (timer stop):', updErr.message);
     } else if (t2 >= 12) {
       setShowWinnerModal('team2');
       const now = new Date().toISOString();
-      await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', 'current');
       setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
+      const { error: updErr } = await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', 'current');
+      if (updErr) console.warn('Session update (timer stop):', updErr.message);
     } else {
       setShowWinnerModal(null);
     }
@@ -196,6 +212,52 @@ export default function App() {
   useEffect(() => {
     fetchStats();
   }, [fetchStats]);
+
+  // Avisos temporários: visitante e ranking (mostram toast por alguns segundos, ficam na lista)
+  useEffect(() => {
+    if (isGuest && activeTab === 'inicio' && !shownVisitanteRef.current) {
+      shownVisitanteRef.current = true;
+      addNotification('Você está como visitante. Cadastre-se para participar do ranking e ter sua tela de perfil.', 'warning', {
+        showToastForMs: 5000,
+        action: { type: 'leave_guest_mode', label: 'Cadastrar' },
+      });
+    }
+  }, [isGuest, activeTab, addNotification]);
+
+  useEffect(() => {
+    if (isGuest && activeTab === 'lista' && !shownRankingRef.current) {
+      shownRankingRef.current = true;
+      addNotification('Você não aparece no ranking. Digite seu nome para entrar na fila.', 'info', { showToastForMs: 5000 });
+    }
+  }, [isGuest, activeTab, addNotification]);
+
+  useEffect(() => {
+    if (activeTab === 'lista' && locationError && !shownLocationRef.current) {
+      shownLocationRef.current = true;
+      addNotification(locationError, 'warning', { showToastForMs: 5000 });
+    }
+    if (!locationError) shownLocationRef.current = false;
+  }, [activeTab, locationError, addNotification]);
+
+  // Avatares dos usuários no ranking (basquete_users por user_id)
+  useEffect(() => {
+    const userIds = [...new Set(stats.map((s) => s.user_id).filter(Boolean))] as string[];
+    if (userIds.length === 0) {
+      setUserAvatars({});
+      return;
+    }
+    (async () => {
+      const { data } = await supabase
+        .from('basquete_users')
+        .select('id, avatar_url')
+        .in('id', userIds);
+      const map: Record<string, string> = {};
+      for (const u of data ?? []) {
+        if (u.avatar_url) map[u.id] = u.avatar_url;
+      }
+      setUserAvatars(map);
+    })();
+  }, [stats]);
 
   useEffect(() => {
     fetchPartidaSessao(currentPartidaSessaoId);
@@ -423,11 +485,9 @@ export default function App() {
       (p) => p.user_id === userProfile.id || p.name.toLowerCase().trim() === userProfile.display_name?.toLowerCase().trim()
     );
     if (alreadyInList) {
-      setError('Você já está na lista.');
+      addNotification('Você já está na lista.', 'warning', { showToastForMs: 5000 });
       return;
     }
-
-    setError(null);
 
     try {
       let status: 'waiting' | 'team1' | 'team2';
@@ -458,7 +518,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error adding registered player:', err);
-      setError(err instanceof Error ? err.message : 'Erro ao entrar na fila.');
+      addNotification(err instanceof Error ? err.message : 'Erro ao entrar na fila.', 'error', { showToastForMs: 5000 });
     }
   };
 
@@ -469,17 +529,16 @@ export default function App() {
 
     const canAdd = isMatchStarted || waitingList.length < 10;
     if (!canAdd) {
-      setError('A fila está cheia. Aguarde a partida começar.');
+      addNotification('A fila está cheia. Aguarde a partida começar.', 'warning', { showToastForMs: 5000 });
       return;
     }
 
     const alreadyInList = players.some((p) => p.name.toLowerCase().trim() === name.toLowerCase());
     if (alreadyInList) {
-      setError('Este nome já está na lista.');
+      addNotification('Este nome já está na lista.', 'warning', { showToastForMs: 5000 });
       return;
     }
 
-    setError(null);
 
     try {
       let status: 'waiting' | 'team1' | 'team2';
@@ -507,7 +566,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error adding player by name:', err);
-      setError(err instanceof Error ? err.message : 'Erro ao entrar na fila.');
+      addNotification(err instanceof Error ? err.message : 'Erro ao entrar na fila.', 'error', { showToastForMs: 5000 });
     }
   };
 
@@ -518,17 +577,16 @@ export default function App() {
 
     const canAdd = isMatchStarted || waitingList.length < 10;
     if (!canAdd) {
-      setError('A fila está cheia. Aguarde a partida começar.');
+      addNotification('A fila está cheia. Aguarde a partida começar.', 'warning', { showToastForMs: 5000 });
       return;
     }
 
     const alreadyInList = players.some((p) => p.name.toLowerCase().trim() === name.toLowerCase());
     if (alreadyInList) {
-      setError('Este nome já está na lista.');
+      addNotification('Este nome já está na lista.', 'warning', { showToastForMs: 5000 });
       return;
     }
 
-    setError(null);
 
     try {
       let status: 'waiting' | 'team1' | 'team2';
@@ -556,7 +614,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error adding player by name:', err);
-      setError(err instanceof Error ? err.message : 'Erro ao adicionar jogador.');
+      addNotification(err instanceof Error ? err.message : 'Erro ao adicionar jogador.', 'error', { showToastForMs: 5000 });
     }
   };
 
@@ -633,7 +691,7 @@ export default function App() {
     if (!isAdminMode) return;
 
     if (isMatchStarted && (team1.length < 5 || team2.length < 5)) {
-      setError('O cronômetro só pode ser iniciado com jogadores nos dois times (5 em cada).');
+      addNotification('O cronômetro só pode ser iniciado com jogadores nos dois times (5 em cada).', 'warning', { showToastForMs: 5000 });
       return;
     }
 
@@ -668,24 +726,26 @@ export default function App() {
         setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
         setTimerState({ timerSeconds: 0, timerRunning: true, timerLastSyncAt: now });
         setTimerStartedOnce(true);
-        setError(null);
         await fetchPlayers();
       } else if (isMatchStarted) {
+        const currentSeconds = timerState.timerRunning
+          ? timerState.timerSeconds + Math.floor((Date.now() - new Date(timerState.timerLastSyncAt!).getTime()) / 1000)
+          : timerState.timerSeconds;
         await supabase
           .from('session')
           .update({
-            timer_seconds: 0,
+            timer_seconds: currentSeconds,
             timer_running: true,
             timer_last_sync_at: now,
             timer_started_once: true,
           })
           .eq('id', 'current');
-        setTimerState({ timerSeconds: 0, timerRunning: true, timerLastSyncAt: now });
+        setTimerState({ timerSeconds: currentSeconds, timerRunning: true, timerLastSyncAt: now });
         setTimerStartedOnce(true);
       }
     } catch (err) {
       console.error('Error starting timer:', err);
-      setError('Erro ao iniciar cronômetro.');
+      addNotification('Erro ao iniciar cronômetro.', 'error', { showToastForMs: 5000 });
     }
   };
 
@@ -742,7 +802,7 @@ export default function App() {
 
     // Bloqueios e roubos: só cadastrados (não afetam placar)
     if (isVisitante && (stat === 'blocks' || stat === 'steals')) {
-      setError('Apenas jogadores cadastrados podem receber bloqueios e roubos no ranking.');
+      addNotification('Apenas jogadores cadastrados podem receber bloqueios e roubos no ranking.', 'warning', { showToastForMs: 5000 });
       return;
     }
 
@@ -803,7 +863,7 @@ export default function App() {
             .eq('id', partidaId)
             .single();
           if (fetchErr || !sessao) {
-            setError('Erro ao buscar placar da partida.');
+            addNotification('Erro ao buscar placar da partida.', 'error', { showToastForMs: 5000 });
             return;
           }
           const t1 = (sessao.team1_points ?? 0) as number;
@@ -821,19 +881,19 @@ export default function App() {
           if (updErr) {
             setTeam1MatchPoints(t1);
             setTeam2MatchPoints(t2);
-            setError(updErr.message || 'Erro ao atualizar placar.');
+            addNotification(updErr.message || 'Erro ao atualizar placar.', 'error', { showToastForMs: 5000 });
           } else {
             if (newT1 >= 12 || newT2 >= 12) await stopAndResetTimer();
             fetchPartidaSessao(partidaId);
           }
         } else if (!partidaId) {
-          setError('Inicie o cronômetro para registrar pontos.');
+          addNotification('Inicie o cronômetro para registrar pontos.', 'warning', { showToastForMs: 5000 });
         }
       }
       setStatsModalPlayer(null);
     } catch (err) {
       console.error('Error adding stat:', err);
-      setError('Erro ao registrar estatística.');
+      addNotification('Erro ao registrar estatística.', 'error', { showToastForMs: 5000 });
     }
   };
 
@@ -896,7 +956,7 @@ export default function App() {
       fetchStats();
     } catch (err) {
       console.error('Error starting next match:', err);
-      setError('Erro ao iniciar próxima partida.');
+      addNotification('Erro ao iniciar próxima partida.', 'error', { showToastForMs: 5000 });
     } finally {
       setIsStartingNextMatch(false);
     }
@@ -984,7 +1044,7 @@ export default function App() {
       await fetchPlayers();
     } catch (err) {
       console.error('Error processing timeout:', err);
-      setError('Erro ao processar timeout da partida.');
+      addNotification('Erro ao processar timeout da partida.', 'error', { showToastForMs: 5000 });
     } finally {
       setIsProcessingTimeout(false);
     }
@@ -1152,7 +1212,7 @@ export default function App() {
       setShowPasswordModal(null);
     } catch (err) {
       console.error('Error performing action:', err);
-      setError('Erro ao realizar ação.');
+      addNotification('Erro ao realizar ação.', 'error', { showToastForMs: 5000 });
     }
   };
 
@@ -1164,6 +1224,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Error resetting queue:', err);
+      addNotification('Erro ao resetar lista.', 'error', { showToastForMs: 5000 });
     }
   };
 
@@ -1277,6 +1338,77 @@ export default function App() {
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Painel de Notificações */}
+      <AnimatePresence>
+        {showNotificationsPanel && (
+          <>
+            <motion.div
+              key="notif-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+              onClick={() => setShowNotificationsPanel(false)}
+            />
+            <NotificationsPanel
+              key="notif-panel"
+              notifications={notifications}
+              darkMode={darkMode}
+              onClose={() => setShowNotificationsPanel(false)}
+              onClear={clearNotification}
+              onClearAll={clearAll}
+              onAction={(id, actionType) => {
+                if (actionType === 'leave_guest_mode') {
+                  leaveGuestMode();
+                  setShowNotificationsPanel(false);
+                }
+              }}
+            />
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Toast de notificação (auto-dismiss) */}
+      <AnimatePresence>
+        {visibleToast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: -20, x: '-50%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+            className="fixed top-4 left-1/2 z-50 max-w-[90vw] sm:max-w-md"
+          >
+            <div
+              className={cn(
+                'flex items-center gap-3 p-3 rounded-xl shadow-xl border',
+                visibleToast.type === 'error'
+                  ? darkMode
+                    ? 'bg-red-500/20 border-red-500/30 text-red-200'
+                    : 'bg-red-50 border-red-200 text-red-800'
+                  : visibleToast.type === 'warning'
+                    ? darkMode
+                      ? 'bg-amber-500/20 border-amber-500/30 text-amber-200'
+                      : 'bg-amber-50 border-amber-200 text-amber-800'
+                    : darkMode
+                      ? 'bg-blue-500/20 border-blue-500/30 text-blue-200'
+                      : 'bg-blue-50 border-blue-200 text-blue-800'
+              )}
+            >
+              {visibleToast.type === 'error' && <AlertCircle className="w-5 h-5 flex-shrink-0" />}
+              {visibleToast.type === 'warning' && <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
+              {visibleToast.type === 'info' && <Info className="w-5 h-5 flex-shrink-0" />}
+              <p className="text-sm font-medium flex-1">{visibleToast.message}</p>
+              <button
+                onClick={dismissToast}
+                className="p-1 rounded hover:bg-black/10 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -1485,6 +1617,26 @@ export default function App() {
               </>
             )}
             <button
+              onClick={() => setShowNotificationsPanel(true)}
+              className={cn(
+                'relative transition-colors p-2 rounded-lg',
+                darkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-orange-400' : 'text-slate-500 hover:bg-slate-100 hover:text-orange-600'
+              )}
+              title="Notificações"
+            >
+              <Bell className="w-5 h-5" />
+              {notifications.length > 0 && (
+                <span
+                  className={cn(
+                    'absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold',
+                    darkMode ? 'bg-orange-500 text-white' : 'bg-orange-500 text-white'
+                  )}
+                >
+                  {notifications.length > 99 ? '99+' : notifications.length}
+                </span>
+              )}
+            </button>
+            <button
               onClick={() => setDarkMode(!darkMode)}
               className={cn(
                 'transition-colors p-2 rounded-lg',
@@ -1509,47 +1661,58 @@ export default function App() {
       </header>
 
       <main className="max-w-5xl mx-auto px-2 sm:px-4 py-6 sm:py-10 space-y-6 sm:space-y-8 pb-32">
-        {error && (
-          <div
-            className={cn(
-              'border p-3 rounded-xl flex items-center gap-3 text-sm transition-colors duration-300',
-              darkMode ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-red-50 border-red-100 text-red-600'
-            )}
-          >
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <p>{error}</p>
+        {!isGuest && !profileComplete && user && (
+          <div className="space-y-6">
+            <EditarPerfil
+              darkMode={darkMode}
+              onBack={() => {}}
+              mandatory
+              onSaved={() => {
+                fetchUserProfile();
+              }}
+            />
           </div>
         )}
-
+        {(!user || isGuest || profileComplete) && (
+        <>
         {activeTab === 'inicio' && (
           <>
-            {isGuest && (
-              <div
-                className={cn(
-                  'border rounded-xl p-4 flex items-center justify-between gap-4',
-                  darkMode ? 'bg-amber-500/10 border-amber-500/20' : 'bg-amber-50 border-amber-200'
-                )}
-              >
-                <div className="flex items-center gap-3">
-                  <AlertCircle className={cn('w-5 h-5', darkMode ? 'text-amber-400' : 'text-amber-600')} />
-                  <div>
-                    <p className={cn('font-semibold text-sm', darkMode ? 'text-amber-200' : 'text-amber-800')}>
-                      Você está como visitante
-                    </p>
-                    <p className={cn('text-xs', darkMode ? 'text-amber-400/80' : 'text-amber-600')}>
-                      Cadastre-se para participar do ranking e ter sua tela de perfil.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={leaveGuestMode}
-                  className="px-4 py-2 rounded-lg font-semibold text-sm bg-orange-500 hover:bg-orange-600 text-white whitespace-nowrap"
-                >
-                  Cadastrar
-                </button>
-              </div>
-            )}
-            <RankingView stats={stats} darkMode={darkMode} sortKey={sortKey} onSortChange={setSortKey} />
+            <AnimatePresence mode="wait">
+              {selectedProfileId ? (
+                (() => {
+                  const stat = stats.find((s) => s.user_id === selectedProfileId || s.id === selectedProfileId);
+                  if (!stat) return null;
+                  return (
+                    <PerfilDetalhe
+                      key="perfil-detalhe"
+                      data={{
+                        id: stat.id,
+                        name: stat.name,
+                        wins: stat.wins,
+                        points: stat.points,
+                        blocks: stat.blocks,
+                        steals: stat.steals,
+                        clutch_points: stat.clutch_points,
+                        avatar_url: stat.user_id ? userAvatars[stat.user_id] ?? null : null,
+                      }}
+                      darkMode={darkMode}
+                      onBack={() => setSelectedProfileId(null)}
+                    />
+                  );
+                })()
+              ) : (
+                <motion.div key="ranking-view" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} transition={{ duration: 0.25 }}>
+                <RankingView
+                stats={stats}
+                darkMode={darkMode}
+                sortKey={sortKey}
+                onSortChange={setSortKey}
+                userAvatars={userAvatars}
+                onProfileClick={(stat) => setSelectedProfileId(stat.user_id ?? stat.id)}
+              />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </>
         )}
 
@@ -1717,10 +1880,10 @@ export default function App() {
                 <UserPlus className="w-4 h-4 sm:w-5 h-5 text-orange-500" />
                 Entrar na Fila
               </h2>
-              {(isGuest || !userProfile?.display_name?.trim()) ? (
+              {isGuest ? (
                 <div className="space-y-2">
                   <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-600')}>
-                    {isGuest ? 'Você não aparece no ranking. Digite seu nome para entrar na fila:' : 'Edite seu perfil ou digite seu nome para entrar na fila:'}
+                    Digite seu nome para entrar na fila:
                   </p>
                   <div className={cn('flex gap-2', darkMode ? 'text-slate-300' : 'text-slate-600')}>
                     <input
@@ -1757,7 +1920,7 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-              ) : (
+              ) : profileComplete ? (
                 <button
                   type="button"
                   onClick={addPlayerAsRegistered}
@@ -1782,6 +1945,10 @@ export default function App() {
                   <User className="w-4 h-4" />
                   Entrar na fila ({userProfile?.display_name})
                 </button>
+              ) : (
+                <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-600')}>
+                  Complete seu perfil (nome e foto) na aba Perfil para entrar na fila.
+                </p>
               )}
               {isAdminMode && (
                 <div className={cn('flex gap-2 mt-3', darkMode ? 'text-slate-300' : 'text-slate-600')}>
@@ -2112,9 +2279,12 @@ export default function App() {
             )}
           </div>
         )}
+        </>
+        )}
       </main>
 
-      {/* Navigation Bar */}
+      {/* Navigation Bar - oculta quando perfil incompleto (cadastro obrigatório) */}
+      {(profileComplete || isGuest) && (
       <nav
         className={cn(
           'fixed bottom-0 left-0 right-0 border-t backdrop-blur-lg z-50 transition-colors duration-300',
@@ -2128,6 +2298,7 @@ export default function App() {
           <NavButton active={activeTab === 'perfil'} onClick={() => setActiveTab('perfil')} icon={<User className="w-5 h-5" />} label="Perfil" darkMode={darkMode} />
         </div>
       </nav>
+      )}
 
       <footer className={cn('max-w-5xl mx-auto px-4 py-12 text-center text-sm transition-colors duration-300', darkMode ? 'text-slate-600' : 'text-slate-400')}>
         <p>Basquete Next &bull; Sistema de Fila em Tempo Real</p>
@@ -2338,11 +2509,80 @@ interface RankingViewProps {
   darkMode: boolean;
   sortKey: SortKey;
   onSortChange: (key: SortKey) => void;
+  userAvatars: Record<string, string>;
+  onProfileClick: (stat: PlayerStats) => void;
 }
 
 const layoutTransition = { type: 'spring' as const, stiffness: 350, damping: 30 };
 
-function RankingView({ stats, darkMode, sortKey, onSortChange }: RankingViewProps) {
+const SKILL_LABELS: Record<SortKey, string> = {
+  wins: 'Vitórias',
+  points: 'Pontos',
+  blocks: 'Tocos',
+  steals: 'Roubos',
+  clutch_points: 'Decisivos',
+};
+
+function RankPodiumItem({
+  rank,
+  player,
+  sortKey,
+  darkMode,
+  avatarUrl,
+  onClick,
+  size,
+  medal,
+}: {
+  rank: number;
+  player: PlayerStats;
+  sortKey: SortKey;
+  darkMode: boolean;
+  avatarUrl?: string;
+  onClick: () => void;
+  size: 'sm' | 'md' | 'lg';
+  medal: string;
+}) {
+  const sizeClasses = { sm: 'w-14 h-14 sm:w-16 sm:h-16', md: 'w-16 h-16 sm:w-20 sm:h-20', lg: 'w-20 h-20 sm:w-24 sm:h-24' };
+  const barClasses = { sm: 'h-12 sm:h-16', md: 'h-16 sm:h-20', lg: 'h-24 sm:h-32' };
+  const accentColor = rank === 1 ? 'bg-yellow-500 ring-yellow-500/20' : rank === 2 ? 'bg-slate-300' : 'bg-orange-400';
+  return (
+    <motion.div
+      layout
+      layoutId={`rank-${player.id}`}
+      transition={layoutTransition}
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex flex-col items-center gap-3"
+    >
+      <button
+        type="button"
+        onClick={onClick}
+        className="relative group cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 rounded-full"
+      >
+        <div className={cn(sizeClasses[size], rank === 1 ? 'ring-4 ring-yellow-500/20' : '', 'rounded-full p-1 shadow-lg overflow-hidden', accentColor)}>
+          {avatarUrl ? (
+            <img src={avatarUrl} alt={player.name} className="w-full h-full object-cover" />
+          ) : (
+            <div className={cn('w-full h-full rounded-full flex items-center justify-center font-black', darkMode ? 'bg-slate-900 text-slate-300' : 'bg-white text-slate-400')}>
+              {rank}
+            </div>
+          )}
+        </div>
+        <div className={cn('absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-white', rank === 1 ? 'bg-yellow-500 text-white -top-3 -right-3 w-8 h-8 text-xs shadow-lg' : rank === 2 ? 'bg-slate-300 text-slate-700' : 'bg-orange-400 text-white')}>
+          {medal}
+        </div>
+      </button>
+      <div className="text-center">
+        <p className={cn('font-bold truncate max-w-[80px] sm:max-w-[100px]', size === 'lg' ? 'text-sm sm:text-base' : 'text-xs sm:text-sm', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</p>
+        <p className="text-orange-500 font-black mt-0.5" style={{ fontSize: size === 'lg' ? '1.125rem' : size === 'md' ? '0.875rem' : '0.75rem' }}>{player[sortKey]}</p>
+        <p className={cn('text-[9px] uppercase tracking-wider font-bold mt-0.5', darkMode ? 'text-slate-600' : 'text-slate-500')}>{SKILL_LABELS[sortKey]}</p>
+      </div>
+      <div className={cn('w-full rounded-t-2xl', barClasses[size], rank === 1 ? (darkMode ? 'bg-orange-500/20 border-x border-t border-orange-500/30' : 'bg-orange-500') : darkMode ? 'bg-slate-800' : 'bg-slate-200')} />
+    </motion.div>
+  );
+}
+
+function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick }: RankingViewProps) {
   const sortedStats = useMemo(() => {
     return [...stats].sort((a, b) => b[sortKey] - a[sortKey]);
   }, [stats, sortKey]);
@@ -2391,84 +2631,40 @@ function RankingView({ stats, darkMode, sortKey, onSortChange }: RankingViewProp
       {/* Podium for Top 3 */}
       <motion.div layout className="grid grid-cols-3 gap-2 sm:gap-4 items-end pt-4 pb-2">
         {top3[1] && (
-          <motion.div
-            layout
-            layoutId={`rank-${top3[1].id}`}
-            transition={layoutTransition}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center gap-3"
-          >
-            <div className="relative">
-              <div className="w-16 h-16 sm:w-20 sm:h-20 bg-slate-300 rounded-full p-1 shadow-lg">
-                <div className={cn('w-full h-full rounded-full flex items-center justify-center', darkMode ? 'bg-slate-900' : 'bg-white')}>
-                  <span className={cn('text-xl font-black', darkMode ? 'text-slate-300' : 'text-slate-400')}>2</span>
-                </div>
-              </div>
-              <div className="absolute -top-2 -right-2 w-6 h-6 bg-slate-300 rounded-full flex items-center justify-center text-[10px] font-bold text-slate-700 border-2 border-white">
-                🥈
-              </div>
-            </div>
-            <div className="text-center">
-              <p className={cn('font-bold text-xs sm:text-sm truncate max-w-[80px]', darkMode ? 'text-white' : 'text-slate-900')}>{top3[1].name}</p>
-              <p className="text-orange-500 font-black text-sm sm:text-lg">{top3[1][sortKey]}</p>
-            </div>
-            <div className={cn('w-full h-16 sm:h-20 rounded-t-2xl', darkMode ? 'bg-slate-800' : 'bg-slate-200')} />
-          </motion.div>
+          <RankPodiumItem
+            rank={2}
+            player={top3[1]}
+            sortKey={sortKey}
+            darkMode={darkMode}
+            avatarUrl={top3[1].user_id ? userAvatars[top3[1].user_id] : undefined}
+            onClick={() => onProfileClick(top3[1])}
+            size="md"
+            medal="🥈"
+          />
         )}
-
         {top3[0] && (
-          <motion.div
-            layout
-            layoutId={`rank-${top3[0].id}`}
-            transition={layoutTransition}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center gap-3"
-          >
-            <div className="relative">
-              <div className="w-20 h-20 sm:w-24 sm:h-24 bg-yellow-500 rounded-full p-1 shadow-xl ring-4 ring-yellow-500/20">
-                <div className={cn('w-full h-full rounded-full flex items-center justify-center', darkMode ? 'bg-slate-900' : 'bg-white')}>
-                  <span className={cn('text-2xl font-black', darkMode ? 'text-yellow-500' : 'text-yellow-600')}>1</span>
-                </div>
-              </div>
-              <div className="absolute -top-3 -right-3 w-8 h-8 bg-yellow-500 rounded-full flex items-center justify-center text-xs font-bold text-white border-2 border-white shadow-lg">
-                👑
-              </div>
-            </div>
-            <div className="text-center">
-              <p className={cn('font-bold text-sm sm:text-base truncate max-w-[100px]', darkMode ? 'text-white' : 'text-slate-900')}>{top3[0].name}</p>
-              <p className="text-orange-500 font-black text-lg sm:text-2xl">{top3[0][sortKey]}</p>
-            </div>
-            <div className={cn('w-full h-24 sm:h-32 rounded-t-2xl', darkMode ? 'bg-orange-500/20 border-x border-t border-orange-500/30' : 'bg-orange-500 text-white')} />
-          </motion.div>
+          <RankPodiumItem
+            rank={1}
+            player={top3[0]}
+            sortKey={sortKey}
+            darkMode={darkMode}
+            avatarUrl={top3[0].user_id ? userAvatars[top3[0].user_id] : undefined}
+            onClick={() => onProfileClick(top3[0])}
+            size="lg"
+            medal="👑"
+          />
         )}
-
         {top3[2] && (
-          <motion.div
-            layout
-            layoutId={`rank-${top3[2].id}`}
-            transition={layoutTransition}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center gap-3"
-          >
-            <div className="relative">
-              <div className="w-14 h-14 sm:w-16 sm:h-16 bg-orange-400 rounded-full p-1 shadow-lg">
-                <div className={cn('w-full h-full rounded-full flex items-center justify-center', darkMode ? 'bg-slate-900' : 'bg-white')}>
-                  <span className={cn('text-lg font-black', darkMode ? 'text-orange-400' : 'text-orange-500')}>3</span>
-                </div>
-              </div>
-              <div className="absolute -top-2 -right-2 w-6 h-6 bg-orange-400 rounded-full flex items-center justify-center text-[10px] font-bold text-white border-2 border-white">
-                🥉
-              </div>
-            </div>
-            <div className="text-center">
-              <p className={cn('font-bold text-xs sm:text-sm truncate max-w-[80px]', darkMode ? 'text-white' : 'text-slate-900')}>{top3[2].name}</p>
-              <p className="text-orange-500 font-black text-sm sm:text-lg">{top3[2][sortKey]}</p>
-            </div>
-            <div className={cn('w-full h-12 sm:h-16 rounded-t-2xl', darkMode ? 'bg-slate-800' : 'bg-slate-200')} />
-          </motion.div>
+          <RankPodiumItem
+            rank={3}
+            player={top3[2]}
+            sortKey={sortKey}
+            darkMode={darkMode}
+            avatarUrl={top3[2].user_id ? userAvatars[top3[2].user_id] : undefined}
+            onClick={() => onProfileClick(top3[2])}
+            size="sm"
+            medal="🥉"
+          />
         )}
       </motion.div>
 
@@ -2476,49 +2672,61 @@ function RankingView({ stats, darkMode, sortKey, onSortChange }: RankingViewProp
       <motion.div layout className="space-y-3">
         <AnimatePresence mode="popLayout">
           {remaining.map((player, index) => (
-            <motion.div
+            <motion.button
               key={player.id}
+              type="button"
               layout
               layoutId={`rank-${player.id}`}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: -20 }}
               transition={layoutTransition}
+              onClick={() => onProfileClick(player)}
               className={cn(
-                'p-4 rounded-2xl flex items-center justify-between transition-all hover:scale-[1.01]',
-                darkMode ? 'bg-slate-900/50 border border-slate-800' : 'bg-white border border-slate-100 shadow-sm'
+                'w-full p-4 rounded-2xl flex items-center justify-between transition-all hover:scale-[1.01] active:scale-[0.99] text-left',
+                darkMode ? 'bg-slate-900/50 border border-slate-800 hover:border-slate-700' : 'bg-white border border-slate-100 shadow-sm hover:shadow-md'
               )}
             >
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4 min-w-0 flex-1">
                 <div
                   className={cn(
-                    'w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs',
+                    'w-10 h-10 shrink-0 rounded-full flex items-center justify-center font-bold text-xs overflow-hidden',
                     darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400'
                   )}
                 >
-                  {index + 4}
+                  {player.user_id && userAvatars[player.user_id] ? (
+                    <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <span>{index + 4}</span>
+                  )}
                 </div>
-                <div>
-                  <h3 className={cn('font-bold', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className={cn('text-[10px] font-bold uppercase tracking-wider', darkMode ? 'text-slate-600' : 'text-slate-400')}>
-                      {player.wins} Vitórias
-                    </span>
-                    <span className={cn('w-1 h-1 rounded-full', darkMode ? 'bg-slate-700' : 'bg-slate-200')} />
-                    <span className={cn('text-[10px] font-bold uppercase tracking-wider', darkMode ? 'text-slate-600' : 'text-slate-400')}>
-                      {player.points} Pontos
-                    </span>
+                <div className="min-w-0 flex-1">
+                  <h3 className={cn('font-bold truncate', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
+                  <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-1 items-center">
+                    {(['wins', 'points', 'blocks', 'steals', 'clutch_points'] as const).map((key, i) => (
+                      <span key={key} className="flex items-center gap-1.5">
+                        {i > 0 && <span className={cn('w-0.5 h-0.5 rounded-full', darkMode ? 'bg-slate-600' : 'bg-slate-300')} />}
+                        <span
+                          className={cn(
+                            'text-[10px] font-bold uppercase tracking-wider',
+                            key === sortKey ? 'text-orange-500' : darkMode ? 'text-slate-500' : 'text-slate-400'
+                          )}
+                        >
+                          {player[key]} {SKILL_LABELS[key].toLowerCase()}
+                        </span>
+                      </span>
+                    ))}
                   </div>
                 </div>
               </div>
-
-              <div className="text-right">
+              <div className="text-right shrink-0 ml-3">
                 <div className="text-xl font-black text-orange-500">{player[sortKey]}</div>
                 <div className={cn('text-[9px] uppercase tracking-widest font-bold', darkMode ? 'text-slate-600' : 'text-slate-500')}>
-                  {filterOptions.find((o) => o.key === sortKey)?.label}
+                  {SKILL_LABELS[sortKey]}
                 </div>
+                <ArrowRight className={cn('w-4 h-4 mt-1 mx-auto', darkMode ? 'text-slate-600' : 'text-slate-400')} />
               </div>
-            </motion.div>
+            </motion.button>
           ))}
         </AnimatePresence>
       </motion.div>

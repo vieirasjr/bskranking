@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { NotificationProvider } from './contexts/NotificationContext';
 import Login from './pages/Login';
 import App from './App.tsx';
 import './index.css';
@@ -26,7 +27,9 @@ function Root() {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
-      <Root />
+      <NotificationProvider>
+        <Root />
+      </NotificationProvider>
     </AuthProvider>
   </StrictMode>,
 );

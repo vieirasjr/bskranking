@@ -63,9 +63,11 @@ interface EditarPerfilProps {
   darkMode: boolean;
   onBack: () => void;
   onSaved?: () => void;
+  /** Primeiro login: obriga nome + avatar antes de continuar */
+  mandatory?: boolean;
 }
 
-export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfilProps) {
+export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: EditarPerfilProps) {
   const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -202,6 +204,10 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
       setError('Nome ou apelido é obrigatório.');
       return;
     }
+    if (mandatory && !avatarUrl) {
+      setError('Selecione uma foto de perfil.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setSuccess(false);
@@ -254,19 +260,26 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
       className="space-y-6"
     >
       <div className="flex items-center gap-3">
-        <button
-          onClick={onBack}
-          className={cn(
-            'p-2 rounded-xl transition-colors',
-            darkMode ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-100 text-slate-600'
-          )}
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
+        {!mandatory && (
+          <button
+            onClick={onBack}
+            className={cn(
+              'p-2 rounded-xl transition-colors',
+              darkMode ? 'hover:bg-slate-800 text-slate-300' : 'hover:bg-slate-100 text-slate-600'
+            )}
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+        )}
         <h2 className={cn('text-xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>
-          Atualizar perfil
+          {mandatory ? 'Complete seu perfil para continuar' : 'Atualizar perfil'}
         </h2>
       </div>
+      {mandatory && (
+        <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+          Informe seu nome e selecione uma foto. São obrigatórios para entrar na fila.
+        </p>
+      )}
 
       {error && (
         <div
@@ -337,7 +350,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
             />
           </div>
           <p className={cn('text-xs', darkMode ? 'text-slate-500' : 'text-slate-400')}>
-            Clique para enviar foto (máx. 5MB)
+            Clique para enviar foto (máx. 5MB){mandatory && <span className="text-orange-500"> *</span>}
           </p>
         </div>
 
@@ -600,9 +613,12 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
 
         <button
           type="submit"
-          disabled={saving}
+          disabled={
+            saving ||
+            (mandatory && (!(form.display_name.trim() || form.full_name.trim()) || !avatarUrl))
+          }
           className={cn(
-            'w-full py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-50',
+            'w-full py-4 rounded-xl font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed',
             'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20'
           )}
         >
@@ -614,7 +630,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved }: EditarPerfil
           ) : (
             <>
               <Check className="w-5 h-5" />
-              Salvar perfil
+              {mandatory ? 'Continuar' : 'Salvar perfil'}
             </>
           )}
         </button>

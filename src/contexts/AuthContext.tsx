@@ -4,6 +4,41 @@ import { supabase } from '../supabase';
 
 const GUEST_KEY = 'basquete_guest_mode';
 
+async function syncUserToBasquete(user: User) {
+  const meta = user.user_metadata ?? {};
+  const email = user.email ?? '';
+  if (!email) return;
+
+  const now = new Date().toISOString();
+
+  const { data: byAuth } = await supabase
+    .from('basquete_users')
+    .select('id, auth_id')
+    .eq('auth_id', user.id)
+    .maybeSingle();
+
+  const { data: byEmail } = byAuth ? { data: byAuth } : await supabase.from('basquete_users').select('id, auth_id').eq('email', email).maybeSingle();
+  const existing = byAuth ?? byEmail;
+
+  if (existing?.id) {
+    await supabase
+      .from('basquete_users')
+      .update({
+        auth_id: existing.auth_id ?? user.id,
+        updated_at: now,
+      })
+      .eq('id', existing.id);
+  } else {
+    await supabase.from('basquete_users').insert({
+      auth_id: user.id,
+      email,
+      display_name: meta.full_name ?? meta.name ?? meta.user_name ?? meta.display_name ?? null,
+      full_name: meta.full_name ?? null,
+      updated_at: now,
+    });
+  }
+}
+
 type AuthState = {
   session: Session | null;
   user: User | null;
@@ -34,9 +69,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
-      if (session) {
+      if (session?.user) {
         localStorage.removeItem(GUEST_KEY);
         setIsGuest(false);
+        syncUserToBasquete(session.user);
       }
       setLoading(false);
     });
@@ -49,6 +85,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session) {
         localStorage.removeItem(GUEST_KEY);
         setIsGuest(false);
+        // Gravar/corrigir usuário em basquete_users ao autenticar (cadastro ou login)
+        syncUserToBasquete(session.user);
       }
     });
 
