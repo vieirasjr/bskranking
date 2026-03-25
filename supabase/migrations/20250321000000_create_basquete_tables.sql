@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS players (
 CREATE TABLE IF NOT EXISTS stats (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
+  partidas INT DEFAULT 0,
   wins INT DEFAULT 0,
   points INT DEFAULT 0,
   blocks INT DEFAULT 0,

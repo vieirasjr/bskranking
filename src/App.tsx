@@ -30,6 +30,7 @@ import {
   Bell,
   Info,
   AlertTriangle,
+  CheckCircle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -48,6 +49,59 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+interface RegisteredUserSuggestion {
+  id: string;
+  display_name: string | null;
+  full_name?: string | null;
+  email: string;
+  avatar_url?: string | null;
+}
+
+function getRegisteredUserLabel(user: RegisteredUserSuggestion) {
+  return user.display_name?.trim() || user.full_name?.trim() || user.email;
+}
+
+async function resolveRegisteredUserByName(
+  name: string,
+  selectedUser: RegisteredUserSuggestion | null,
+  suggestions: RegisteredUserSuggestion[]
+) {
+  const normalizedName = name.trim().toLowerCase();
+  if (!normalizedName) return { userId: null, ambiguous: false };
+
+  if (selectedUser && getRegisteredUserLabel(selectedUser).trim().toLowerCase() === normalizedName) {
+    return { userId: selectedUser.id, ambiguous: false };
+  }
+
+  const suggestionMatches = suggestions.filter(
+    (candidate) => getRegisteredUserLabel(candidate).trim().toLowerCase() === normalizedName
+  );
+
+  if (suggestionMatches.length === 1) {
+    return { userId: suggestionMatches[0].id, ambiguous: false };
+  }
+
+  if (suggestionMatches.length > 1) {
+    return { userId: null, ambiguous: true };
+  }
+
+  const { data, error } = await supabase
+    .from('basquete_users')
+    .select('id, display_name')
+    .eq('display_name', name.trim())
+    .limit(2);
+
+  if (error) {
+    throw error;
+  }
+
+  if ((data ?? []).length > 1) {
+    return { userId: null, ambiguous: true };
+  }
+
+  return { userId: data?.[0]?.id ?? null, ambiguous: false };
+}
+
 interface Player {
   id: string;
   name: string;
@@ -61,6 +115,7 @@ interface PlayerStats {
   id: string;
   name: string;
   user_id?: string | null;
+  partidas: number;
   wins: number;
   points: number;
   blocks: number;
@@ -107,9 +162,14 @@ export default function App() {
   const [editingProfile, setEditingProfile] = useState(false);
   const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null } | null>(null);
   const [adminAddName, setAdminAddName] = useState('');
+  const [adminUserSuggestions, setAdminUserSuggestions] = useState<RegisteredUserSuggestion[]>([]);
+  const [showAdminSuggestions, setShowAdminSuggestions] = useState(false);
+  const [isSearchingAdminUsers, setIsSearchingAdminUsers] = useState(false);
+  const [selectedAdminUser, setSelectedAdminUser] = useState<RegisteredUserSuggestion | null>(null);
   const [unregisteredAddName, setUnregisteredAddName] = useState('');
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
+  const adminSuggestionsRef = useRef<HTMLDivElement | null>(null);
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
     activeTab === 'lista' && !isAdminMode
   );
@@ -118,6 +178,67 @@ export default function App() {
   const canAddToList = isAdminMode || isWithinRadius === true;
 
   const profileComplete = !!(userProfile?.display_name?.trim() && userProfile?.avatar_url);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (adminSuggestionsRef.current && !adminSuggestionsRef.current.contains(event.target as Node)) {
+        setShowAdminSuggestions(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    const searchTerm = adminAddName.trim();
+
+    if (!isAdminMode || searchTerm.length < 4) {
+      setAdminUserSuggestions([]);
+      setShowAdminSuggestions(false);
+      setIsSearchingAdminUsers(false);
+      return;
+    }
+
+    const normalizedSearch = searchTerm.replace(/[%,]/g, ' ').trim();
+    if (normalizedSearch.length < 4) {
+      setAdminUserSuggestions([]);
+      setShowAdminSuggestions(false);
+      setIsSearchingAdminUsers(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setIsSearchingAdminUsers(true);
+
+      const { data, error } = await supabase
+        .from('basquete_users')
+        .select('id, display_name, email, avatar_url')
+        .ilike('display_name', `%${normalizedSearch}%`)
+        .limit(8);
+
+      if (cancelled) return;
+
+      if (error) {
+        console.error('Error searching registered users:', error);
+        setAdminUserSuggestions([]);
+        setShowAdminSuggestions(false);
+        setIsSearchingAdminUsers(false);
+        return;
+      }
+
+      const suggestions = (data ?? []).filter((candidate) => getRegisteredUserLabel(candidate).trim().length > 0) as RegisteredUserSuggestion[];
+      setAdminUserSuggestions(suggestions);
+      setShowAdminSuggestions(true);
+      setIsSearchingAdminUsers(false);
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [adminAddName, isAdminMode]);
 
   const fetchPlayers = useCallback(async () => {
     const { data, error: err } = await supabase
@@ -139,8 +260,27 @@ export default function App() {
       return;
     }
     const allStats = (data ?? []) as PlayerStats[];
-    const statsData = allStats.filter((s) => s.user_id != null);
-    setStats(statsData);
+    // Deduplicar por user_id: cada jogador aparece apenas uma vez no ranking,
+    // somando stats de linhas duplicadas caso existam.
+    const byUserId = new Map<string, PlayerStats>();
+    for (const s of allStats) {
+      if (!s.user_id) continue;
+      const existing = byUserId.get(s.user_id);
+      if (!existing) {
+        byUserId.set(s.user_id, { ...s });
+      } else {
+        byUserId.set(s.user_id, {
+          ...existing,
+          partidas: (existing.partidas ?? 0) + (s.partidas ?? 0),
+          wins: (existing.wins ?? 0) + (s.wins ?? 0),
+          points: (existing.points ?? 0) + (s.points ?? 0),
+          blocks: (existing.blocks ?? 0) + (s.blocks ?? 0),
+          steals: (existing.steals ?? 0) + (s.steals ?? 0),
+          clutch_points: (existing.clutch_points ?? 0) + (s.clutch_points ?? 0),
+        });
+      }
+    }
+    setStats(Array.from(byUserId.values()));
   }, []);
 
   const fetchSession = useCallback(async () => {
@@ -587,8 +727,11 @@ export default function App() {
       return;
     }
 
-
     try {
+      // Apenas vincula ao cadastro se o admin selecionou explicitamente da lista de sugestões.
+      // Sem seleção = visitante (user_id null, sem estatísticas).
+      const resolvedUserId = selectedAdminUser ? selectedAdminUser.id : null;
+
       let status: 'waiting' | 'team1' | 'team2';
       if (isMatchStarted) {
         if (team1.length < PLAYERS_PER_TEAM) status = 'team1';
@@ -600,7 +743,7 @@ export default function App() {
 
       const { data: newPlayer, error: err } = await supabase
         .from('players')
-        .insert({ name, status, user_id: null })
+        .insert({ name, status, user_id: resolvedUserId })
         .select()
         .single();
 
@@ -608,6 +751,9 @@ export default function App() {
 
       if (newPlayer) {
         setAdminAddName('');
+        setSelectedAdminUser(null);
+        setAdminUserSuggestions([]);
+        setShowAdminSuggestions(false);
         setPlayers((prev) => [...prev, newPlayer as Player].sort(
           (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime()
         ));
@@ -632,6 +778,8 @@ export default function App() {
     removeInfo?: { playerId: string };
   } | null>(null);
   const [statsModalPlayer, setStatsModalPlayer] = useState<Player | null>(null);
+  const [registeringStatLabel, setRegisteringStatLabel] = useState<string | null>(null);
+  const isRegisteringStatRef = useRef(false);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
@@ -643,6 +791,14 @@ export default function App() {
       return () => {
         document.body.style.overflow = prev;
       };
+    }
+  }, [statsModalPlayer]);
+
+  // Resetar estado de registro ao fechar o modal
+  useEffect(() => {
+    if (!statsModalPlayer) {
+      setRegisteringStatLabel(null);
+      isRegisteringStatRef.current = false;
     }
   }, [statsModalPlayer]);
 
@@ -797,6 +953,15 @@ export default function App() {
 
   const addPlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals') => {
     if (pointsBlocked) return;
+    if (isRegisteringStatRef.current) return;
+    isRegisteringStatRef.current = true;
+    const statLabels: Record<typeof stat, string> = {
+      points_2: '2 Pontos',
+      points_3: '3 Pontos',
+      blocks: 'Bloqueio',
+      steals: 'Roubo',
+    };
+    setRegisteringStatLabel(statLabels[stat]);
     const userId = player.user_id;
     const isVisitante = !userId;
 
@@ -809,7 +974,7 @@ export default function App() {
     try {
       // Atualizar stats (ranking) apenas para jogadores cadastrados
       if (userId) {
-        const { data: existing } = await supabase.from('stats').select('*').eq('name', player.name).maybeSingle();
+        const { data: existing } = await supabase.from('stats').select('*').eq('user_id', userId).maybeSingle();
 
         if (existing) {
           const updates =
@@ -942,14 +1107,38 @@ export default function App() {
       for (const p of nextFromLosers) {
         await supabase.from('players').update({ status: losingTeamKey }).eq('id', p.id);
       }
-      for (const p of winners) {
+      const jogadoresDaPartida = [
+        ...winners.map((player) => ({ player, venceu: true })),
+        ...losers.map((player) => ({ player, venceu: false })),
+      ];
+
+      for (const { player: p, venceu } of jogadoresDaPartida) {
         const userId = p.user_id;
         if (!userId) continue;
-        const { data: s } = await supabase.from('stats').select('*').eq('name', p.name).maybeSingle();
+        const { data: byUserId } = await supabase.from('stats').select('*').eq('user_id', userId).maybeSingle();
+        const { data: s } = byUserId
+          ? { data: byUserId }
+          : await supabase.from('stats').select('*').eq('name', p.name).maybeSingle();
         if (s) {
-          await supabase.from('stats').update({ wins: (s.wins ?? 0) + 1, user_id: userId }).eq('id', s.id);
+          await supabase
+            .from('stats')
+            .update({
+              partidas: (s.partidas ?? 0) + 1,
+              wins: (s.wins ?? 0) + (venceu ? 1 : 0),
+              user_id: userId,
+            })
+            .eq('id', s.id);
         } else {
-          await supabase.from('stats').insert({ name: p.name, user_id: userId, wins: 1, points: 0, blocks: 0, steals: 0, clutch_points: 0 });
+          await supabase.from('stats').insert({
+            name: p.name,
+            user_id: userId,
+            partidas: 1,
+            wins: venceu ? 1 : 0,
+            points: 0,
+            blocks: 0,
+            steals: 0,
+            clutch_points: 0,
+          });
         }
       }
       await fetchPlayers();
@@ -1460,60 +1649,73 @@ export default function App() {
                 <h3 className={cn('text-lg font-bold', darkMode ? 'text-white' : 'text-slate-900')}>
                   Registrar: {statsModalPlayer.name}
                 </h3>
-                <button
-                  type="button"
-                  onClick={() => setStatsModalPlayer(null)}
-                  className={cn('p-2 -m-2 rounded-lg min-w-[44px] min-h-[44px] flex items-center justify-center', darkMode ? 'hover:bg-slate-800 active:bg-slate-700' : 'hover:bg-slate-100 active:bg-slate-200')}
-                  aria-label="Fechar"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                {!registeringStatLabel && (
+                  <button
+                    type="button"
+                    onClick={() => setStatsModalPlayer(null)}
+                    className={cn('p-2 -m-2 rounded-lg min-w-[44px] min-h-[44px] flex items-center justify-center', darkMode ? 'hover:bg-slate-800 active:bg-slate-700' : 'hover:bg-slate-100 active:bg-slate-200')}
+                    aria-label="Fechar"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
               </div>
-              {pointsBlocked && (
-                <div
-                  className={cn(
-                    'p-3 rounded-xl text-sm flex items-center gap-2',
-                    darkMode ? 'bg-amber-500/10 text-amber-400' : 'bg-amber-50 text-amber-700'
-                  )}
-                >
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  {pointsBlockedMessage}
+              {registeringStatLabel ? (
+                <div className="flex flex-col items-center justify-center py-6 gap-4">
+                  <div className="w-9 h-9 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                  <p className={cn('text-sm font-semibold', darkMode ? 'text-slate-300' : 'text-slate-700')}>
+                    Registrando {registeringStatLabel}...
+                  </p>
                 </div>
+              ) : (
+                <>
+                  {pointsBlocked && (
+                    <div
+                      className={cn(
+                        'p-3 rounded-xl text-sm flex items-center gap-2',
+                        darkMode ? 'bg-amber-500/10 text-amber-400' : 'bg-amber-50 text-amber-700'
+                      )}
+                    >
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      {pointsBlockedMessage}
+                    </div>
+                  )}
+                  <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
+                    <StatButton
+                      onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
+                      disabled={pointsBlocked}
+                      className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]'}
+                    >
+                      <Target className="w-6 h-6 mx-auto mb-1" />
+                      2 pts
+                    </StatButton>
+                    <StatButton
+                      onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
+                      disabled={pointsBlocked}
+                      className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]'}
+                    >
+                      <Target className="w-6 h-6 mx-auto mb-1" />
+                      3 pts
+                    </StatButton>
+                    <StatButton
+                      onClick={() => addPlayerStat(statsModalPlayer, 'blocks')}
+                      disabled={pointsBlocked}
+                      className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30 active:scale-[0.98]'}
+                    >
+                      <span className="text-xl">🛡️</span>
+                      <span className="block text-sm">1 bloqueio</span>
+                    </StatButton>
+                    <StatButton
+                      onClick={() => addPlayerStat(statsModalPlayer, 'steals')}
+                      disabled={pointsBlocked}
+                      className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30 active:scale-[0.98]'}
+                    >
+                      <span className="text-xl">🏃</span>
+                      <span className="block text-sm">1 roubo</span>
+                    </StatButton>
+                  </div>
+                </>
               )}
-              <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
-                <StatButton
-                  onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
-                  disabled={pointsBlocked}
-                  className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]'}
-                >
-                  <Target className="w-6 h-6 mx-auto mb-1" />
-                  2 pts
-                </StatButton>
-                <StatButton
-                  onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
-                  disabled={pointsBlocked}
-                  className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]'}
-                >
-                  <Target className="w-6 h-6 mx-auto mb-1" />
-                  3 pts
-                </StatButton>
-                <StatButton
-                  onClick={() => addPlayerStat(statsModalPlayer, 'blocks')}
-                  disabled={pointsBlocked}
-                  className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30 active:scale-[0.98]'}
-                >
-                  <span className="text-xl">🛡️</span>
-                  <span className="block text-sm">1 bloqueio</span>
-                </StatButton>
-                <StatButton
-                  onClick={() => addPlayerStat(statsModalPlayer, 'steals')}
-                  disabled={pointsBlocked}
-                  className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30 active:scale-[0.98]'}
-                >
-                  <span className="text-xl">🏃</span>
-                  <span className="block text-sm">1 roubo</span>
-                </StatButton>
-              </div>
             </motion.div>
           </div>
         )}
@@ -1688,6 +1890,7 @@ export default function App() {
                       data={{
                         id: stat.id,
                         name: stat.name,
+                        partidas: stat.partidas,
                         wins: stat.wins,
                         points: stat.points,
                         blocks: stat.blocks,
@@ -1703,13 +1906,15 @@ export default function App() {
               ) : (
                 <motion.div key="ranking-view" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} transition={{ duration: 0.25 }}>
                 <RankingView
-                stats={stats}
-                darkMode={darkMode}
-                sortKey={sortKey}
-                onSortChange={setSortKey}
-                userAvatars={userAvatars}
-                onProfileClick={(stat) => setSelectedProfileId(stat.user_id ?? stat.id)}
-              />
+                  stats={stats}
+                  darkMode={darkMode}
+                  sortKey={sortKey}
+                  onSortChange={setSortKey}
+                  userAvatars={userAvatars}
+                  onProfileClick={(stat) => setSelectedProfileId(stat.user_id ?? stat.id)}
+                  userProfile={userProfile}
+                  isGuest={isGuest}
+                />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1951,20 +2156,97 @@ export default function App() {
                 </p>
               )}
               {isAdminMode && (
+                <>
                 <div className={cn('flex gap-2 mt-3', darkMode ? 'text-slate-300' : 'text-slate-600')}>
-                  <input
-                    type="text"
-                    placeholder="Adicionar por nome (sem celular)"
-                    value={adminAddName}
-                    onChange={(e) => setAdminAddName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addPlayerByNameForAdmin()}
-                    disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
-                    maxLength={50}
-                    className={cn(
-                      'flex-1 px-3 py-2 rounded-lg text-sm border outline-none focus:ring-2 focus:ring-orange-500/50',
-                      darkMode ? 'bg-slate-800 border-slate-600 placeholder:text-slate-500' : 'bg-white border-slate-300 placeholder:text-slate-400'
+                  <div ref={adminSuggestionsRef} className="relative flex-1">
+                    <input
+                      type="text"
+                      placeholder="Adicionar por nome (sem celular)"
+                      value={adminAddName}
+                      onChange={(e) => {
+                        setAdminAddName(e.target.value);
+                        setSelectedAdminUser(null);
+                      }}
+                      onFocus={() => {
+                        if (adminAddName.trim().length >= 4) {
+                          setShowAdminSuggestions(true);
+                        }
+                      }}
+                      onKeyDown={(e) => e.key === 'Enter' && addPlayerByNameForAdmin()}
+                      disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
+                      maxLength={50}
+                      className={cn(
+                        'w-full px-3 py-2 rounded-lg text-sm border outline-none focus:ring-2 focus:ring-orange-500/50',
+                        darkMode ? 'bg-slate-800 border-slate-600 placeholder:text-slate-500' : 'bg-white border-slate-300 placeholder:text-slate-400'
+                      )}
+                    />
+                    {showAdminSuggestions && adminAddName.trim().length >= 4 && (
+                      <div
+                        className={cn(
+                          'absolute left-0 right-0 top-full mt-2 z-[999] rounded-xl border shadow-2xl overflow-hidden',
+                          darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
+                        )}
+                      >
+                        {isSearchingAdminUsers ? (
+                          <div className={cn('px-3 py-3 text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                            Buscando jogadores cadastrados...
+                          </div>
+                        ) : adminUserSuggestions.length > 0 ? (
+                          <div className="max-h-72 overflow-y-auto">
+                            {adminUserSuggestions.map((candidate) => {
+                              const candidateLabel = getRegisteredUserLabel(candidate);
+                              const alreadyInQueue = players.some(
+                                (player) => player.name.toLowerCase().trim() === candidateLabel.toLowerCase().trim()
+                              );
+
+                              return (
+                                <button
+                                  key={candidate.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setAdminAddName(candidateLabel);
+                                    setSelectedAdminUser(candidate);
+                                    setShowAdminSuggestions(false);
+                                  }}
+                                  className={cn(
+                                    'w-full px-3 py-3 text-left border-b last:border-b-0 transition-colors',
+                                    darkMode
+                                      ? 'border-slate-800 hover:bg-slate-800'
+                                      : 'border-slate-100 hover:bg-slate-50'
+                                  )}
+                                >
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <p className={cn('text-sm font-medium truncate', darkMode ? 'text-slate-100' : 'text-slate-900')}>
+                                        {candidateLabel}
+                                      </p>
+                                      <p className={cn('text-xs truncate', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                                        {candidate.email}
+                                      </p>
+                                    </div>
+                                    {alreadyInQueue && (
+                                      <span
+                                        className={cn(
+                                          'shrink-0 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider',
+                                          darkMode ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'
+                                        )}
+                                      >
+                                        Na fila
+                                      </span>
+                                    )}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className={cn('px-3 py-3 text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                            Nenhum jogador cadastrado encontrado.
+                          </div>
+                        )}
+                      </div>
                     )}
-                  />
+                  </div>
                   <button
                     type="button"
                     onClick={addPlayerByNameForAdmin}
@@ -1985,6 +2267,26 @@ export default function App() {
                     Adicionar
                   </button>
                 </div>
+                {adminAddName.trim() && (
+                  <div className="mt-1 ml-1 flex items-center gap-1 text-xs">
+                    {selectedAdminUser ? (
+                      <>
+                        <CheckCircle className="w-3 h-3 text-green-500 shrink-0" />
+                        <span className={darkMode ? 'text-green-400' : 'text-green-600'}>
+                          Jogador cadastrado selecionado — estatísticas serão registradas
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />
+                        <span className={darkMode ? 'text-amber-400' : 'text-amber-600'}>
+                          Nenhum jogador selecionado na lista — será adicionado como visitante (sem estatísticas)
+                        </span>
+                      </>
+                    )}
+                  </div>
+                )}
+                </>
               )}
             </section>
 
@@ -2511,6 +2813,8 @@ interface RankingViewProps {
   onSortChange: (key: SortKey) => void;
   userAvatars: Record<string, string>;
   onProfileClick: (stat: PlayerStats) => void;
+  userProfile: { display_name: string | null; avatar_url: string | null } | null;
+  isGuest: boolean;
 }
 
 const layoutTransition = { type: 'spring' as const, stiffness: 350, damping: 30 };
@@ -2523,6 +2827,46 @@ const SKILL_LABELS: Record<SortKey, string> = {
   clutch_points: 'Decisivos',
 };
 
+function ShimmerRing({ sizePx, borderPx = 3, children }: { sizePx: number; borderPx?: number; children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        width: sizePx + borderPx * 2,
+        height: sizePx + borderPx * 2,
+        borderRadius: '50%',
+        position: 'relative',
+        overflow: 'hidden',
+        flexShrink: 0,
+      }}
+    >
+      {/* Spinning conic-gradient that creates the moving light effect */}
+      <div
+        style={{
+          position: 'absolute',
+          width: '200%',
+          height: '200%',
+          top: '-50%',
+          left: '-50%',
+          background:
+            'conic-gradient(from 0deg, transparent 0%, rgba(255,255,255,0.08) 10%, rgba(255,255,255,0.95) 20%, rgba(255,220,80,1) 30%, rgba(255,255,255,0.95) 40%, rgba(255,255,255,0.08) 50%, transparent 62%, transparent 100%)',
+          animation: 'shimmer-ring-spin 1.8s linear infinite',
+        }}
+      />
+      {/* Avatar clipped inside, inset by borderPx */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: borderPx,
+          borderRadius: '50%',
+          overflow: 'hidden',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function RankPodiumItem({
   rank,
   player,
@@ -2532,6 +2876,8 @@ function RankPodiumItem({
   onClick,
   size,
   medal,
+  isTied,
+  barHeightPx,
 }: {
   rank: number;
   player: PlayerStats;
@@ -2541,10 +2887,30 @@ function RankPodiumItem({
   onClick: () => void;
   size: 'sm' | 'md' | 'lg';
   medal: string;
+  isTied?: boolean;
+  barHeightPx?: number;
 }) {
-  const sizeClasses = { sm: 'w-14 h-14 sm:w-16 sm:h-16', md: 'w-16 h-16 sm:w-20 sm:h-20', lg: 'w-20 h-20 sm:w-24 sm:h-24' };
-  const barClasses = { sm: 'h-12 sm:h-16', md: 'h-16 sm:h-20', lg: 'h-24 sm:h-32' };
-  const accentColor = rank === 1 ? 'bg-yellow-500 ring-yellow-500/20' : rank === 2 ? 'bg-slate-300' : 'bg-orange-400';
+  const avatarPxMap = { sm: 56, md: 64, lg: 80 };
+  const avatarPx = avatarPxMap[size];
+  const sizeClasses = { sm: 'w-14 h-14', md: 'w-16 h-16', lg: 'w-20 h-20' };
+  const defaultBarHeightPx = { sm: 48, md: 64, lg: 96 };
+  const accentColor = rank === 1 ? 'bg-yellow-500' : rank === 2 ? 'bg-slate-300' : 'bg-orange-400';
+
+  const avatarInner = avatarUrl ? (
+    <img src={avatarUrl} alt={player.name} className="w-full h-full object-cover" />
+  ) : (
+    <div className={cn('w-full h-full flex items-center justify-center font-black', darkMode ? 'bg-slate-900 text-slate-300' : 'bg-white text-slate-400')}>
+      {rank}
+    </div>
+  );
+
+  const barH = barHeightPx ?? defaultBarHeightPx[size];
+  const barBg = isTied
+    ? 'bg-black'
+    : rank === 1
+      ? darkMode ? 'bg-orange-500/20 border-x border-t border-orange-500/30' : 'bg-orange-500'
+      : darkMode ? 'bg-slate-800' : 'bg-slate-200';
+
   return (
     <motion.div
       layout
@@ -2559,15 +2925,15 @@ function RankPodiumItem({
         onClick={onClick}
         className="relative group cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 rounded-full"
       >
-        <div className={cn(sizeClasses[size], rank === 1 ? 'ring-4 ring-yellow-500/20' : '', 'rounded-full p-1 shadow-lg overflow-hidden', accentColor)}>
-          {avatarUrl ? (
-            <img src={avatarUrl} alt={player.name} className="w-full h-full object-cover" />
-          ) : (
-            <div className={cn('w-full h-full rounded-full flex items-center justify-center font-black', darkMode ? 'bg-slate-900 text-slate-300' : 'bg-white text-slate-400')}>
-              {rank}
-            </div>
-          )}
-        </div>
+        {isTied ? (
+          <ShimmerRing sizePx={avatarPx} borderPx={3}>
+            {avatarInner}
+          </ShimmerRing>
+        ) : (
+          <div className={cn(sizeClasses[size], rank === 1 ? 'ring-4 ring-yellow-500/20' : '', 'rounded-full p-1 shadow-lg overflow-hidden', accentColor)}>
+            {avatarInner}
+          </div>
+        )}
         <div className={cn('absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-white', rank === 1 ? 'bg-yellow-500 text-white -top-3 -right-3 w-8 h-8 text-xs shadow-lg' : rank === 2 ? 'bg-slate-300 text-slate-700' : 'bg-orange-400 text-white')}>
           {medal}
         </div>
@@ -2577,18 +2943,76 @@ function RankPodiumItem({
         <p className="text-orange-500 font-black mt-0.5" style={{ fontSize: size === 'lg' ? '1.125rem' : size === 'md' ? '0.875rem' : '0.75rem' }}>{player[sortKey]}</p>
         <p className={cn('text-[9px] uppercase tracking-wider font-bold mt-0.5', darkMode ? 'text-slate-600' : 'text-slate-500')}>{SKILL_LABELS[sortKey]}</p>
       </div>
-      <div className={cn('w-full rounded-t-2xl', barClasses[size], rank === 1 ? (darkMode ? 'bg-orange-500/20 border-x border-t border-orange-500/30' : 'bg-orange-500') : darkMode ? 'bg-slate-800' : 'bg-slate-200')} />
+      {isTied ? (
+        <div className="w-full rounded-t-2xl bg-black relative overflow-hidden" style={{ height: barH }}>
+          {/* Brilho fosco diagonal varrendo de cima para baixo */}
+          <div
+            style={{
+              position: 'absolute',
+              left: '-20%',
+              width: '140%',
+              height: '55%',
+              background: 'linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.10) 50%, rgba(255,255,255,0.04) 75%, transparent 100%)',
+              transform: 'rotate(22deg)',
+              animation: 'tied-bar-shimmer 2.4s ease-in-out infinite',
+            }}
+          />
+        </div>
+      ) : (
+        <div className={cn('w-full rounded-t-2xl', barBg)} style={{ height: barH }} />
+      )}
     </motion.div>
   );
 }
 
-function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick }: RankingViewProps) {
+function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest }: RankingViewProps) {
   const sortedStats = useMemo(() => {
     return [...stats].sort((a, b) => b[sortKey] - a[sortKey]);
   }, [stats, sortKey]);
 
   const top3 = sortedStats.slice(0, 3);
   const remaining = sortedStats.slice(3);
+
+  // Conjunto de valores com empate (aparecem em mais de um jogador)
+  const tiedValues = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const s of sortedStats) {
+      const v = s[sortKey];
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    return new Set([...counts.entries()].filter(([, c]) => c > 1).map(([v]) => v));
+  }, [sortedStats, sortKey]);
+
+  // Alturas das barras do pódio — equaliza jogadores empatados
+  const top3BarHeights = useMemo(() => {
+    const defaults = [96, 64, 48]; // rank 1, 2, 3 em px
+    const heights = [...defaults];
+    for (let i = 0; i < top3.length; i++) {
+      for (let j = i + 1; j < top3.length; j++) {
+        if (top3[i] && top3[j] && top3[i][sortKey] === top3[j][sortKey]) {
+          const max = Math.max(heights[i], heights[j]);
+          heights[i] = max;
+          heights[j] = max;
+        }
+      }
+    }
+    return heights;
+  }, [top3, sortKey]);
+
+  // Tamanhos dos avatares do pódio — equaliza empatados para o maior tamanho do grupo
+  const top3Sizes = useMemo((): ('sm' | 'md' | 'lg')[] => {
+    const defaults: ('sm' | 'md' | 'lg')[] = ['lg', 'md', 'sm'];
+    const sizes = [...defaults];
+    for (let i = 0; i < top3.length; i++) {
+      for (let j = i + 1; j < top3.length; j++) {
+        if (top3[i] && top3[j] && top3[i][sortKey] === top3[j][sortKey]) {
+          sizes[i] = 'lg';
+          sizes[j] = 'lg';
+        }
+      }
+    }
+    return sizes;
+  }, [top3, sortKey]);
 
   const filterOptions: { key: SortKey; label: string }[] = [
     { key: 'wins', label: 'Vitórias' },
@@ -2600,13 +3024,42 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
 
   return (
     <section className="space-y-8">
+      <style>{`
+        @keyframes shimmer-ring-spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+        @keyframes tied-bar-shimmer {
+          0%   { top: -80%; opacity: 0; }
+          10%  { opacity: 1; }
+          90%  { opacity: 1; }
+          100% { top: 120%; opacity: 0; }
+        }
+      `}</style>
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center shadow-lg shadow-orange-500/20">
-              <Trophy className="text-white w-6 h-6" />
-            </div>
-            <h2 className={cn('text-2xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>Ranking Geral</h2>
+            {isGuest || !userProfile ? (
+              <>
+                <div className={cn('w-10 h-10 rounded-full flex items-center justify-center shrink-0', darkMode ? 'bg-slate-700' : 'bg-slate-200')}>
+                  <User className={cn('w-5 h-5', darkMode ? 'text-slate-400' : 'text-slate-500')} />
+                </div>
+                <span className={cn('text-xl font-bold', darkMode ? 'text-slate-300' : 'text-slate-600')}>Visitante</span>
+              </>
+            ) : (
+              <>
+                <div className="w-10 h-10 rounded-full overflow-hidden shrink-0 ring-2 ring-orange-500/40">
+                  {userProfile.avatar_url ? (
+                    <img src={userProfile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className={cn('w-full h-full flex items-center justify-center', darkMode ? 'bg-slate-700' : 'bg-slate-200')}>
+                      <User className={cn('w-5 h-5', darkMode ? 'text-slate-400' : 'text-slate-500')} />
+                    </div>
+                  )}
+                </div>
+                <span className={cn('text-xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>{userProfile.display_name}</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -2638,8 +3091,10 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
             darkMode={darkMode}
             avatarUrl={top3[1].user_id ? userAvatars[top3[1].user_id] : undefined}
             onClick={() => onProfileClick(top3[1])}
-            size="md"
+            size={top3Sizes[1]}
             medal="🥈"
+            isTied={tiedValues.has(top3[1][sortKey])}
+            barHeightPx={top3BarHeights[1]}
           />
         )}
         {top3[0] && (
@@ -2650,8 +3105,10 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
             darkMode={darkMode}
             avatarUrl={top3[0].user_id ? userAvatars[top3[0].user_id] : undefined}
             onClick={() => onProfileClick(top3[0])}
-            size="lg"
+            size={top3Sizes[0]}
             medal="👑"
+            isTied={tiedValues.has(top3[0][sortKey])}
+            barHeightPx={top3BarHeights[0]}
           />
         )}
         {top3[2] && (
@@ -2662,8 +3119,10 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
             darkMode={darkMode}
             avatarUrl={top3[2].user_id ? userAvatars[top3[2].user_id] : undefined}
             onClick={() => onProfileClick(top3[2])}
-            size="sm"
+            size={top3Sizes[2]}
             medal="🥉"
+            isTied={tiedValues.has(top3[2][sortKey])}
+            barHeightPx={top3BarHeights[2]}
           />
         )}
       </motion.div>
@@ -2688,18 +3147,30 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
               )}
             >
               <div className="flex items-center gap-4 min-w-0 flex-1">
-                <div
-                  className={cn(
-                    'w-10 h-10 shrink-0 rounded-full flex items-center justify-center font-bold text-xs overflow-hidden',
-                    darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400'
-                  )}
-                >
-                  {player.user_id && userAvatars[player.user_id] ? (
-                    <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    <span>{index + 4}</span>
-                  )}
-                </div>
+                {tiedValues.has(player[sortKey]) ? (
+                  <ShimmerRing sizePx={40} borderPx={2}>
+                    {player.user_id && userAvatars[player.user_id] ? (
+                      <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className={cn('w-full h-full flex items-center justify-center font-bold text-xs', darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400')}>
+                        {index + 4}
+                      </div>
+                    )}
+                  </ShimmerRing>
+                ) : (
+                  <div
+                    className={cn(
+                      'w-10 h-10 shrink-0 rounded-full flex items-center justify-center font-bold text-xs overflow-hidden',
+                      darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400'
+                    )}
+                  >
+                    {player.user_id && userAvatars[player.user_id] ? (
+                      <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <span>{index + 4}</span>
+                    )}
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <h3 className={cn('font-bold truncate', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
                   <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-1 items-center">

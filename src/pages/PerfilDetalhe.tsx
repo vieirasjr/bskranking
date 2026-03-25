@@ -6,6 +6,7 @@ import React from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowLeft,
+  Dumbbell,
   Trophy,
   Target,
   Shield,
@@ -24,6 +25,7 @@ function cn(...inputs: unknown[]) {
 export interface PerfilDetalheData {
   id: string;
   name: string;
+  partidas: number;
   wins: number;
   points: number;
   blocks: number;
@@ -39,6 +41,7 @@ interface PerfilDetalheProps {
 }
 
 const SKILLS = [
+  { key: 'partidas' as const, label: 'Partidas', icon: Dumbbell, color: 'from-cyan-500 to-sky-600' },
   { key: 'wins' as const, label: 'Vitórias', icon: Trophy, color: 'from-amber-500 to-orange-600' },
   { key: 'points' as const, label: 'Pontos', icon: Target, color: 'from-emerald-500 to-teal-600' },
   { key: 'blocks' as const, label: 'Tocos', icon: Shield, color: 'from-blue-500 to-indigo-600' },

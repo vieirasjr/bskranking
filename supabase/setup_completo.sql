@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS players (
 CREATE TABLE IF NOT EXISTS stats (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
+  partidas INT DEFAULT 0,
   wins INT DEFAULT 0,
   points INT DEFAULT 0,
   blocks INT DEFAULT 0,
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS partidas (
 );
 
 -- Colunas opcionais para vincular a usuários
+ALTER TABLE stats ADD COLUMN IF NOT EXISTS partidas INT NOT NULL DEFAULT 0;
 ALTER TABLE stats ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES basquete_users(id) ON DELETE SET NULL;
 ALTER TABLE players ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES basquete_users(id) ON DELETE SET NULL;
 

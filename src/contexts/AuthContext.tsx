@@ -4,38 +4,102 @@ import { supabase } from '../supabase';
 
 const GUEST_KEY = 'basquete_guest_mode';
 
+async function ensureUserStats(userId: string, displayName: string | null) {
+  const normalizedName = displayName?.trim();
+  if (!normalizedName) return;
+
+  const { data: existingByUserId } = await supabase
+    .from('stats')
+    .select('id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (existingByUserId?.id) return;
+
+  const { data: existingByName } = await supabase
+    .from('stats')
+    .select('id')
+    .eq('name', normalizedName)
+    .maybeSingle();
+
+  if (existingByName?.id) {
+    await supabase
+      .from('stats')
+      .update({ user_id: userId })
+      .eq('id', existingByName.id);
+    return;
+  }
+
+  await supabase.from('stats').insert({
+    name: normalizedName,
+    user_id: userId,
+    partidas: 0,
+    wins: 0,
+    points: 0,
+    blocks: 0,
+    steals: 0,
+    clutch_points: 0,
+  });
+}
+
 async function syncUserToBasquete(user: User) {
   const meta = user.user_metadata ?? {};
   const email = user.email ?? '';
   if (!email) return;
 
   const now = new Date().toISOString();
+  const displayName =
+    meta.full_name ??
+    meta.name ??
+    meta.user_name ??
+    meta.display_name ??
+    email.split('@')[0] ??
+    null;
 
   const { data: byAuth } = await supabase
     .from('basquete_users')
-    .select('id, auth_id')
+    .select('id, auth_id, display_name')
     .eq('auth_id', user.id)
     .maybeSingle();
 
-  const { data: byEmail } = byAuth ? { data: byAuth } : await supabase.from('basquete_users').select('id, auth_id').eq('email', email).maybeSingle();
+  const { data: byEmail } = byAuth
+    ? { data: byAuth }
+    : await supabase
+        .from('basquete_users')
+        .select('id, auth_id, display_name')
+        .eq('email', email)
+        .maybeSingle();
   const existing = byAuth ?? byEmail;
+  let basqueteUserId: string | null = existing?.id ?? null;
+  let statsName = existing?.display_name ?? displayName;
 
   if (existing?.id) {
     await supabase
       .from('basquete_users')
       .update({
         auth_id: existing.auth_id ?? user.id,
+        display_name: existing.display_name ?? displayName,
         updated_at: now,
       })
       .eq('id', existing.id);
   } else {
-    await supabase.from('basquete_users').insert({
+    const { data: insertedUser } = await supabase
+      .from('basquete_users')
+      .insert({
       auth_id: user.id,
       email,
-      display_name: meta.full_name ?? meta.name ?? meta.user_name ?? meta.display_name ?? null,
-      full_name: meta.full_name ?? null,
+      display_name: displayName,
       updated_at: now,
-    });
+      })
+      .select('id, display_name')
+      .single();
+
+    basqueteUserId = insertedUser?.id ?? null;
+    statsName = insertedUser?.display_name ?? displayName;
+  }
+
+  if (basqueteUserId) {
+    await ensureUserStats(basqueteUserId, statsName);
   }
 }
 

@@ -131,18 +131,32 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
           });
           setAvatarUrl(profile.avatar_url);
         } else {
+          const email = user.email?.trim();
+          if (!email) {
+            setError('Sua conta não tem e-mail. Adicione um e-mail na autenticação para criar o perfil.');
+            setLoading(false);
+            return;
+          }
           const { data: newProfile, error: insertError } = await supabase
             .from('basquete_users')
             .insert({
               auth_id: user.id,
-              email: user.email ?? '',
+              email,
               display_name: user.user_metadata?.display_name ?? '',
             })
             .select('id')
             .single();
 
           if (insertError) {
-            setError('Erro ao criar perfil. Verifique se a tabela basquete_users existe.');
+            const hint =
+              insertError.message?.includes('relation') ||
+              insertError.message?.includes('does not exist') ||
+              insertError.code === '42P01'
+                ? ' Confirme no Supabase se a tabela public.basquete_users existe e se há política RLS (execute supabase/basquete_users.sql).'
+                : '';
+            setError(
+              `${insertError.message || 'Erro ao criar perfil.'}${hint}`
+            );
           } else if (newProfile) {
             setProfileId(newProfile.id);
           }
