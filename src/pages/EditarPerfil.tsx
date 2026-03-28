@@ -15,7 +15,6 @@ import {
   Calendar,
   Hash,
   FileText,
-  Phone,
   MapPin,
   Check,
   AlertCircle,
@@ -87,7 +86,6 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
     dominant_hand: '',
     jersey_number: '',
     bio: '',
-    phone: '',
     city: '',
     state: '',
   });
@@ -125,7 +123,6 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
             dominant_hand: profile.dominant_hand ?? '',
             jersey_number: profile.jersey_number != null ? String(profile.jersey_number) : '',
             bio: profile.bio ?? '',
-            phone: profile.phone ?? '',
             city: profile.city ?? '',
             state: profile.state ?? '',
           });
@@ -237,7 +234,6 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
         dominant_hand: form.dominant_hand || null,
         jersey_number: form.jersey_number ? parseInt(form.jersey_number, 10) : null,
         bio: form.bio.trim() || null,
-        phone: form.phone.trim() || null,
         city: form.city.trim() || null,
         state: form.state || null,
         avatar_url: avatarUrl,
@@ -532,26 +528,6 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
               value={form.jersey_number}
               onChange={(e) => setForm((f) => ({ ...f, jersey_number: e.target.value }))}
               placeholder="0–99"
-              className={cn(
-                'w-full pl-10 pr-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50',
-                darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
-              )}
-            />
-          </div>
-        </div>
-
-        {/* Telefone */}
-        <div className="space-y-2">
-          <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
-            Telefone
-          </label>
-          <div className="relative">
-            <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="tel"
-              value={form.phone}
-              onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-              placeholder="(00) 00000-0000"
               className={cn(
                 'w-full pl-10 pr-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50',
                 darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'

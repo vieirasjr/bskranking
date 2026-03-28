@@ -121,10 +121,11 @@ interface PlayerStats {
   blocks: number;
   steals: number;
   clutch_points: number;
+  assists: number;
 }
 
 type Tab = 'inicio' | 'lista' | 'eventos' | 'perfil';
-type SortKey = 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points';
+type SortKey = 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assists';
 
 const ADMIN_PASSWORD = '1710';
 const ADMIN_STORAGE_KEY = 'basquete_admin';
@@ -277,6 +278,7 @@ export default function App() {
           blocks: (existing.blocks ?? 0) + (s.blocks ?? 0),
           steals: (existing.steals ?? 0) + (s.steals ?? 0),
           clutch_points: (existing.clutch_points ?? 0) + (s.clutch_points ?? 0),
+          assists: (existing.assists ?? 0) + (s.assists ?? 0),
         });
       }
     }
@@ -951,7 +953,7 @@ export default function App() {
       ? 'Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.'
       : '';
 
-  const addPlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals') => {
+  const addPlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists') => {
     if (pointsBlocked) return;
     if (isRegisteringStatRef.current) return;
     isRegisteringStatRef.current = true;
@@ -960,14 +962,17 @@ export default function App() {
       points_3: '3 Pontos',
       blocks: 'Bloqueio',
       steals: 'Roubo',
+      assists: 'Assistência',
     };
     setRegisteringStatLabel(statLabels[stat]);
     const userId = player.user_id;
     const isVisitante = !userId;
 
-    // Bloqueios e roubos: só cadastrados (não afetam placar)
-    if (isVisitante && (stat === 'blocks' || stat === 'steals')) {
-      addNotification('Apenas jogadores cadastrados podem receber bloqueios e roubos no ranking.', 'warning', { showToastForMs: 5000 });
+    // Bloqueios, roubos e assistências: só cadastrados (não afetam placar)
+    if (isVisitante && (stat === 'blocks' || stat === 'steals' || stat === 'assists')) {
+      addNotification('Apenas jogadores cadastrados podem receber bloqueios, roubos e assistências no ranking.', 'warning', { showToastForMs: 5000 });
+      isRegisteringStatRef.current = false;
+      setRegisteringStatLabel(null);
       return;
     }
 
@@ -984,18 +989,22 @@ export default function App() {
                 ? { points: (existing.points ?? 0) + 3, user_id: userId }
                 : stat === 'blocks'
                   ? { blocks: (existing.blocks ?? 0) + 1, user_id: userId }
-                  : { steals: (existing.steals ?? 0) + 1, user_id: userId };
+                  : stat === 'steals'
+                    ? { steals: (existing.steals ?? 0) + 1, user_id: userId }
+                    : { assists: (existing.assists ?? 0) + 1, user_id: userId };
           const { error: updErr } = await supabase.from('stats').update(updates).eq('id', existing.id);
           if (updErr) throw updErr;
         } else {
           const inserts =
             stat === 'points_2'
-              ? { name: player.name, user_id: userId, points: 2, wins: 0, blocks: 0, steals: 0, clutch_points: 0 }
+              ? { name: player.name, user_id: userId, points: 2, wins: 0, blocks: 0, steals: 0, clutch_points: 0, assists: 0 }
               : stat === 'points_3'
-                ? { name: player.name, user_id: userId, points: 3, wins: 0, blocks: 0, steals: 0, clutch_points: 0 }
+                ? { name: player.name, user_id: userId, points: 3, wins: 0, blocks: 0, steals: 0, clutch_points: 0, assists: 0 }
                 : stat === 'blocks'
-                  ? { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 1, steals: 0, clutch_points: 0 }
-                  : { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 0, steals: 1, clutch_points: 0 };
+                  ? { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 1, steals: 0, clutch_points: 0, assists: 0 }
+                  : stat === 'steals'
+                    ? { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 0, steals: 1, clutch_points: 0, assists: 0 }
+                    : { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 0, steals: 0, clutch_points: 0, assists: 1 };
           const { error: insErr } = await supabase.from('stats').insert(inserts);
           if (insErr) throw insErr;
         }
@@ -1224,11 +1233,14 @@ export default function App() {
       const updated = await supabase.from('players').select('*').order('joined_at', { ascending: true });
       const allPlayers = (updated.data ?? []) as Player[];
       const next10 = allPlayers.filter((p) => p.status === 'waiting').slice(0, 10);
-      for (let i = 0; i < 5 && next10[i]; i++) {
-        await supabase.from('players').update({ status: 'team1' }).eq('id', next10[i].id);
-      }
-      for (let i = 5; i < 10 && next10[i]; i++) {
-        await supabase.from('players').update({ status: 'team2' }).eq('id', next10[i].id);
+      // Só forma times se houver exatamente 10 jogadores disponíveis (5 por time)
+      if (next10.length >= 10) {
+        for (let i = 0; i < 5; i++) {
+          await supabase.from('players').update({ status: 'team1' }).eq('id', next10[i].id);
+        }
+        for (let i = 5; i < 10; i++) {
+          await supabase.from('players').update({ status: 'team2' }).eq('id', next10[i].id);
+        }
       }
       await fetchPlayers();
     } catch (err) {
@@ -1356,15 +1368,13 @@ export default function App() {
         }).eq('id', 'current');
         await supabase.from('partida_sessoes').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         await supabase.from('players').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        await supabase.from('stats').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        // Stats de jogadores rankeados são preservadas
         setIsMatchStarted(false);
         setCurrentPartidaSessaoId(null);
         setTeam1MatchPoints(0);
         setTeam2MatchPoints(0);
         setPlayers([]);
-        setStats([]);
         await fetchPlayers();
-        await fetchStats();
       } else if (showPasswordModal.type === 'END_MATCH') {
         if (currentPartidaSessaoId) {
           await supabase
@@ -1433,7 +1443,7 @@ export default function App() {
   return (
     <div
       className={cn(
-        'min-h-screen font-sans selection:bg-orange-500/30 transition-colors duration-300',
+        'min-h-screen font-sans selection:bg-orange-500/30 transition-colors duration-300 overflow-x-hidden',
         darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'
       )}
     >
@@ -1680,40 +1690,71 @@ export default function App() {
                       {pointsBlockedMessage}
                     </div>
                   )}
-                  <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
-                    <StatButton
-                      onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
-                      disabled={pointsBlocked}
-                      className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]'}
-                    >
-                      <Target className="w-6 h-6 mx-auto mb-1" />
-                      2 pts
-                    </StatButton>
-                    <StatButton
-                      onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
-                      disabled={pointsBlocked}
-                      className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]'}
-                    >
-                      <Target className="w-6 h-6 mx-auto mb-1" />
-                      3 pts
-                    </StatButton>
-                    <StatButton
-                      onClick={() => addPlayerStat(statsModalPlayer, 'blocks')}
-                      disabled={pointsBlocked}
-                      className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30 active:scale-[0.98]'}
-                    >
-                      <span className="text-xl">🛡️</span>
-                      <span className="block text-sm">1 bloqueio</span>
-                    </StatButton>
-                    <StatButton
-                      onClick={() => addPlayerStat(statsModalPlayer, 'steals')}
-                      disabled={pointsBlocked}
-                      className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30 active:scale-[0.98]'}
-                    >
-                      <span className="text-xl">🏃</span>
-                      <span className="block text-sm">1 roubo</span>
-                    </StatButton>
-                  </div>
+                  {/* Visitantes: apenas pontos */}
+                  {!statsModalPlayer.user_id ? (
+                    <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
+                      <StatButton
+                        onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
+                        disabled={pointsBlocked}
+                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]'}
+                      >
+                        <Target className="w-6 h-6 mx-auto mb-1" />
+                        2 pts
+                      </StatButton>
+                      <StatButton
+                        onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
+                        disabled={pointsBlocked}
+                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]'}
+                      >
+                        <Target className="w-6 h-6 mx-auto mb-1" />
+                        3 pts
+                      </StatButton>
+                    </div>
+                  ) : (
+                    /* Cadastrados: pontos + tocos + roubos + assistências */
+                    <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
+                      <StatButton
+                        onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
+                        disabled={pointsBlocked}
+                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]'}
+                      >
+                        <Target className="w-6 h-6 mx-auto mb-1" />
+                        2 pts
+                      </StatButton>
+                      <StatButton
+                        onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
+                        disabled={pointsBlocked}
+                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]'}
+                      >
+                        <Target className="w-6 h-6 mx-auto mb-1" />
+                        3 pts
+                      </StatButton>
+                      <StatButton
+                        onClick={() => addPlayerStat(statsModalPlayer, 'blocks')}
+                        disabled={pointsBlocked}
+                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30 active:scale-[0.98]'}
+                      >
+                        <span className="text-xl">🛡️</span>
+                        <span className="block text-sm">1 bloqueio</span>
+                      </StatButton>
+                      <StatButton
+                        onClick={() => addPlayerStat(statsModalPlayer, 'steals')}
+                        disabled={pointsBlocked}
+                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30 active:scale-[0.98]'}
+                      >
+                        <span className="text-xl">🏃</span>
+                        <span className="block text-sm">1 roubo</span>
+                      </StatButton>
+                      <StatButton
+                        onClick={() => addPlayerStat(statsModalPlayer, 'assists')}
+                        disabled={pointsBlocked}
+                        className={cn('col-span-2', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500/30 active:scale-[0.98]')}
+                      >
+                        <span className="text-xl">🤝</span>
+                        <span className="block text-sm">1 assistência</span>
+                      </StatButton>
+                    </div>
+                  )}
                 </>
               )}
             </motion.div>
@@ -1729,25 +1770,20 @@ export default function App() {
         )}
       >
         <div className="max-w-5xl mx-auto px-4 py-3 sm:py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-orange-500 rounded-full flex items-center justify-center shadow-lg shadow-orange-500/20">
-              <Trophy className="text-white w-5 h-5 sm:w-6 sm:h-6" />
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 bg-orange-500 rounded-full flex items-center justify-center shadow-lg shadow-orange-500/20 shrink-0">
+              <Trophy className="text-white w-5 h-5" />
             </div>
-            <div className="flex items-center gap-2">
-              <h1 className={cn('text-lg sm:text-xl font-bold tracking-tight', darkMode ? 'text-white' : 'text-slate-900')}>
-                Basquete Next
-              </h1>
-              {isGuest && (
-                <span
-                  className={cn(
-                    'text-[10px] font-bold px-2 py-0.5 rounded-full',
-                    darkMode ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
-                  )}
-                >
-                  Visitante
-                </span>
-              )}
-            </div>
+            {isGuest && (
+              <span
+                className={cn(
+                  'text-[10px] font-bold px-2 py-0.5 rounded-full',
+                  darkMode ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-700'
+                )}
+              >
+                Visitante
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {!isAdminMode ? (
@@ -1764,38 +1800,17 @@ export default function App() {
               </button>
             ) : (
               <>
-                {activeTab === 'lista' &&
-                  (isMatchStarted ? (
-                    <button
-                      onClick={handleEndMatchAttempt}
-                      className={cn(
-                        'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all',
-                        darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-600 hover:bg-red-100'
-                      )}
-                    >
-                      Encerrar Partida
-                    </button>
-                  ) : waitingList.length < 10 ? (
-                    <button
-                      onClick={handleStartMatchAttempt}
-                      className={cn(
-                        'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all',
-                        darkMode ? 'bg-green-500/10 text-green-400 hover:bg-green-500/20' : 'bg-green-50 text-green-600 hover:bg-green-100'
-                      )}
-                    >
-                      Iniciar Partida
-                    </button>
-                  ) : (
-                    <span
-                      className={cn(
-                        'text-xs px-3 py-1.5 rounded-lg',
-                        darkMode ? 'text-slate-500' : 'text-slate-400'
-                      )}
-                      title="Use o cronômetro na aba Lista (10+ jogadores)"
-                    >
-                      Use o cronômetro
-                    </span>
-                  ))}
+                {activeTab === 'lista' && isMatchStarted && (
+                  <button
+                    onClick={handleEndMatchAttempt}
+                    className={cn(
+                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all',
+                      darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-600 hover:bg-red-100'
+                    )}
+                  >
+                    Encerrar Partida
+                  </button>
+                )}
                 <button
                   onClick={resetQueue}
                   className={cn(
@@ -1805,16 +1820,6 @@ export default function App() {
                   title="Resetar Lista"
                 >
                   <RefreshCw className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={handleClearMockData}
-                  className={cn(
-                    'transition-colors p-2 rounded-lg',
-                    darkMode ? 'text-slate-400 hover:text-orange-400 hover:bg-orange-400/10' : 'text-slate-500 hover:text-orange-500 hover:bg-orange-50'
-                  )}
-                  title="Limpar fila, ranking e partida (remove jogadores fictícios)"
-                >
-                  <Trash2 className="w-5 h-5" />
                 </button>
               </>
             )}
@@ -1862,7 +1867,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-2 sm:px-4 py-6 sm:py-10 space-y-6 sm:space-y-8 pb-32">
+      <main className="max-w-5xl mx-auto px-2 sm:px-4 py-6 sm:py-10 space-y-6 sm:space-y-8 pb-40">
         {!isGuest && !profileComplete && user && (
           <div className="space-y-6">
             <EditarPerfil
@@ -1889,6 +1894,7 @@ export default function App() {
                       key="perfil-detalhe"
                       data={{
                         id: stat.id,
+                        user_id: stat.user_id ?? null,
                         name: stat.name,
                         partidas: stat.partidas,
                         wins: stat.wins,
@@ -1896,6 +1902,7 @@ export default function App() {
                         blocks: stat.blocks,
                         steals: stat.steals,
                         clutch_points: stat.clutch_points,
+                        assists: stat.assists ?? 0,
                         avatar_url: stat.user_id ? userAvatars[stat.user_id] ?? null : null,
                       }}
                       darkMode={darkMode}
@@ -1961,24 +1968,6 @@ export default function App() {
                   <RefreshCw className="w-4 h-4" />
                   Tentar novamente
                 </button>
-              </div>
-            )}
-            {!isMatchStarted && waitingList.length < 10 && (
-              <div
-                className={cn(
-                  'mb-6 p-4 rounded-2xl border flex items-center gap-3',
-                  darkMode ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'
-                )}
-              >
-                <Users className={cn('w-8 h-8 shrink-0', darkMode ? 'text-orange-400' : 'text-orange-600')} />
-                <div>
-                  <p className={cn('font-semibold', darkMode ? 'text-slate-200' : 'text-slate-800')}>
-                    Adicione seu nome à fila
-                  </p>
-                  <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-                    Os times (5+5) serão formados automaticamente quando houver 10 jogadores.
-                  </p>
-                </div>
               </div>
             )}
             {isMatchStarted && waitingList.length < 10 && !isAdminMode && (
@@ -2074,6 +2063,33 @@ export default function App() {
                 !isMatchStarted && waitingList.length >= 10 && 'pointer-events-none select-none opacity-70'
               )}
             >
+            {/* Iniciar Partida (admin, partida não iniciada, menos de 10 jogadores) */}
+            {isAdminMode && !isMatchStarted && waitingList.length < 10 && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={cn(
+                  'border rounded-2xl p-4 sm:p-5 shadow-xl flex items-center justify-between gap-4',
+                  darkMode ? 'bg-green-500/10 border-green-500/20' : 'bg-green-50 border-green-200'
+                )}
+              >
+                <div>
+                  <p className={cn('font-semibold text-sm', darkMode ? 'text-green-300' : 'text-green-800')}>
+                    Iniciar Partida
+                  </p>
+                  <p className={cn('text-xs mt-0.5', darkMode ? 'text-green-400/70' : 'text-green-600')}>
+                    Inicia a sessão mesmo com menos de 10 jogadores na fila.
+                  </p>
+                </div>
+                <button
+                  onClick={handleStartMatchAttempt}
+                  className="shrink-0 px-4 py-2 rounded-xl font-bold text-sm bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/20 transition-all active:scale-95"
+                >
+                  Iniciar
+                </button>
+              </motion.div>
+            )}
+
             {/* 1. Entrar na Fila - apenas usuários cadastrados */}
             <section
               className={cn(
@@ -2529,25 +2545,37 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  {[
-                    { label: 'Partidas', value: '24', icon: <Trophy className="w-4 h-4" /> },
-                    { label: 'Vitórias', value: '15', icon: <Trophy className="w-4 h-4 text-yellow-500" /> },
-                    { label: 'Pontos', value: '142', icon: <Plus className="w-4 h-4 text-blue-500" /> },
-                    { label: 'Ranking', value: '#4', icon: <Trophy className="w-4 h-4 text-orange-500" /> },
-                  ].map((stat, i) => (
-                    <div
-                      key={i}
-                      className={cn('p-4 rounded-2xl border flex flex-col items-center gap-1', darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm')}
-                    >
-                      <div className="flex items-center gap-2 mb-1">
-                        {stat.icon}
-                        <span className={cn('text-[10px] font-bold uppercase tracking-wider', darkMode ? 'text-slate-500' : 'text-slate-400')}>{stat.label}</span>
-                      </div>
-                      <span className={cn('text-2xl font-black', darkMode ? 'text-white' : 'text-slate-900')}>{stat.value}</span>
+                {(() => {
+                  const userStat = stats.find((s) => s.user_id === userProfile?.id);
+                  const sortedByWins = [...stats].sort((a, b) => b.wins - a.wins);
+                  const rankPos = userProfile?.id ? sortedByWins.findIndex((s) => s.user_id === userProfile.id) + 1 : 0;
+                  const profileStats = [
+                    { label: 'Partidas', value: String(userStat?.partidas ?? 0), icon: <Trophy className="w-4 h-4" /> },
+                    { label: 'Vitórias', value: String(userStat?.wins ?? 0), icon: <Trophy className="w-4 h-4 text-yellow-500" /> },
+                    { label: 'Pontos', value: String(userStat?.points ?? 0), icon: <Plus className="w-4 h-4 text-blue-500" /> },
+                    { label: 'Assistências', value: String(userStat?.assists ?? 0), icon: <Target className="w-4 h-4 text-cyan-500" /> },
+                    { label: 'Tocos', value: String(userStat?.blocks ?? 0), icon: <Shield className="w-4 h-4 text-amber-500" /> },
+                    { label: 'Roubos', value: String(userStat?.steals ?? 0), icon: <Target className="w-4 h-4 text-purple-500" /> },
+                    { label: 'Decisivos', value: String(userStat?.clutch_points ?? 0), icon: <Trophy className="w-4 h-4 text-red-500" /> },
+                    { label: 'Ranking', value: rankPos > 0 ? `#${rankPos}` : '--', icon: <Trophy className="w-4 h-4 text-orange-500" /> },
+                  ];
+                  return (
+                    <div className="grid grid-cols-2 gap-3">
+                      {profileStats.map((stat, i) => (
+                        <div
+                          key={i}
+                          className={cn('p-4 rounded-2xl border flex flex-col items-center gap-1', darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm')}
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            {stat.icon}
+                            <span className={cn('text-[10px] font-bold uppercase tracking-wider', darkMode ? 'text-slate-500' : 'text-slate-400')}>{stat.label}</span>
+                          </div>
+                          <span className={cn('text-2xl font-black', darkMode ? 'text-white' : 'text-slate-900')}>{stat.value}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  );
+                })()}
 
                 <div className="space-y-3">
                   <h3 className={cn('font-bold px-1', darkMode ? 'text-slate-400' : 'text-slate-600')}>Configurações</h3>
@@ -2590,8 +2618,9 @@ export default function App() {
       <nav
         className={cn(
           'fixed bottom-0 left-0 right-0 border-t backdrop-blur-lg z-50 transition-colors duration-300',
-          darkMode ? 'bg-slate-900/80 border-slate-800' : 'bg-white/80 border-slate-200'
+          darkMode ? 'bg-slate-900/95 border-slate-800' : 'bg-white/95 border-slate-200'
         )}
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-around">
           <NavButton active={activeTab === 'inicio'} onClick={() => setActiveTab('inicio')} icon={<Home className="w-5 h-5" />} label="Início" darkMode={darkMode} />
@@ -2638,7 +2667,16 @@ function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer
   const showAguarde = !isAdmin && showWinnerModal && isLosingTeam;
 
   return (
-    <div className={cn('relative border rounded-xl sm:rounded-2xl overflow-hidden shadow-xl transition-colors duration-300', bgColor, borderColor)}>
+    <motion.div
+      animate={isWinningTeam ? { scale: [1, 1.03, 1.02] } : { scale: 1 }}
+      transition={{ duration: 0.5, ease: 'easeOut' }}
+      className={cn(
+        'relative border rounded-xl sm:rounded-2xl overflow-hidden shadow-xl transition-all duration-500',
+        bgColor, borderColor,
+        isWinningTeam && 'ring-4 ring-yellow-400 shadow-[0_0_40px_rgba(234,179,8,0.35)] z-10',
+        isLosingTeam && 'opacity-60 scale-[0.98]'
+      )}
+    >
       <div className={cn('px-3 py-2 sm:px-6 sm:py-4 border-b flex items-center justify-between', borderColor)}>
         <h3 className={cn('font-bold text-sm sm:text-lg', textColor)}>{title}</h3>
         <div className="flex items-center gap-2">
@@ -2726,34 +2764,44 @@ function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer
         </AnimatePresence>
       </div>
       {isWinningTeam && (
-        <div
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ type: 'spring', damping: 12, stiffness: 200 }}
           className={cn(
-            'absolute bottom-0 left-0 right-0 py-2 flex flex-col items-center justify-center gap-1 rounded-b-xl font-bold text-xs uppercase tracking-wider',
-            'bg-yellow-500/20 text-yellow-600 dark:bg-yellow-500/25 dark:text-yellow-400 border-t',
-            darkMode ? 'border-yellow-500/30' : 'border-yellow-500/40'
+            'absolute bottom-0 left-0 right-0 py-3 flex flex-col items-center justify-center gap-1.5 rounded-b-xl font-bold text-sm uppercase tracking-wider',
+            'bg-gradient-to-t from-yellow-500/60 via-yellow-400/40 to-yellow-300/20 border-t border-yellow-400/50',
+            darkMode ? 'text-yellow-300' : 'text-yellow-700'
           )}
+          style={{ boxShadow: '0 -4px 20px rgba(234,179,8,0.3)' }}
         >
-          <span className="flex items-center gap-1.5">
-            <Trophy className="w-4 h-4" />
-            Vencedor
-          </span>
+          <motion.span
+            animate={{ scale: [1, 1.12, 1] }}
+            transition={{ repeat: Infinity, duration: 1.4, ease: 'easeInOut' }}
+            className="flex items-center gap-2 text-base"
+          >
+            <Trophy className="w-5 h-5" />
+            Vencedor! 🏆
+          </motion.span>
           {isAdmin && onStartNext && (
             <button
               onClick={onStartNext}
               disabled={isStartingNext}
               className={cn(
-                'text-[10px] font-normal normal-case px-2 py-0.5 rounded-md transition-colors',
+                'text-[10px] font-semibold normal-case px-3 py-1 rounded-lg transition-colors border',
                 isStartingNext
-                  ? 'opacity-60 cursor-wait'
-                  : darkMode ? 'hover:bg-yellow-500/20 text-yellow-400' : 'hover:bg-yellow-500/30 text-yellow-700'
+                  ? 'opacity-60 cursor-wait border-yellow-400/30'
+                  : darkMode
+                    ? 'hover:bg-yellow-500/30 text-yellow-300 border-yellow-500/40'
+                    : 'hover:bg-yellow-500/20 text-yellow-700 border-yellow-500/40'
               )}
             >
               {isStartingNext ? 'Iniciando...' : 'Iniciar agora'}
             </button>
           )}
-        </div>
+        </motion.div>
       )}
-    </div>
+    </motion.div>
   );
 }
 
@@ -2825,6 +2873,7 @@ const SKILL_LABELS: Record<SortKey, string> = {
   blocks: 'Tocos',
   steals: 'Roubos',
   clutch_points: 'Decisivos',
+  assists: 'Assistências',
 };
 
 function ShimmerRing({ sizePx, borderPx = 3, children }: { sizePx: number; borderPx?: number; children: React.ReactNode }) {
@@ -2930,8 +2979,10 @@ function RankPodiumItem({
             {avatarInner}
           </ShimmerRing>
         ) : (
-          <div className={cn(sizeClasses[size], rank === 1 ? 'ring-4 ring-yellow-500/20' : '', 'rounded-full p-1 shadow-lg overflow-hidden', accentColor)}>
-            {avatarInner}
+          <div className={cn(sizeClasses[size], rank === 1 ? 'ring-4 ring-yellow-500/20' : '', 'rounded-full p-[3px] shadow-lg', accentColor)}>
+            <div className="w-full h-full rounded-full overflow-hidden">
+              {avatarInner}
+            </div>
           </div>
         )}
         <div className={cn('absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-white', rank === 1 ? 'bg-yellow-500 text-white -top-3 -right-3 w-8 h-8 text-xs shadow-lg' : rank === 2 ? 'bg-slate-300 text-slate-700' : 'bg-orange-400 text-white')}>
@@ -3017,6 +3068,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
   const filterOptions: { key: SortKey; label: string }[] = [
     { key: 'wins', label: 'Vitórias' },
     { key: 'points', label: 'Pontos' },
+    { key: 'assists', label: 'Assistências' },
     { key: 'blocks', label: 'Tocos' },
     { key: 'steals', label: 'Roubos' },
     { key: 'clutch_points', label: 'Decisivos' },
@@ -3174,7 +3226,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
                 <div className="min-w-0 flex-1">
                   <h3 className={cn('font-bold truncate', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
                   <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-1 items-center">
-                    {(['wins', 'points', 'blocks', 'steals', 'clutch_points'] as const).map((key, i) => (
+                    {(['wins', 'points', 'assists', 'blocks', 'steals', 'clutch_points'] as const).map((key, i) => (
                       <span key={key} className="flex items-center gap-1.5">
                         {i > 0 && <span className={cn('w-0.5 h-0.5 rounded-full', darkMode ? 'bg-slate-600' : 'bg-slate-300')} />}
                         <span
