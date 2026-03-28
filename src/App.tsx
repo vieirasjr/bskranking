@@ -31,6 +31,7 @@ import {
   Info,
   AlertTriangle,
   CheckCircle,
+  Settings,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -38,6 +39,7 @@ import { twMerge } from 'tailwind-merge';
 import { supabase } from './supabase';
 import { useAuth } from './contexts/AuthContext';
 import EditarPerfil from './pages/EditarPerfil';
+import GestaoAdmin from './pages/GestaoAdmin';
 import PerfilDetalhe from './pages/PerfilDetalhe';
 import { MatchTimer, type TimerState } from './components/MatchTimer';
 import { NotificationsPanel } from './components/NotificationsPanel';
@@ -59,6 +61,19 @@ interface RegisteredUserSuggestion {
 
 function getRegisteredUserLabel(user: RegisteredUserSuggestion) {
   return user.display_name?.trim() || user.full_name?.trim() || user.email;
+}
+
+async function generateUniquePlayerCode(): Promise<string> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const code = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+    const { data } = await supabase
+      .from('basquete_users')
+      .select('id')
+      .eq('player_code', code)
+      .maybeSingle();
+    if (!data) return code;
+  }
+  throw new Error('Não foi possível gerar um código único');
 }
 
 async function resolveRegisteredUserByName(
@@ -115,7 +130,7 @@ interface PlayerStats {
   id: string;
   name: string;
   user_id?: string | null;
-  partidas: number;
+  partidas?: number;
   wins: number;
   points: number;
   blocks: number;
@@ -161,7 +176,7 @@ export default function App() {
   });
   const [timerStartedOnce, setTimerStartedOnce] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
-  const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null } | null>(null);
+  const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null; player_code: string | null } | null>(null);
   const [adminAddName, setAdminAddName] = useState('');
   const [adminUserSuggestions, setAdminUserSuggestions] = useState<RegisteredUserSuggestion[]>([]);
   const [showAdminSuggestions, setShowAdminSuggestions] = useState(false);
@@ -170,6 +185,8 @@ export default function App() {
   const [unregisteredAddName, setUnregisteredAddName] = useState('');
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
+  const [userCodes, setUserCodes] = useState<Record<string, string>>({});
+  const [showAdminGestao, setShowAdminGestao] = useState(false);
   const adminSuggestionsRef = useRef<HTMLDivElement | null>(null);
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
     activeTab === 'lista' && !isAdminMode
@@ -268,7 +285,15 @@ export default function App() {
       if (!s.user_id) continue;
       const existing = byUserId.get(s.user_id);
       if (!existing) {
-        byUserId.set(s.user_id, { ...s });
+        byUserId.set(s.user_id, {
+          ...s,
+          wins: s.wins ?? 0,
+          points: s.points ?? 0,
+          blocks: s.blocks ?? 0,
+          steals: s.steals ?? 0,
+          clutch_points: s.clutch_points ?? 0,
+          assists: s.assists ?? 0,
+        });
       } else {
         byUserId.set(s.user_id, {
           ...existing,
@@ -401,6 +426,26 @@ export default function App() {
     })();
   }, [stats]);
 
+  // Códigos dos jogadores na fila/times (para exibir no admin e no modal de stats)
+  useEffect(() => {
+    const userIds = [...new Set(players.map((p) => p.user_id).filter(Boolean))] as string[];
+    if (userIds.length === 0) {
+      setUserCodes({});
+      return;
+    }
+    (async () => {
+      const { data } = await supabase
+        .from('basquete_users')
+        .select('id, player_code')
+        .in('id', userIds);
+      const map: Record<string, string> = {};
+      for (const u of data ?? []) {
+        if (u.player_code) map[u.id] = u.player_code;
+      }
+      setUserCodes(map);
+    })();
+  }, [players]);
+
   useEffect(() => {
     fetchPartidaSessao(currentPartidaSessaoId);
   }, [currentPartidaSessaoId, fetchPartidaSessao]);
@@ -478,7 +523,7 @@ export default function App() {
     }
     let { data } = await supabase
       .from('basquete_users')
-      .select('id, display_name, avatar_url')
+      .select('id, display_name, avatar_url, player_code')
       .eq('auth_id', user.id)
       .maybeSingle();
     if (!data) {
@@ -493,16 +538,25 @@ export default function App() {
           },
           { onConflict: 'email', ignoreDuplicates: false }
         )
-        .select('id, display_name, avatar_url')
+        .select('id, display_name, avatar_url, player_code')
         .single();
       if (upserted) data = upserted;
       else {
-        const { data: byAuth } = await supabase.from('basquete_users').select('id, display_name, avatar_url').eq('auth_id', user.id).maybeSingle();
-        const { data: byEmail } = user?.email ? await supabase.from('basquete_users').select('id, display_name, avatar_url').eq('email', user.email).maybeSingle() : { data: null };
+        const { data: byAuth } = await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code').eq('auth_id', user.id).maybeSingle();
+        const { data: byEmail } = user?.email ? await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code').eq('email', user.email).maybeSingle() : { data: null };
         data = byAuth ?? byEmail ?? undefined;
       }
     }
-    setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url } : null);
+    if (data && !data.player_code) {
+      try {
+        const newCode = await generateUniquePlayerCode();
+        await supabase.from('basquete_users').update({ player_code: newCode }).eq('id', data.id);
+        data = { ...data, player_code: newCode };
+      } catch {
+        // code generation failed silently — will retry next login
+      }
+    }
+    setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url, player_code: data.player_code ?? null } : null);
   }, [user?.id, user?.email, user?.user_metadata]);
 
   useEffect(() => {
@@ -979,7 +1033,8 @@ export default function App() {
     try {
       // Atualizar stats (ranking) apenas para jogadores cadastrados
       if (userId) {
-        const { data: existing } = await supabase.from('stats').select('*').eq('user_id', userId).maybeSingle();
+        // Usa o estado local (já carregado pelo fetchStats) para evitar SELECT com filtro que falha via RLS
+        const existing = stats.find((s) => s.user_id === userId) ?? null;
 
         if (existing) {
           const updates =
@@ -995,17 +1050,18 @@ export default function App() {
           const { error: updErr } = await supabase.from('stats').update(updates).eq('id', existing.id);
           if (updErr) throw updErr;
         } else {
-          const inserts =
-            stat === 'points_2'
-              ? { name: player.name, user_id: userId, points: 2, wins: 0, blocks: 0, steals: 0, clutch_points: 0, assists: 0 }
-              : stat === 'points_3'
-                ? { name: player.name, user_id: userId, points: 3, wins: 0, blocks: 0, steals: 0, clutch_points: 0, assists: 0 }
-                : stat === 'blocks'
-                  ? { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 1, steals: 0, clutch_points: 0, assists: 0 }
-                  : stat === 'steals'
-                    ? { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 0, steals: 1, clutch_points: 0, assists: 0 }
-                    : { name: player.name, user_id: userId, points: 0, wins: 0, blocks: 0, steals: 0, clutch_points: 0, assists: 1 };
-          const { error: insErr } = await supabase.from('stats').insert(inserts);
+          const base: Record<string, unknown> = {
+            name: player.name,
+            user_id: userId,
+            wins: 0,
+            points: stat === 'points_2' ? 2 : stat === 'points_3' ? 3 : 0,
+            blocks: stat === 'blocks' ? 1 : 0,
+            steals: stat === 'steals' ? 1 : 0,
+            clutch_points: 0,
+          };
+          // só inclui assists se a stat for assist (evita 400 se a coluna não existir ainda)
+          if (stat === 'assists') base.assists = 1;
+          const { error: insErr } = await supabase.from('stats').insert(base);
           if (insErr) throw insErr;
         }
         fetchStats();
@@ -1038,7 +1094,7 @@ export default function App() {
             .single();
           if (fetchErr || !sessao) {
             addNotification('Erro ao buscar placar da partida.', 'error', { showToastForMs: 5000 });
-            return;
+            throw new Error('fetch_sessao_failed');
           }
           const t1 = (sessao.team1_points ?? 0) as number;
           const t2 = (sessao.team2_points ?? 0) as number;
@@ -1065,9 +1121,15 @@ export default function App() {
         }
       }
       setStatsModalPlayer(null);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Error adding stat:', err);
-      addNotification('Erro ao registrar estatística.', 'error', { showToastForMs: 5000 });
+      const msg = (err as Error)?.message;
+      if (msg !== 'fetch_sessao_failed') {
+        addNotification('Erro ao registrar estatística.', 'error', { showToastForMs: 5000 });
+      }
+    } finally {
+      isRegisteringStatRef.current = false;
+      setRegisteringStatLabel(null);
     }
   };
 
@@ -1124,15 +1186,13 @@ export default function App() {
       for (const { player: p, venceu } of jogadoresDaPartida) {
         const userId = p.user_id;
         if (!userId) continue;
-        const { data: byUserId } = await supabase.from('stats').select('*').eq('user_id', userId).maybeSingle();
-        const { data: s } = byUserId
-          ? { data: byUserId }
-          : await supabase.from('stats').select('*').eq('name', p.name).maybeSingle();
+        const s = stats.find((st) => st.user_id === userId)
+          ?? stats.find((st) => st.name === p.name)
+          ?? null;
         if (s) {
           await supabase
             .from('stats')
             .update({
-              partidas: (s.partidas ?? 0) + 1,
               wins: (s.wins ?? 0) + (venceu ? 1 : 0),
               user_id: userId,
             })
@@ -1141,7 +1201,6 @@ export default function App() {
           await supabase.from('stats').insert({
             name: p.name,
             user_id: userId,
-            partidas: 1,
             wins: venceu ? 1 : 0,
             points: 0,
             blocks: 0,
@@ -1656,9 +1715,16 @@ export default function App() {
               style={{ touchAction: 'manipulation' }}
             >
               <div className="flex items-center justify-between">
-                <h3 className={cn('text-lg font-bold', darkMode ? 'text-white' : 'text-slate-900')}>
-                  Registrar: {statsModalPlayer.name}
-                </h3>
+                <div>
+                  <h3 className={cn('text-lg font-bold', darkMode ? 'text-white' : 'text-slate-900')}>
+                    {statsModalPlayer.name}
+                  </h3>
+                  {statsModalPlayer.user_id && userCodes[statsModalPlayer.user_id] && (
+                    <span className={cn('text-xs font-mono font-bold', darkMode ? 'text-orange-400' : 'text-orange-600')}>
+                      #{userCodes[statsModalPlayer.user_id]}
+                    </span>
+                  )}
+                </div>
                 {!registeringStatLabel && (
                   <button
                     type="button"
@@ -1820,6 +1886,16 @@ export default function App() {
                   title="Resetar Lista"
                 >
                   <RefreshCw className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={() => setShowAdminGestao(true)}
+                  className={cn(
+                    'transition-colors p-2 rounded-lg',
+                    darkMode ? 'text-slate-400 hover:text-orange-400 hover:bg-orange-400/10' : 'text-slate-500 hover:text-orange-600 hover:bg-orange-50'
+                  )}
+                  title="Gestão de Jogadores"
+                >
+                  <Settings className="w-5 h-5" />
                 </button>
               </>
             )}
@@ -2378,6 +2454,11 @@ export default function App() {
                         <span className={cn('font-medium text-xs sm:text-base truncate', darkMode ? 'text-slate-200' : 'text-slate-800')}>
                           {player.name}
                         </span>
+                        {isAdminMode && player.user_id && userCodes[player.user_id] && (
+                          <span className={cn('text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0', darkMode ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-600')}>
+                            {userCodes[player.user_id]}
+                          </span>
+                        )}
                       </div>
                       {isAdminMode && (
                       <div className="flex items-center gap-1 sm:gap-2 shrink-0">
@@ -2542,6 +2623,12 @@ export default function App() {
                       {userProfile?.display_name || 'Seu Perfil'}
                     </h2>
                     <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>{user?.email ?? ''}</p>
+                    {userProfile?.player_code && (
+                      <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-500/15 border border-orange-500/30">
+                        <span className={cn('text-[10px] font-bold uppercase tracking-widest', darkMode ? 'text-orange-400' : 'text-orange-600')}>Código</span>
+                        <span className={cn('text-lg font-black tracking-widest', darkMode ? 'text-orange-300' : 'text-orange-700')}>{userProfile.player_code}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2634,6 +2721,19 @@ export default function App() {
       <footer className={cn('max-w-5xl mx-auto px-4 py-12 text-center text-sm transition-colors duration-300', darkMode ? 'text-slate-600' : 'text-slate-400')}>
         <p>Basquete Next &bull; Sistema de Fila em Tempo Real</p>
       </footer>
+
+      {/* Gestão Admin - tela full-screen sobreposta */}
+      <AnimatePresence>
+        {showAdminGestao && (
+          <GestaoAdmin
+            stats={stats}
+            userAvatars={userAvatars}
+            darkMode={darkMode}
+            onClose={() => setShowAdminGestao(false)}
+            onStatsUpdated={fetchStats}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -3018,18 +3118,38 @@ function RankPodiumItem({
 
 function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest }: RankingViewProps) {
   const sortedStats = useMemo(() => {
-    return [...stats].sort((a, b) => b[sortKey] - a[sortKey]);
+    return [...stats].sort((a, b) => {
+      const diff = (b[sortKey] ?? 0) - (a[sortKey] ?? 0);
+      if (diff !== 0) return diff;
+      // desempate secundário por pontos
+      return (b.points ?? 0) - (a.points ?? 0);
+    });
   }, [stats, sortKey]);
 
-  const top3 = sortedStats.slice(0, 3);
-  const remaining = sortedStats.slice(3);
+  // Há algum jogador com valor > 0 para o filtro atual?
+  const hasAnyData = useMemo(
+    () => sortedStats.some((s) => (s[sortKey] ?? 0) > 0),
+    [sortedStats, sortKey]
+  );
 
-  // Conjunto de valores com empate (aparecem em mais de um jogador)
+  // Pódio: apenas jogadores com valor > 0 no filtro atual (máximo 3)
+  const podiumPlayers = useMemo(
+    () => sortedStats.filter((s) => (s[sortKey] ?? 0) > 0).slice(0, 3),
+    [sortedStats, sortKey]
+  );
+  // top3 com slots vazios (null) para posições sem jogador
+  const top3: (PlayerStats | null)[] = [podiumPlayers[0] ?? null, podiumPlayers[1] ?? null, podiumPlayers[2] ?? null];
+  // Lista a partir do 4º entre os que têm valor > 0, depois os que têm 0
+  const withValue = sortedStats.filter((s) => (s[sortKey] ?? 0) > 0).slice(3);
+  const withoutValue = sortedStats.filter((s) => (s[sortKey] ?? 0) === 0);
+  const remaining = [...withValue, ...withoutValue];
+
+  // Empates: só marca valores > 0 (evita shimmer em todos quando todo mundo tem 0)
   const tiedValues = useMemo(() => {
     const counts = new Map<number, number>();
     for (const s of sortedStats) {
-      const v = s[sortKey];
-      counts.set(v, (counts.get(v) ?? 0) + 1);
+      const v = s[sortKey] ?? 0;
+      if (v > 0) counts.set(v, (counts.get(v) ?? 0) + 1);
     }
     return new Set([...counts.entries()].filter(([, c]) => c > 1).map(([v]) => v));
   }, [sortedStats, sortKey]);
@@ -3066,12 +3186,10 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
   }, [top3, sortKey]);
 
   const filterOptions: { key: SortKey; label: string }[] = [
-    { key: 'wins', label: 'Vitórias' },
     { key: 'points', label: 'Pontos' },
     { key: 'assists', label: 'Assistências' },
     { key: 'blocks', label: 'Tocos' },
     { key: 'steals', label: 'Roubos' },
-    { key: 'clutch_points', label: 'Decisivos' },
   ];
 
   return (
@@ -3133,126 +3251,135 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
         </div>
       </div>
 
-      {/* Podium for Top 3 */}
-      <motion.div layout className="grid grid-cols-3 gap-2 sm:gap-4 items-end pt-4 pb-2">
-        {top3[1] && (
-          <RankPodiumItem
-            rank={2}
-            player={top3[1]}
-            sortKey={sortKey}
-            darkMode={darkMode}
-            avatarUrl={top3[1].user_id ? userAvatars[top3[1].user_id] : undefined}
-            onClick={() => onProfileClick(top3[1])}
-            size={top3Sizes[1]}
-            medal="🥈"
-            isTied={tiedValues.has(top3[1][sortKey])}
-            barHeightPx={top3BarHeights[1]}
-          />
-        )}
-        {top3[0] && (
-          <RankPodiumItem
-            rank={1}
-            player={top3[0]}
-            sortKey={sortKey}
-            darkMode={darkMode}
-            avatarUrl={top3[0].user_id ? userAvatars[top3[0].user_id] : undefined}
-            onClick={() => onProfileClick(top3[0])}
-            size={top3Sizes[0]}
-            medal="👑"
-            isTied={tiedValues.has(top3[0][sortKey])}
-            barHeightPx={top3BarHeights[0]}
-          />
-        )}
-        {top3[2] && (
-          <RankPodiumItem
-            rank={3}
-            player={top3[2]}
-            sortKey={sortKey}
-            darkMode={darkMode}
-            avatarUrl={top3[2].user_id ? userAvatars[top3[2].user_id] : undefined}
-            onClick={() => onProfileClick(top3[2])}
-            size={top3Sizes[2]}
-            medal="🥉"
-            isTied={tiedValues.has(top3[2][sortKey])}
-            barHeightPx={top3BarHeights[2]}
-          />
-        )}
-      </motion.div>
+      <>
+          {/* Podium for Top 3 — slots vazios quando não há jogador com valor > 0 */}
+          {(() => {
+            const medals = ['🥈', '👑', '🥉'];
+            const sizes: ('sm' | 'md' | 'lg')[] = [top3Sizes[1], top3Sizes[0], top3Sizes[2]];
+            const barHeights = [top3BarHeights[1], top3BarHeights[0], top3BarHeights[2]];
+            const emptyBarH = [64, 96, 48]; // alturas padrão dos slots vazios
+            // ordem de renderização: [2º lugar, 1º lugar, 3º lugar] para o layout de pódio
+            const slots = [
+              { rank: 2, player: top3[1], sizeIdx: 0 },
+              { rank: 1, player: top3[0], sizeIdx: 1 },
+              { rank: 3, player: top3[2], sizeIdx: 2 },
+            ];
+            return (
+              <motion.div layout className="grid grid-cols-3 gap-2 sm:gap-4 items-end pt-4 pb-2">
+                {slots.map(({ rank, player, sizeIdx }) =>
+                  player ? (
+                    <RankPodiumItem
+                      key={player.id}
+                      rank={rank}
+                      player={player}
+                      sortKey={sortKey}
+                      darkMode={darkMode}
+                      avatarUrl={player.user_id ? userAvatars[player.user_id] : undefined}
+                      onClick={() => onProfileClick(player)}
+                      size={sizes[sizeIdx]}
+                      medal={medals[sizeIdx]}
+                      isTied={tiedValues.has(player[sortKey])}
+                      barHeightPx={barHeights[sizeIdx]}
+                    />
+                  ) : (
+                    <div key={`empty-${rank}`} className="flex flex-col items-center gap-3">
+                      <div className={cn(
+                        'w-14 h-14 rounded-full border-2 border-dashed flex items-center justify-center',
+                        darkMode ? 'border-slate-700 bg-slate-800/40' : 'border-slate-200 bg-slate-50'
+                      )}>
+                        <span className={cn('text-lg font-black opacity-30', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+                          {rank}
+                        </span>
+                      </div>
+                      <div className="text-center">
+                        <p className={cn('text-[10px] font-semibold', darkMode ? 'text-slate-600' : 'text-slate-300')}>—</p>
+                      </div>
+                      <div
+                        className={cn('w-full rounded-t-2xl', darkMode ? 'bg-slate-800/60' : 'bg-slate-100')}
+                        style={{ height: emptyBarH[sizeIdx] }}
+                      />
+                    </div>
+                  )
+                )}
+              </motion.div>
+            );
+          })()}
 
-      {/* List for the rest */}
-      <motion.div layout className="space-y-3">
-        <AnimatePresence mode="popLayout">
-          {remaining.map((player, index) => (
-            <motion.button
-              key={player.id}
-              type="button"
-              layout
-              layoutId={`rank-${player.id}`}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: -20 }}
-              transition={layoutTransition}
-              onClick={() => onProfileClick(player)}
-              className={cn(
-                'w-full p-4 rounded-2xl flex items-center justify-between transition-all hover:scale-[1.01] active:scale-[0.99] text-left',
-                darkMode ? 'bg-slate-900/50 border border-slate-800 hover:border-slate-700' : 'bg-white border border-slate-100 shadow-sm hover:shadow-md'
-              )}
-            >
-              <div className="flex items-center gap-4 min-w-0 flex-1">
-                {tiedValues.has(player[sortKey]) ? (
-                  <ShimmerRing sizePx={40} borderPx={2}>
-                    {player.user_id && userAvatars[player.user_id] ? (
-                      <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+          {/* List for the rest */}
+          <motion.div layout className="space-y-3">
+            <AnimatePresence mode="popLayout">
+              {remaining.map((player, index) => (
+                <motion.button
+                  key={player.id}
+                  type="button"
+                  layout
+                  layoutId={`rank-${player.id}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: -20 }}
+                  transition={layoutTransition}
+                  onClick={() => onProfileClick(player)}
+                  className={cn(
+                    'w-full p-4 rounded-2xl flex items-center justify-between transition-all hover:scale-[1.01] active:scale-[0.99] text-left',
+                    darkMode ? 'bg-slate-900/50 border border-slate-800 hover:border-slate-700' : 'bg-white border border-slate-100 shadow-sm hover:shadow-md'
+                  )}
+                >
+                  <div className="flex items-center gap-4 min-w-0 flex-1">
+                    {tiedValues.has(player[sortKey]) ? (
+                      <ShimmerRing sizePx={40} borderPx={2}>
+                        {player.user_id && userAvatars[player.user_id] ? (
+                          <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className={cn('w-full h-full flex items-center justify-center font-bold text-xs', darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400')}>
+                            {index + 4}
+                          </div>
+                        )}
+                      </ShimmerRing>
                     ) : (
-                      <div className={cn('w-full h-full flex items-center justify-center font-bold text-xs', darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400')}>
-                        {index + 4}
+                      <div
+                        className={cn(
+                          'w-10 h-10 shrink-0 rounded-full flex items-center justify-center font-bold text-xs overflow-hidden',
+                          darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400'
+                        )}
+                      >
+                        {player.user_id && userAvatars[player.user_id] ? (
+                          <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{index + 4}</span>
+                        )}
                       </div>
                     )}
-                  </ShimmerRing>
-                ) : (
-                  <div
-                    className={cn(
-                      'w-10 h-10 shrink-0 rounded-full flex items-center justify-center font-bold text-xs overflow-hidden',
-                      darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400'
-                    )}
-                  >
-                    {player.user_id && userAvatars[player.user_id] ? (
-                      <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      <span>{index + 4}</span>
-                    )}
+                    <div className="min-w-0 flex-1">
+                      <h3 className={cn('font-bold truncate', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
+                      <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-1 items-center">
+                        {(['points', 'assists', 'blocks', 'steals'] as const).map((key, i) => (
+                          <span key={key} className="flex items-center gap-1.5">
+                            {i > 0 && <span className={cn('w-0.5 h-0.5 rounded-full', darkMode ? 'bg-slate-600' : 'bg-slate-300')} />}
+                            <span
+                              className={cn(
+                                'text-[10px] font-bold uppercase tracking-wider',
+                                key === sortKey ? 'text-orange-500' : darkMode ? 'text-slate-500' : 'text-slate-400'
+                              )}
+                            >
+                              {player[key] ?? 0} {SKILL_LABELS[key].toLowerCase()}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <h3 className={cn('font-bold truncate', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
-                  <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-1 items-center">
-                    {(['wins', 'points', 'assists', 'blocks', 'steals', 'clutch_points'] as const).map((key, i) => (
-                      <span key={key} className="flex items-center gap-1.5">
-                        {i > 0 && <span className={cn('w-0.5 h-0.5 rounded-full', darkMode ? 'bg-slate-600' : 'bg-slate-300')} />}
-                        <span
-                          className={cn(
-                            'text-[10px] font-bold uppercase tracking-wider',
-                            key === sortKey ? 'text-orange-500' : darkMode ? 'text-slate-500' : 'text-slate-400'
-                          )}
-                        >
-                          {player[key]} {SKILL_LABELS[key].toLowerCase()}
-                        </span>
-                      </span>
-                    ))}
+                  <div className="text-right shrink-0 ml-3">
+                    <div className="text-xl font-black text-orange-500">{player[sortKey] ?? 0}</div>
+                    <div className={cn('text-[9px] uppercase tracking-widest font-bold', darkMode ? 'text-slate-600' : 'text-slate-500')}>
+                      {SKILL_LABELS[sortKey]}
+                    </div>
+                    <ArrowRight className={cn('w-4 h-4 mt-1 mx-auto', darkMode ? 'text-slate-600' : 'text-slate-400')} />
                   </div>
-                </div>
-              </div>
-              <div className="text-right shrink-0 ml-3">
-                <div className="text-xl font-black text-orange-500">{player[sortKey]}</div>
-                <div className={cn('text-[9px] uppercase tracking-widest font-bold', darkMode ? 'text-slate-600' : 'text-slate-500')}>
-                  {SKILL_LABELS[sortKey]}
-                </div>
-                <ArrowRight className={cn('w-4 h-4 mt-1 mx-auto', darkMode ? 'text-slate-600' : 'text-slate-400')} />
-              </div>
-            </motion.button>
-          ))}
-        </AnimatePresence>
-      </motion.div>
+                </motion.button>
+              ))}
+            </AnimatePresence>
+          </motion.div>
+      </>
     </section>
   );
 }

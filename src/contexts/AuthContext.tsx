@@ -33,7 +33,6 @@ async function ensureUserStats(userId: string, displayName: string | null) {
   await supabase.from('stats').insert({
     name: normalizedName,
     user_id: userId,
-    partidas: 0,
     wins: 0,
     points: 0,
     blocks: 0,
