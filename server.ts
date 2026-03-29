@@ -35,16 +35,19 @@ const PLAN_NAMES: Record<string, string> = {
   profissional: "Basquete Next - Plano Profissional",
   enterprise:   "Basquete Next - Plano Enterprise",
   avulso:       "Basquete Next - Evento Avulso",
+  teste:        "Basquete Next - Plano Teste",
 };
 const PLAN_PRICES: Record<string, number> = {
   basico: 100,
   profissional: 150,
   enterprise: 200,
   avulso: 50,
+  teste: 1,
 };
 // Planos com expiração por tempo (horas) em vez de ciclo mensal
 const PLAN_EXPIRY_HOURS: Record<string, number> = {
   avulso: 72,
+  teste: 1,
 };
 
 async function mpFetch(path: string, options: RequestInit = {}) {

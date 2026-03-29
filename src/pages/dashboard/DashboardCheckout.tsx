@@ -16,6 +16,7 @@ declare global {
 }
 
 const PLANS: Record<string, { name: string; price: number; note?: string }> = {
+  teste:        { name: 'Plano Teste',         price: 1,   note: '1 hora de acesso · teste de pagamento' },
   avulso:       { name: 'Evento Avulso',      price: 50,  note: '72 horas de acesso · máx. 20 atletas' },
   basico:       { name: 'Plano Básico',       price: 100 },
   profissional: { name: 'Plano Profissional', price: 150 },

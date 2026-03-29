@@ -102,8 +102,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       return new Date() < new Date(tenant.trial_ends_at);
     }
     if (tenant.status === 'active') {
-      // Plano avulso expira pelo current_period_ends_at
-      if (tenant.plan_id === 'avulso' && tenant.current_period_ends_at) {
+      // Planos com expiração por tempo (avulso, teste)
+      if (['avulso', 'teste'].includes(tenant.plan_id) && tenant.current_period_ends_at) {
         return new Date() < new Date(tenant.current_period_ends_at);
       }
       return true;
