@@ -409,7 +409,7 @@ function PlayerDetail({ item, darkMode, onBack, onStatsUpdated }: PlayerDetailPr
             <EditableField
               key={field}
               label={label}
-              value={(stat as Record<string, number> | null)?.[field] ?? 0}
+              value={(stat as unknown as Record<string, number> | null)?.[field] ?? 0}
               type="number"
               min={0}
               darkMode={darkMode}
@@ -435,7 +435,7 @@ function PlayerDetail({ item, darkMode, onBack, onStatsUpdated }: PlayerDetailPr
               <EditableField
                 key={field}
                 label={label}
-                value={(profile as Record<string, string | number | null>)[field]}
+                value={(profile as unknown as Record<string, string | number | null>)[field]}
                 type={type}
                 min={min}
                 unit={unit}

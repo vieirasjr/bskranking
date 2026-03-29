@@ -145,7 +145,16 @@ type SortKey = 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assi
 const ADMIN_PASSWORD = '1710';
 const ADMIN_STORAGE_KEY = 'basquete_admin';
 
-export default function App() {
+interface AppProps {
+  locationId?: string;
+  locationSlug?: string;
+  locationName?: string;
+  isOwner?: boolean;
+  maxPlayers?: number | null;
+  venueCoords?: { lat: number; lng: number; radiusMeters: number };
+}
+
+export default function App({ locationId, venueCoords, isOwner, maxPlayers }: AppProps = {}) {
   const { user, isGuest, signOut, leaveGuestMode } = useAuth();
   const { notifications, visibleToast, addNotification, dismissToast, clearNotification, clearAll } = useNotifications();
   const isLoggedIn = !!user;
@@ -162,7 +171,7 @@ export default function App() {
   const [sortKey, setSortKey] = useState<SortKey>('points');
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
-  const [isAdminMode, setIsAdminMode] = useState(() => localStorage.getItem(ADMIN_STORAGE_KEY) === 'true');
+  const [isAdminMode, setIsAdminMode] = useState(() => isOwner || localStorage.getItem(ADMIN_STORAGE_KEY) === 'true');
   const [team1MatchPoints, setTeam1MatchPoints] = useState(0);
   const [team2MatchPoints, setTeam2MatchPoints] = useState(0);
   const [showWinnerModal, setShowWinnerModal] = useState<'team1' | 'team2' | null>(null);
@@ -189,11 +198,12 @@ export default function App() {
   const [showAdminGestao, setShowAdminGestao] = useState(false);
   const adminSuggestionsRef = useRef<HTMLDivElement | null>(null);
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
-    activeTab === 'lista' && !isAdminMode
+    activeTab === 'lista' && !isAdminMode && !!venueCoords,
+    venueCoords
   );
 
-  const canSeeList = isAdminMode || isWithinRadius === true;
-  const canAddToList = isAdminMode || isWithinRadius === true;
+  const canSeeList = isAdminMode || (isWithinRadius === true && isMatchStarted);
+  const canAddToList = isAdminMode || (isWithinRadius === true && isMatchStarted);
 
   const profileComplete = !!(userProfile?.display_name?.trim() && userProfile?.avatar_url);
 
@@ -230,11 +240,15 @@ export default function App() {
     const timeoutId = window.setTimeout(async () => {
       setIsSearchingAdminUsers(true);
 
-      const { data, error } = await supabase
+      let userQuery = supabase
         .from('basquete_users')
-        .select('id, display_name, email, avatar_url')
+        .select(locationId
+          ? 'id, display_name, email, avatar_url, location_members!inner(location_id)'
+          : 'id, display_name, email, avatar_url')
         .ilike('display_name', `%${normalizedSearch}%`)
         .limit(8);
+      if (locationId) userQuery = (userQuery as typeof userQuery).eq('location_members.location_id', locationId);
+      const { data, error } = await userQuery;
 
       if (cancelled) return;
 
@@ -259,20 +273,21 @@ export default function App() {
   }, [adminAddName, isAdminMode]);
 
   const fetchPlayers = useCallback(async () => {
-    const { data, error: err } = await supabase
-      .from('players')
-      .select('*')
-      .order('joined_at', { ascending: true });
+    let q = supabase.from('players').select('*').order('joined_at', { ascending: true });
+    if (locationId) q = q.eq('location_id', locationId);
+    const { data, error: err } = await q;
     if (err) {
       console.error('Supabase error:', err);
       addNotification('Erro ao carregar lista. Verifique as permissões.', 'error', { showToastForMs: 5000 });
       return;
     }
     setPlayers((data ?? []) as Player[]);
-  }, []);
+  }, [locationId]);
 
   const fetchStats = useCallback(async () => {
-    const { data, error: err } = await supabase.from('stats').select('*');
+    let q = supabase.from('stats').select('*');
+    if (locationId) q = q.eq('location_id', locationId);
+    const { data, error: err } = await q;
     if (err) {
       console.error('Supabase stats error:', err);
       return;
@@ -311,10 +326,11 @@ export default function App() {
   }, []);
 
   const fetchSession = useCallback(async () => {
+    const sessionId = locationId ?? 'current';
     const { data, error: err } = await supabase
       .from('session')
       .select('*')
-      .eq('id', 'current')
+      .eq('id', sessionId)
       .single();
     if (err && err.code !== 'PGRST116') {
       console.error('Session error:', err);
@@ -330,9 +346,9 @@ export default function App() {
       });
       setTimerStartedOnce(!!data.timer_started_once);
     } else {
-      await supabase.from('session').upsert({ id: 'current', is_started: false });
+      await supabase.from('session').upsert({ id: sessionId, is_started: false, ...(locationId ? { location_id: locationId } : {}) });
     }
-  }, []);
+  }, [locationId]);
 
   const fetchPartidaSessao = useCallback(async (partidaSessaoId: string | null) => {
     if (!partidaSessaoId) {
@@ -357,13 +373,13 @@ export default function App() {
       setShowWinnerModal('team1');
       const now = new Date().toISOString();
       setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
-      const { error: updErr } = await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', 'current');
+      const { error: updErr } = await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', locationId ?? 'current');
       if (updErr) console.warn('Session update (timer stop):', updErr.message);
     } else if (t2 >= 12) {
       setShowWinnerModal('team2');
       const now = new Date().toISOString();
       setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
-      const { error: updErr } = await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', 'current');
+      const { error: updErr } = await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', locationId ?? 'current');
       if (updErr) console.warn('Session update (timer stop):', updErr.message);
     } else {
       setShowWinnerModal(null);
@@ -612,9 +628,9 @@ export default function App() {
       return;
     repairPartidaRef.current = true;
     (async () => {
-      const { data: novaPartida, error } = await supabase.from('partida_sessoes').insert({}).select('id').single();
+      const { data: novaPartida, error } = await supabase.from('partida_sessoes').insert(locationId ? { location_id: locationId } : {}).select('id').single();
       if (!error && novaPartida?.id) {
-        await supabase.from('session').update({ current_partida_sessao_id: novaPartida.id }).eq('id', 'current');
+        await supabase.from('session').update({ current_partida_sessao_id: novaPartida.id }).eq('id', locationId ?? 'current');
         setCurrentPartidaSessaoId(novaPartida.id);
         fetchPartidaSessao(novaPartida.id);
       }
@@ -674,6 +690,10 @@ export default function App() {
   const addPlayerAsRegistered = async () => {
     if (!canAddToList || !userProfile?.display_name?.trim() || isGuest) return;
 
+    if (maxPlayers != null && players.length >= maxPlayers) {
+      addNotification(`Limite de ${maxPlayers} atletas atingido para este evento.`, 'warning', { showToastForMs: 5000 });
+      return;
+    }
     const canAdd = isMatchStarted || waitingList.length < 10;
     if (!canAdd) return;
 
@@ -701,6 +721,7 @@ export default function App() {
           name: userProfile.display_name.trim(),
           status,
           user_id: userProfile.id,
+          ...(locationId ? { location_id: locationId } : {}),
         })
         .select()
         .single();
@@ -723,6 +744,10 @@ export default function App() {
     const name = unregisteredAddName.trim();
     if (!name) return;
 
+    if (maxPlayers != null && players.length >= maxPlayers) {
+      addNotification(`Limite de ${maxPlayers} atletas atingido para este evento.`, 'warning', { showToastForMs: 5000 });
+      return;
+    }
     const canAdd = isMatchStarted || waitingList.length < 10;
     if (!canAdd) {
       addNotification('A fila está cheia. Aguarde a partida começar.', 'warning', { showToastForMs: 5000 });
@@ -748,7 +773,7 @@ export default function App() {
 
       const { data: newPlayer, error: err } = await supabase
         .from('players')
-        .insert({ name, status, user_id: null })
+        .insert({ name, status, user_id: null, ...(locationId ? { location_id: locationId } : {}) })
         .select()
         .single();
 
@@ -771,6 +796,10 @@ export default function App() {
     const name = adminAddName.trim();
     if (!name) return;
 
+    if (maxPlayers != null && players.length >= maxPlayers) {
+      addNotification(`Limite de ${maxPlayers} atletas atingido para este evento.`, 'warning', { showToastForMs: 5000 });
+      return;
+    }
     const canAdd = isMatchStarted || waitingList.length < 10;
     if (!canAdd) {
       addNotification('A fila está cheia. Aguarde a partida começar.', 'warning', { showToastForMs: 5000 });
@@ -799,7 +828,7 @@ export default function App() {
 
       const { data: newPlayer, error: err } = await supabase
         .from('players')
-        .insert({ name, status, user_id: resolvedUserId })
+        .insert({ name, status, user_id: resolvedUserId, ...(locationId ? { location_id: locationId } : {}) })
         .select()
         .single();
 
@@ -858,11 +887,15 @@ export default function App() {
     }
   }, [statsModalPlayer]);
 
-  const handleMoveAttempt = (playerId: string, direction: 'up' | 'down') => {
+  const handleMoveAttempt = async (playerId: string, direction: 'up' | 'down') => {
     if (!isAdminMode) return;
-    setShowPasswordModal({ type: 'MOVE', moveInfo: { playerId, direction } });
-    setPasswordInput('');
-    setPasswordError(false);
+    const currentIndex = waitingList.findIndex((p) => p.id === playerId);
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= waitingList.length) return;
+    const currentPlayer = waitingList[currentIndex];
+    const targetPlayer = waitingList[targetIndex];
+    await supabase.from('players').update({ joined_at: targetPlayer.joined_at }).eq('id', currentPlayer.id);
+    await supabase.from('players').update({ joined_at: currentPlayer.joined_at }).eq('id', targetPlayer.id);
   };
 
   const handleRemoveAttempt = (playerId: string) => {
@@ -951,7 +984,7 @@ export default function App() {
             timer_last_sync_at: now,
             timer_started_once: true,
           })
-          .eq('id', 'current');
+          .eq('id', locationId ?? 'current');
         setTimerState({ timerSeconds: currentSeconds, timerRunning: true, timerLastSyncAt: now });
         setTimerStartedOnce(true);
       }
@@ -971,7 +1004,7 @@ export default function App() {
       await supabase
         .from('session')
         .update({ timer_seconds: baseSeconds, timer_running: false, timer_last_sync_at: now })
-        .eq('id', 'current');
+        .eq('id', locationId ?? 'current');
       setTimerState({ timerSeconds: baseSeconds, timerRunning: false, timerLastSyncAt: now });
     } catch (err) {
       console.error('Error pausing timer:', err);
@@ -991,21 +1024,20 @@ export default function App() {
       await supabase
         .from('session')
         .update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now })
-        .eq('id', 'current');
+        .eq('id', locationId ?? 'current');
       setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
     } catch (err) {
       console.error('Error stopping timer:', err);
     }
   }, []);
 
-  const pointsBlockedByTimer = waitingList.length >= 10 && !timerStartedOnce;
+  // Timer desconectado da lista — pointsBlockedByTimer mantido para referência futura
+  const pointsBlockedByTimer = false; // TODO: reativar quando cronômetro for reintegrado
   const pointsBlockedByTeams = isMatchStarted && (team1.length < 5 || team2.length < 5);
   const pointsBlocked = pointsBlockedByTimer || pointsBlockedByTeams;
-  const pointsBlockedMessage = pointsBlockedByTimer
-    ? (isAdminMode ? 'Inicie o cronômetro para liberar a atribuição de pontos.' : 'Aguardando início da partida.')
-    : pointsBlockedByTeams
-      ? 'Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.'
-      : '';
+  const pointsBlockedMessage = pointsBlockedByTeams
+    ? 'Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.'
+    : '';
 
   const addPlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists') => {
     if (pointsBlocked) return;
@@ -1058,8 +1090,8 @@ export default function App() {
             blocks: stat === 'blocks' ? 1 : 0,
             steals: stat === 'steals' ? 1 : 0,
             clutch_points: 0,
+            ...(locationId ? { location_id: locationId } : {}),
           };
-          // só inclui assists se a stat for assist (evita 400 se a coluna não existir ainda)
           if (stat === 'assists') base.assists = 1;
           const { error: insErr } = await supabase.from('stats').insert(base);
           if (insErr) throw insErr;
@@ -1081,7 +1113,7 @@ export default function App() {
             .single();
           if (!insErr && novaPartida?.id) {
             partidaId = novaPartida.id;
-            await supabase.from('session').update({ current_partida_sessao_id: partidaId }).eq('id', 'current');
+            await supabase.from('session').update({ current_partida_sessao_id: partidaId }).eq('id', locationId ?? 'current');
             setCurrentPartidaSessaoId(partidaId);
           }
         }
@@ -1206,6 +1238,7 @@ export default function App() {
             blocks: 0,
             steals: 0,
             clutch_points: 0,
+            ...(locationId ? { location_id: locationId } : {}),
           });
         }
       }
@@ -1413,7 +1446,7 @@ export default function App() {
         await supabase
           .from('session')
           .update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now })
-          .eq('id', 'current');
+          .eq('id', locationId ?? 'current');
         setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
       } else if (showPasswordModal.type === 'CLEAR_MOCK') {
         await supabase.from('session').update({
@@ -1424,7 +1457,7 @@ export default function App() {
           timer_running: false,
           timer_last_sync_at: null,
           timer_started_once: false,
-        }).eq('id', 'current');
+        }).eq('id', locationId ?? 'current');
         await supabase.from('partida_sessoes').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         await supabase.from('players').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         // Stats de jogadores rankeados são preservadas
@@ -1452,7 +1485,7 @@ export default function App() {
             timer_last_sync_at: null,
             timer_started_once: false,
           })
-          .eq('id', 'current');
+          .eq('id', locationId ?? 'current');
 
         setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: null });
         setTimerStartedOnce(false);
@@ -1475,11 +1508,34 @@ export default function App() {
   };
 
   const resetQueue = async () => {
-    if (!window.confirm('Tem certeza que deseja resetar toda a lista?')) return;
+    if (!window.confirm('Resetar os times? Todos os jogadores dos times voltam para a lista de espera.')) return;
     try {
-      for (const p of players) {
-        await supabase.from('players').delete().eq('id', p.id);
+      const teamPlayers = players.filter((p) => p.status === 'team1' || p.status === 'team2');
+      if (teamPlayers.length === 0) {
+        addNotification('Nenhum jogador nos times para resetar.', 'info', { showToastForMs: 3000 });
+        return;
       }
+      const lastWaiting = waitingList.length > 0
+        ? Math.max(...waitingList.map((p) => new Date(p.joined_at).getTime()))
+        : Date.now() - 60000;
+      for (let i = 0; i < teamPlayers.length; i++) {
+        const joinedAt = new Date(lastWaiting + (i + 1) * 1000).toISOString();
+        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', teamPlayers[i].id);
+      }
+      await supabase.from('session').update({
+        is_started: false,
+        current_partida_sessao_id: null,
+        timer_seconds: 0,
+        timer_running: false,
+        timer_last_sync_at: null,
+        timer_started_once: false,
+      }).eq('id', locationId ?? 'current');
+      setIsMatchStarted(false);
+      setCurrentPartidaSessaoId(null);
+      setTeam1MatchPoints(0);
+      setTeam2MatchPoints(0);
+      setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: null });
+      setTimerStartedOnce(false);
     } catch (err) {
       console.error('Error resetting queue:', err);
       addNotification('Erro ao resetar lista.', 'error', { showToastForMs: 5000 });
@@ -2091,46 +2147,42 @@ export default function App() {
               </div>
             )}
             {!canSeeList ? (
-              <div
-                className={cn(
-                  'rounded-2xl border p-6 shadow-xl space-y-4',
-                  darkMode ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'
+              <div className={cn('rounded-2xl border p-6 shadow-xl space-y-4', darkMode ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-200')}>
+                {/* Partida ainda não iniciada pelo admin */}
+                {isWithinRadius !== false && !isMatchStarted && (
+                  <div className="flex flex-col items-center text-center gap-3 py-4">
+                    <div className={cn('w-14 h-14 rounded-2xl flex items-center justify-center', darkMode ? 'bg-orange-500/10' : 'bg-orange-100')}>
+                      <Timer className={cn('w-7 h-7', darkMode ? 'text-orange-400' : 'text-orange-600')} />
+                    </div>
+                    <p className={cn('font-bold text-base', darkMode ? 'text-white' : 'text-slate-800')}>
+                      Aguardando o administrador
+                    </p>
+                    <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                      A lista será liberada quando o administrador iniciar a partida.
+                    </p>
+                  </div>
                 )}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <MapPin className={cn('w-8 h-8 shrink-0', darkMode ? 'text-orange-400' : 'text-orange-600')} />
-                  <p className={cn('font-medium', darkMode ? 'text-slate-300' : 'text-slate-700')}>
-                    Você está fora do local. Aproxime-se da quadra para ver a lista e entrar na fila.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div
-                    className={cn(
-                      'p-4 rounded-xl border text-center',
-                      darkMode ? 'bg-slate-800/50 border-slate-600' : 'bg-white border-slate-200'
-                    )}
-                  >
-                    <p className={cn('text-2xl font-black', darkMode ? 'text-white' : 'text-slate-900')}>
-                      {team1.length + team2.length}
-                    </p>
-                    <p className={cn('text-xs font-medium mt-1', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-                      Jogadores em quadra
-                    </p>
-                  </div>
-                  <div
-                    className={cn(
-                      'p-4 rounded-xl border text-center',
-                      darkMode ? 'bg-slate-800/50 border-slate-600' : 'bg-white border-slate-200'
-                    )}
-                  >
-                    <p className={cn('text-2xl font-black', darkMode ? 'text-white' : 'text-slate-900')}>
-                      {waitingList.length}
-                    </p>
-                    <p className={cn('text-xs font-medium mt-1', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-                      Na fila de espera
-                    </p>
-                  </div>
-                </div>
+                {/* Fora do raio geográfico */}
+                {isWithinRadius === false && (
+                  <>
+                    <div className="flex items-center gap-3 mb-4">
+                      <MapPin className={cn('w-8 h-8 shrink-0', darkMode ? 'text-orange-400' : 'text-orange-600')} />
+                      <p className={cn('font-medium', darkMode ? 'text-slate-300' : 'text-slate-700')}>
+                        Você está fora do local. Aproxime-se da quadra para ver a lista e entrar na fila.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className={cn('p-4 rounded-xl border text-center', darkMode ? 'bg-slate-800/50 border-slate-600' : 'bg-white border-slate-200')}>
+                        <p className={cn('text-2xl font-black', darkMode ? 'text-white' : 'text-slate-900')}>{team1.length + team2.length}</p>
+                        <p className={cn('text-xs font-medium mt-1', darkMode ? 'text-slate-400' : 'text-slate-500')}>Jogadores em quadra</p>
+                      </div>
+                      <div className={cn('p-4 rounded-xl border text-center', darkMode ? 'bg-slate-800/50 border-slate-600' : 'bg-white border-slate-200')}>
+                        <p className={cn('text-2xl font-black', darkMode ? 'text-white' : 'text-slate-900')}>{waitingList.length}</p>
+                        <p className={cn('text-xs font-medium mt-1', darkMode ? 'text-slate-400' : 'text-slate-500')}>Na fila de espera</p>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
             <div
@@ -2726,7 +2778,7 @@ export default function App() {
       <AnimatePresence>
         {showAdminGestao && (
           <GestaoAdmin
-            stats={stats}
+            stats={stats as Parameters<typeof GestaoAdmin>[0]['stats']}
             userAvatars={userAvatars}
             darkMode={darkMode}
             onClose={() => setShowAdminGestao(false)}

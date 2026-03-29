@@ -84,12 +84,12 @@ async function syncUserToBasquete(user: User) {
   } else {
     const { data: insertedUser } = await supabase
       .from('basquete_users')
-      .insert({
-      auth_id: user.id,
-      email,
-      display_name: displayName,
-      updated_at: now,
-      })
+      .upsert({
+        auth_id: user.id,
+        email,
+        display_name: displayName,
+        updated_at: now,
+      }, { onConflict: 'email' })
       .select('id, display_name')
       .single();
 
