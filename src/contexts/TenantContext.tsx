@@ -96,19 +96,37 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { fetch(); }, [fetch]);
 
+  // Realtime: atualiza tenant imediatamente quando o backend confirmar pagamento
+  useEffect(() => {
+    if (!user || !tenant?.id) return;
+
+    const channel = supabase
+      .channel(`tenant-status:${tenant.id}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'tenants', filter: `id=eq.${tenant.id}` },
+        (payload) => {
+          const updated = payload.new as Omit<Tenant, 'plan'>;
+          setTenant((prev) => prev ? { ...prev, ...updated } : null);
+          // Se o plano mudou, re-fetch para carregar o plano novo
+          if (updated.plan_id !== tenant.plan_id) {
+            fetch();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [user, tenant?.id, tenant?.plan_id, fetch]);
+
   const isSubscriptionActive = (() => {
     if (!tenant) return false;
-    if (tenant.status === 'trial' && tenant.trial_ends_at) {
-      return new Date() < new Date(tenant.trial_ends_at);
+    if (tenant.status !== 'active') return false;
+    // Planos com expiração por tempo (avulso)
+    if (tenant.plan_id === 'avulso' && tenant.current_period_ends_at) {
+      return new Date() < new Date(tenant.current_period_ends_at);
     }
-    if (tenant.status === 'active') {
-      // Planos com expiração por tempo (avulso, teste)
-      if (['avulso', 'teste'].includes(tenant.plan_id) && tenant.current_period_ends_at) {
-        return new Date() < new Date(tenant.current_period_ends_at);
-      }
-      return true;
-    }
-    return false;
+    return true;
   })();
 
   const canAddLocation =

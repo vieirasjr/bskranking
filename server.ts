@@ -35,19 +35,16 @@ const PLAN_NAMES: Record<string, string> = {
   profissional: "Basquete Next - Plano Profissional",
   enterprise:   "Basquete Next - Plano Enterprise",
   avulso:       "Basquete Next - Evento Avulso",
-  teste:        "Basquete Next - Plano Teste",
 };
 const PLAN_PRICES: Record<string, number> = {
   basico: 100,
   profissional: 150,
   enterprise: 200,
   avulso: 50,
-  teste: 1,
 };
 // Planos com expiração por tempo (horas) em vez de ciclo mensal
 const PLAN_EXPIRY_HOURS: Record<string, number> = {
   avulso: 72,
-  teste: 1,
 };
 
 async function mpFetch(path: string, options: RequestInit = {}) {
@@ -431,29 +428,39 @@ async function startServer() {
     res.status(200).json({ ok: true });
 
     try {
-      const { type, data } = req.body as { type: string; data: { id: string } };
+      // MP envia type/data.id tanto no body quanto na query string — usa os dois
+      const type: string = req.body?.type ?? req.query.type;
+      const paymentId: string = req.body?.data?.id ?? req.query["data.id"];
 
-      if (type === "payment") {
-        // Checkout Pro — pagamento aprovado/rejeitado
-        const mpRes = await mpFetch(`/v1/payments/${data.id}`);
+      console.log(`Webhook recebido: type=${type} paymentId=${paymentId}`);
+
+      if (type === "payment" && paymentId) {
+        // Pagamento aprovado/rejeitado
+        const mpRes = await mpFetch(`/v1/payments/${paymentId}`);
         const payment = await mpRes.json() as Record<string, unknown>;
 
         const externalRef = (payment.external_reference as string) ?? "";
         const [tenantId, planId] = externalRef.split("|");
-        if (!tenantId) return;
+        if (!tenantId) { console.log("Webhook: external_reference vazio, ignorando."); return; }
 
-        // Calcula próxima cobrança (30 dias a partir de hoje)
-        const nextCharge = new Date();
-        nextCharge.setDate(nextCharge.getDate() + 30);
+        console.log(`Webhook payment ${paymentId}: status=${payment.status} tenant=${tenantId} plan=${planId}`);
 
         if (payment.status === "approved") {
+          const expiryHours = planId ? PLAN_EXPIRY_HOURS[planId] : undefined;
+          const periodEnd = new Date();
+          if (expiryHours) {
+            periodEnd.setHours(periodEnd.getHours() + expiryHours);
+          } else {
+            periodEnd.setDate(periodEnd.getDate() + 30);
+          }
           await getSupabaseAdmin().from("tenants").update({
             status: "active",
             plan_id: planId ?? undefined,
             mp_payer_id: String((payment.payer as Record<string, unknown>)?.id ?? ""),
-            current_period_ends_at: nextCharge.toISOString(),
+            current_period_ends_at: periodEnd.toISOString(),
             updated_at: new Date().toISOString(),
           }).eq("id", tenantId);
+          console.log(`Webhook: tenant ${tenantId} ativado com plano ${planId}`);
         } else if (payment.status === "rejected" || payment.status === "cancelled") {
           await getSupabaseAdmin().from("tenants").update({
             status: "past_due",
@@ -463,7 +470,7 @@ async function startServer() {
 
         await getSupabaseAdmin().from("subscription_events").insert({
           tenant_id: tenantId,
-          mp_payment_id: String(payment.id ?? data.id),
+          mp_payment_id: String(payment.id ?? paymentId),
           mp_status: payment.status as string,
           mp_type: type,
           raw_payload: payment,

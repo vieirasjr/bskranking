@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../supabase';
 
 const PLAN_NAMES: Record<string, string> = {
+  avulso: 'Evento Avulso — R$50/evento',
   basico: 'Básico — R$100/mês',
   profissional: 'Profissional — R$150/mês',
   enterprise: 'Enterprise — R$200/mês',
@@ -74,14 +75,14 @@ export default function CadastroAdmin() {
       const { data: userData } = await supabase.auth.getUser();
       if (!userData.user) { setError('Sessão expirada. Faça login novamente.'); return; }
 
-      // Criar tenant
+      // Criar tenant (cancelado até pagar)
       const { data: tenant, error: tErr } = await supabase
         .from('tenants')
         .insert({
           owner_auth_id: userData.user.id,
           plan_id: selectedPlan,
           name: tenantName.trim(),
-          status: 'trial',
+          status: 'cancelled',
         })
         .select('id')
         .single();
@@ -107,7 +108,8 @@ export default function CadastroAdmin() {
         return;
       }
 
-      navigate('/dashboard');
+      // Redireciona para checkout — ativar plano antes de usar
+      navigate(`/dashboard/checkout/${selectedPlan}`);
     } finally {
       setLoading(false);
     }
@@ -225,7 +227,7 @@ export default function CadastroAdmin() {
                   <button type="submit" disabled={loading}
                     className="flex-1 py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white transition-all disabled:opacity-50 flex items-center justify-center gap-2">
                     {loading ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : null}
-                    Criar e ir para o painel
+                    Criar e escolher plano
                   </button>
                 </div>
               </form>

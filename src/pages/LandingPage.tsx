@@ -1,12 +1,31 @@
 import { useNavigate } from 'react-router-dom';
-import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield } from 'lucide-react';
+import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield, Calendar } from 'lucide-react';
 import { motion } from 'motion/react';
 
 const PLANS = [
   {
+    id: 'avulso',
+    name: 'Evento Avulso',
+    price: 50,
+    period: 'evento',
+    players: 20,
+    locations: 1,
+    features: [
+      '20 jogadores no ranking',
+      '1 local de partidas',
+      'Link público exclusivo',
+      'Fila automática',
+      'Placar ao vivo',
+      'Acesso por 72 horas',
+    ],
+    highlight: false,
+    badge: 'Evento único',
+  },
+  {
     id: 'basico',
     name: 'Básico',
     price: 100,
+    period: 'mês',
     players: 30,
     locations: 1,
     features: [
@@ -24,6 +43,7 @@ const PLANS = [
     id: 'profissional',
     name: 'Profissional',
     price: 150,
+    period: 'mês',
     players: 60,
     locations: 2,
     features: [
@@ -42,6 +62,7 @@ const PLANS = [
     id: 'enterprise',
     name: 'Enterprise',
     price: 200,
+    period: 'mês',
     players: null,
     locations: null,
     features: [
@@ -95,12 +116,11 @@ export default function LandingPage() {
             Cada local tem sua própria URL pública — compartilhe com seus jogadores.
           </p>
           <button
-            onClick={() => navigate('/cadastro')}
+            onClick={() => document.getElementById('precos')?.scrollIntoView({ behavior: 'smooth' })}
             className="px-8 py-4 rounded-2xl font-bold bg-orange-500 hover:bg-orange-600 text-white text-lg transition-all shadow-xl shadow-orange-500/25 hover:shadow-orange-500/40"
           >
-            Começar grátis por 7 dias
+            Ver planos e preços
           </button>
-          <p className="text-slate-500 text-sm mt-3">Sem cartão de crédito para o trial</p>
         </motion.div>
       </section>
 
@@ -124,14 +144,49 @@ export default function LandingPage() {
       </section>
 
       {/* Pricing */}
-      <section className="px-6 pb-28 max-w-5xl mx-auto" id="precos">
+      <section className="px-6 pb-28 max-w-6xl mx-auto" id="precos">
         <div className="text-center mb-12">
           <h2 className="text-3xl font-black mb-3">Planos e preços</h2>
-          <p className="text-slate-400">Cobrança mensal recorrente. Cancele quando quiser.</p>
+          <p className="text-slate-400">Para um evento ou uso contínuo — escolha o que faz sentido para você.</p>
         </div>
 
+        {/* Avulso destacado */}
+        <div className="mb-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="relative flex flex-col sm:flex-row items-start sm:items-center justify-between rounded-2xl border border-slate-700 bg-slate-900/60 p-6 gap-4"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-orange-500/10 rounded-xl flex items-center justify-center shrink-0">
+                <Calendar className="w-5 h-5 text-orange-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="font-bold text-white">Evento Avulso</p>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">Evento único</span>
+                </div>
+                <p className="text-slate-400 text-sm mt-0.5">20 jogadores · 1 local · acesso por 72 horas</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-6">
+              <div>
+                <span className="text-3xl font-black text-white">R$50</span>
+                <span className="text-slate-400 text-sm ml-1">/ evento</span>
+              </div>
+              <button
+                onClick={() => navigate('/cadastro?plano=avulso')}
+                className="px-5 py-2.5 rounded-xl font-bold bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 transition-all whitespace-nowrap"
+              >
+                Assinar agora
+              </button>
+            </div>
+          </motion.div>
+        </div>
+
+        {/* Planos mensais */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 items-stretch">
-          {PLANS.map((plan) => (
+          {PLANS.filter(p => p.period === 'mês').map((plan) => (
             <motion.div
               key={plan.id}
               initial={{ opacity: 0, y: 20 }}
@@ -181,7 +236,7 @@ export default function LandingPage() {
                     : 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-700'
                 }`}
               >
-                Começar trial grátis
+                Assinar agora
               </button>
             </motion.div>
           ))}

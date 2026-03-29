@@ -5,7 +5,6 @@ import { useTenant } from '../../contexts/TenantContext';
 import { useAuth } from '../../contexts/AuthContext';
 
 const PLANS = [
-  { id: 'teste',        name: 'Teste',          price: 1,   players: 20,   locations: 1,    note: '1h · teste de pagamento' },
   { id: 'avulso',       name: 'Evento Avulso', price: 50,  players: 20,   locations: 1,    note: '72h · evento único' },
   { id: 'basico',       name: 'Básico',         price: 100, players: 30,   locations: 1,    note: 'mensal' },
   { id: 'profissional', name: 'Profissional',   price: 150, players: 60,   locations: 2,    note: 'mensal' },
@@ -14,9 +13,8 @@ const PLANS = [
 
 const STATUS_INFO: Record<string, { label: string; color: string; bg: string }> = {
   active:    { label: 'Assinatura ativa',       color: 'text-green-400',  bg: 'bg-green-500/10 border-green-500/20' },
-  trial:     { label: 'Trial gratuito',         color: 'text-blue-400',   bg: 'bg-blue-500/10 border-blue-500/20' },
   past_due:  { label: 'Pagamento pendente',     color: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/20' },
-  cancelled: { label: 'Assinatura cancelada',   color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20' },
+  cancelled: { label: 'Sem assinatura ativa — escolha um plano abaixo', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20' },
 };
 
 export default function DashboardAssinatura() {
@@ -99,11 +97,6 @@ export default function DashboardAssinatura() {
             {tenant?.current_period_ends_at && (
               <p className="text-xs text-slate-400 mt-0.5">
                 Próxima cobrança: {new Date(tenant.current_period_ends_at).toLocaleDateString('pt-BR')}
-              </p>
-            )}
-            {tenant?.trial_ends_at && tenant.status === 'trial' && (
-              <p className="text-xs text-slate-400 mt-0.5">
-                Trial expira em: {new Date(tenant.trial_ends_at).toLocaleDateString('pt-BR')}
               </p>
             )}
           </div>
