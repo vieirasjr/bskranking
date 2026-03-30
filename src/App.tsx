@@ -400,9 +400,9 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   useEffect(() => {
     if (isGuest && activeTab === 'inicio' && !shownVisitanteRef.current) {
       shownVisitanteRef.current = true;
-      addNotification('Você está como visitante. Cadastre-se para participar do ranking e ter sua tela de perfil.', 'warning', {
-        showToastForMs: 5000,
-        action: { type: 'leave_guest_mode', label: 'Cadastrar' },
+      addNotification('Você está como visitante. Entre ou cadastre-se para participar do ranking.', 'warning', {
+        showToastForMs: 6000,
+        action: { type: 'leave_guest_mode', label: 'Entrar / Cadastrar' },
       });
     }
   }, [isGuest, activeTab, addNotification]);
@@ -2639,18 +2639,32 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                     <User className={cn('w-10 h-10', darkMode ? 'text-slate-500' : 'text-slate-400')} />
                   </div>
                   <h2 className={cn('text-xl font-bold mb-2', darkMode ? 'text-white' : 'text-slate-900')}>
-                    Cadastre-se para acessar seu perfil
+                    Você está como visitante
                   </h2>
                   <p className={cn('text-sm mb-6 max-w-sm mx-auto', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-                    Com uma conta você participa do ranking, tem sua tela de perfil personalizada e acompanha suas estatísticas.
+                    Entre ou cadastre-se para participar do ranking, ter seu perfil personalizado e acompanhar suas estatísticas.
                   </p>
-                  <button
-                    onClick={leaveGuestMode}
-                    className="px-6 py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white transition-all flex items-center justify-center gap-2 mx-auto"
-                  >
-                    <UserPlus className="w-5 h-5" />
-                    Fazer cadastro
-                  </button>
+                  <div className="flex gap-3 justify-center">
+                    <button
+                      onClick={leaveGuestMode}
+                      className={cn(
+                        'flex-1 max-w-[160px] px-5 py-3 rounded-xl font-bold border transition-all flex items-center justify-center gap-2',
+                        darkMode
+                          ? 'border-slate-600 bg-slate-800 hover:bg-slate-700 text-white'
+                          : 'border-slate-300 bg-white hover:bg-slate-50 text-slate-800'
+                      )}
+                    >
+                      <User className="w-4 h-4" />
+                      Entrar
+                    </button>
+                    <button
+                      onClick={leaveGuestMode}
+                      className="flex-1 max-w-[160px] px-5 py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white transition-all flex items-center justify-center gap-2"
+                    >
+                      <UserPlus className="w-4 h-4" />
+                      Cadastrar
+                    </button>
+                  </div>
                 </div>
               </>
             ) : (
