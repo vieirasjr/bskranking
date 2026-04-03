@@ -41,7 +41,6 @@ import { useAuth } from './contexts/AuthContext';
 import EditarPerfil from './pages/EditarPerfil';
 import GestaoAdmin from './pages/GestaoAdmin';
 import PerfilDetalhe from './pages/PerfilDetalhe';
-import { MatchTimer, type TimerState } from './components/MatchTimer';
 import { NotificationsPanel } from './components/NotificationsPanel';
 import { useLocationCheck } from './hooks/useLocationCheck';
 import { useNotifications } from './contexts/NotificationContext';
@@ -175,15 +174,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   const [team1MatchPoints, setTeam1MatchPoints] = useState(0);
   const [team2MatchPoints, setTeam2MatchPoints] = useState(0);
   const [showWinnerModal, setShowWinnerModal] = useState<'team1' | 'team2' | null>(null);
-  const [showTimeoutModal, setShowTimeoutModal] = useState(false);
   const [isStartingNextMatch, setIsStartingNextMatch] = useState(false);
-  const [isProcessingTimeout, setIsProcessingTimeout] = useState(false);
-  const [timerState, setTimerState] = useState<TimerState>({
-    timerSeconds: 0,
-    timerRunning: false,
-    timerLastSyncAt: null,
-  });
-  const [timerStartedOnce, setTimerStartedOnce] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null; player_code: string | null } | null>(null);
   const [adminAddName, setAdminAddName] = useState('');
@@ -339,12 +330,6 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     if (data) {
       setIsMatchStarted(data.is_started);
       setCurrentPartidaSessaoId(data.current_partida_sessao_id ?? null);
-      setTimerState({
-        timerSeconds: (data.timer_seconds ?? 0) as number,
-        timerRunning: !!data.timer_running,
-        timerLastSyncAt: data.timer_last_sync_at as string | null,
-      });
-      setTimerStartedOnce(!!data.timer_started_once);
     } else {
       await supabase.from('session').upsert({ id: sessionId, is_started: false, ...(locationId ? { location_id: locationId } : {}) });
     }
@@ -371,16 +356,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     setTeam2MatchPoints(t2);
     if (t1 >= 12) {
       setShowWinnerModal('team1');
-      const now = new Date().toISOString();
-      setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
-      const { error: updErr } = await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', locationId ?? 'current');
-      if (updErr) console.warn('Session update (timer stop):', updErr.message);
     } else if (t2 >= 12) {
       setShowWinnerModal('team2');
-      const now = new Date().toISOString();
-      setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
-      const { error: updErr } = await supabase.from('session').update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now }).eq('id', locationId ?? 'current');
-      if (updErr) console.warn('Session update (timer stop):', updErr.message);
     } else {
       setShowWinnerModal(null);
     }
@@ -858,7 +835,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   };
 
   const [showPasswordModal, setShowPasswordModal] = useState<{
-    type: 'MOVE' | 'REMOVE' | 'START_MATCH' | 'END_MATCH' | 'ADMIN_ACTIVATE' | 'RESET_TIMER' | 'CLEAR_MOCK';
+    type: 'MOVE' | 'REMOVE' | 'START_MATCH' | 'END_MATCH' | 'ADMIN_ACTIVATE' | 'CLEAR_MOCK';
     moveInfo?: { playerId: string; direction: 'up' | 'down' };
     removeInfo?: { playerId: string };
   } | null>(null);
@@ -932,109 +909,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     setPasswordError(false);
   };
 
-  const handleTimerStart = async () => {
-    if (!isAdminMode) return;
-
-    if (isMatchStarted && (team1.length < 5 || team2.length < 5)) {
-      addNotification('O cronômetro só pode ser iniciado com jogadores nos dois times (5 em cada).', 'warning', { showToastForMs: 5000 });
-      return;
-    }
-
-    const now = new Date().toISOString();
-    try {
-      if (waitingList.length >= 10 && !isMatchStarted) {
-        const next10 = waitingList.slice(0, 10);
-        for (let i = 0; i < 5 && next10[i]; i++) {
-          await supabase.from('players').update({ status: 'team1' }).eq('id', next10[i].id);
-        }
-        for (let i = 5; i < 10 && next10[i]; i++) {
-          await supabase.from('players').update({ status: 'team2' }).eq('id', next10[i].id);
-        }
-
-        const { data: partidaSessao, error: insertErr } = await supabase
-          .from('partida_sessoes')
-          .insert({})
-          .select('id')
-          .single();
-        if (insertErr) throw insertErr;
-        await supabase.from('session').upsert({
-          id: 'current',
-          is_started: true,
-          started_at: now,
-          current_partida_sessao_id: partidaSessao?.id,
-          timer_seconds: 0,
-          timer_running: true,
-          timer_last_sync_at: now,
-          timer_started_once: true,
-        });
-        setIsMatchStarted(true);
-        setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
-        setTimerState({ timerSeconds: 0, timerRunning: true, timerLastSyncAt: now });
-        setTimerStartedOnce(true);
-        await fetchPlayers();
-      } else if (isMatchStarted) {
-        const currentSeconds = timerState.timerRunning
-          ? timerState.timerSeconds + Math.floor((Date.now() - new Date(timerState.timerLastSyncAt!).getTime()) / 1000)
-          : timerState.timerSeconds;
-        await supabase
-          .from('session')
-          .update({
-            timer_seconds: currentSeconds,
-            timer_running: true,
-            timer_last_sync_at: now,
-            timer_started_once: true,
-          })
-          .eq('id', locationId ?? 'current');
-        setTimerState({ timerSeconds: currentSeconds, timerRunning: true, timerLastSyncAt: now });
-        setTimerStartedOnce(true);
-      }
-    } catch (err) {
-      console.error('Error starting timer:', err);
-      addNotification('Erro ao iniciar cronômetro.', 'error', { showToastForMs: 5000 });
-    }
-  };
-
-  const handleTimerPause = async () => {
-    if (!isAdminMode) return;
-    const now = new Date().toISOString();
-    const baseSeconds = timerState.timerLastSyncAt
-      ? timerState.timerSeconds + Math.floor((Date.now() - new Date(timerState.timerLastSyncAt).getTime()) / 1000)
-      : timerState.timerSeconds;
-    try {
-      await supabase
-        .from('session')
-        .update({ timer_seconds: baseSeconds, timer_running: false, timer_last_sync_at: now })
-        .eq('id', locationId ?? 'current');
-      setTimerState({ timerSeconds: baseSeconds, timerRunning: false, timerLastSyncAt: now });
-    } catch (err) {
-      console.error('Error pausing timer:', err);
-    }
-  };
-
-  const handleTimerResetRequest = () => {
-    if (!isAdminMode) return;
-    setShowPasswordModal({ type: 'RESET_TIMER' });
-    setPasswordInput('');
-    setPasswordError(false);
-  };
-
-  const stopAndResetTimer = useCallback(async () => {
-    const now = new Date().toISOString();
-    try {
-      await supabase
-        .from('session')
-        .update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now })
-        .eq('id', locationId ?? 'current');
-      setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
-    } catch (err) {
-      console.error('Error stopping timer:', err);
-    }
-  }, []);
-
-  // Timer desconectado da lista — pointsBlockedByTimer mantido para referência futura
-  const pointsBlockedByTimer = false; // TODO: reativar quando cronômetro for reintegrado
   const pointsBlockedByTeams = isMatchStarted && (team1.length < 5 || team2.length < 5);
-  const pointsBlocked = pointsBlockedByTimer || pointsBlockedByTeams;
+  const pointsBlocked = pointsBlockedByTeams;
   const pointsBlockedMessage = pointsBlockedByTeams
     ? 'Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.'
     : '';
@@ -1145,11 +1021,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
             setTeam2MatchPoints(t2);
             addNotification(updErr.message || 'Erro ao atualizar placar.', 'error', { showToastForMs: 5000 });
           } else {
-            if (newT1 >= 12 || newT2 >= 12) await stopAndResetTimer();
             fetchPartidaSessao(partidaId);
           }
-        } else if (!partidaId) {
-          addNotification('Inicie o cronômetro para registrar pontos.', 'warning', { showToastForMs: 5000 });
         }
       }
       setStatsModalPlayer(null);
@@ -1252,105 +1125,6 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     }
   };
 
-  const handleTimerTimeout = useCallback(async () => {
-    if (
-      team1MatchPoints >= 12 ||
-      team2MatchPoints >= 12 ||
-      !isMatchStarted ||
-      !currentPartidaSessaoId ||
-      isProcessingTimeout
-    )
-      return;
-
-    const { data: partidaSessao } = await supabase
-      .from('partida_sessoes')
-      .select('timeout_at')
-      .eq('id', currentPartidaSessaoId)
-      .single();
-    if (partidaSessao?.timeout_at) return; // já processado por outro cliente
-
-    setIsProcessingTimeout(true);
-    setShowTimeoutModal(true);
-
-    try {
-      const firstTeam = team1MatchPoints >= team2MatchPoints ? team1 : team2;
-      const secondTeam = team1MatchPoints >= team2MatchPoints ? team2 : team1;
-
-      const lastInQueue =
-        waitingList.length > 0
-          ? Math.max(...waitingList.map((p) => new Date(p.joined_at).getTime()))
-          : Date.now() - 60000;
-
-      for (let i = 0; i < firstTeam.length; i++) {
-        const joinedAt = new Date(lastInQueue + (i + 1) * 1000).toISOString();
-        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', firstTeam[i].id);
-      }
-      const afterFirstTeam = lastInQueue + firstTeam.length * 1000 + 1000;
-      for (let i = 0; i < secondTeam.length; i++) {
-        const joinedAt = new Date(afterFirstTeam + (i + 1) * 1000).toISOString();
-        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', secondTeam[i].id);
-      }
-
-      await supabase
-        .from('partida_sessoes')
-        .update({ timeout_at: new Date().toISOString() })
-        .eq('id', currentPartidaSessaoId);
-
-      const { data: newPartidaSessao, error: insertErr } = await supabase
-        .from('partida_sessoes')
-        .insert({})
-        .select('id')
-        .single();
-      if (insertErr) throw insertErr;
-
-      const now = new Date().toISOString();
-      await supabase.from('session').upsert({
-        id: 'current',
-        is_started: true,
-        started_at: now,
-        current_partida_sessao_id: newPartidaSessao?.id,
-        timer_seconds: 0,
-        timer_running: false,
-        timer_last_sync_at: now,
-      });
-
-      setCurrentPartidaSessaoId(newPartidaSessao?.id ?? null);
-      setTeam1MatchPoints(0);
-      setTeam2MatchPoints(0);
-      setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
-      setShowWinnerModal(null);
-
-      await fetchPlayers();
-
-      const updated = await supabase.from('players').select('*').order('joined_at', { ascending: true });
-      const allPlayers = (updated.data ?? []) as Player[];
-      const next10 = allPlayers.filter((p) => p.status === 'waiting').slice(0, 10);
-      // Só forma times se houver exatamente 10 jogadores disponíveis (5 por time)
-      if (next10.length >= 10) {
-        for (let i = 0; i < 5; i++) {
-          await supabase.from('players').update({ status: 'team1' }).eq('id', next10[i].id);
-        }
-        for (let i = 5; i < 10; i++) {
-          await supabase.from('players').update({ status: 'team2' }).eq('id', next10[i].id);
-        }
-      }
-      await fetchPlayers();
-    } catch (err) {
-      console.error('Error processing timeout:', err);
-      addNotification('Erro ao processar timeout da partida.', 'error', { showToastForMs: 5000 });
-    } finally {
-      setIsProcessingTimeout(false);
-    }
-  }, [
-    team1MatchPoints,
-    team2MatchPoints,
-    isMatchStarted,
-    currentPartidaSessaoId,
-    isProcessingTimeout,
-    team1,
-    team2,
-    waitingList,
-  ]);
 
   const startNextMatchRef = useRef(startNextMatch);
   startNextMatchRef.current = startNextMatch;
@@ -1361,11 +1135,6 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     return () => clearTimeout(t);
   }, [showWinnerModal, isAdminMode]);
 
-  useEffect(() => {
-    if (!showTimeoutModal) return;
-    const t = setTimeout(() => setShowTimeoutModal(false), 3000);
-    return () => clearTimeout(t);
-  }, [showTimeoutModal]);
 
   const confirmAction = async () => {
     if (passwordInput !== ADMIN_PASSWORD) {
@@ -1441,22 +1210,11 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
         setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
         setTeam1MatchPoints(0);
         setTeam2MatchPoints(0);
-      } else if (showPasswordModal.type === 'RESET_TIMER') {
-        const now = new Date().toISOString();
-        await supabase
-          .from('session')
-          .update({ timer_seconds: 0, timer_running: false, timer_last_sync_at: now })
-          .eq('id', locationId ?? 'current');
-        setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: now });
       } else if (showPasswordModal.type === 'CLEAR_MOCK') {
         await supabase.from('session').update({
           is_started: false,
           started_at: null,
           current_partida_sessao_id: null,
-          timer_seconds: 0,
-          timer_running: false,
-          timer_last_sync_at: null,
-          timer_started_once: false,
         }).eq('id', locationId ?? 'current');
         await supabase.from('partida_sessoes').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         await supabase.from('players').delete().neq('id', '00000000-0000-0000-0000-000000000000');
@@ -1480,15 +1238,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
           .update({
             is_started: false,
             current_partida_sessao_id: null,
-            timer_seconds: 0,
-            timer_running: false,
-            timer_last_sync_at: null,
-            timer_started_once: false,
           })
           .eq('id', locationId ?? 'current');
-
-        setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: null });
-        setTimerStartedOnce(false);
 
         for (const p of players) {
           await supabase.from('players').delete().eq('id', p.id);
@@ -1515,6 +1266,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
         addNotification('Nenhum jogador nos times para resetar.', 'info', { showToastForMs: 3000 });
         return;
       }
+      // Enviar jogadores dos times para o final da fila
       const lastWaiting = waitingList.length > 0
         ? Math.max(...waitingList.map((p) => new Date(p.joined_at).getTime()))
         : Date.now() - 60000;
@@ -1522,20 +1274,47 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
         const joinedAt = new Date(lastWaiting + (i + 1) * 1000).toISOString();
         await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', teamPlayers[i].id);
       }
-      await supabase.from('session').update({
-        is_started: false,
-        current_partida_sessao_id: null,
-        timer_seconds: 0,
-        timer_running: false,
-        timer_last_sync_at: null,
-        timer_started_once: false,
-      }).eq('id', locationId ?? 'current');
-      setIsMatchStarted(false);
-      setCurrentPartidaSessaoId(null);
+
+      // Buscar fila atualizada e formar novos times se houver 10+ jogadores
+      const { data: updatedPlayers } = await supabase
+        .from('players')
+        .select('*')
+        .order('joined_at', { ascending: true });
+      const allWaiting = ((updatedPlayers ?? []) as Player[]).filter((p) => p.status === 'waiting');
+
+      if (allWaiting.length >= 10) {
+        const next10 = allWaiting.slice(0, 10);
+        for (let i = 0; i < 5; i++) {
+          await supabase.from('players').update({ status: 'team1' }).eq('id', next10[i].id);
+        }
+        for (let i = 5; i < 10; i++) {
+          await supabase.from('players').update({ status: 'team2' }).eq('id', next10[i].id);
+        }
+        const { data: partidaSessao, error: insertErr } = await supabase
+          .from('partida_sessoes')
+          .insert({})
+          .select('id')
+          .single();
+        if (insertErr) throw insertErr;
+        await supabase.from('session').upsert({
+          id: 'current',
+          is_started: true,
+          started_at: new Date().toISOString(),
+          current_partida_sessao_id: partidaSessao?.id,
+        });
+        setIsMatchStarted(true);
+        setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
+      } else {
+        await supabase.from('session').update({
+          is_started: false,
+          current_partida_sessao_id: null,
+        }).eq('id', locationId ?? 'current');
+        setIsMatchStarted(false);
+        setCurrentPartidaSessaoId(null);
+      }
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
-      setTimerState({ timerSeconds: 0, timerRunning: false, timerLastSyncAt: null });
-      setTimerStartedOnce(false);
+      await fetchPlayers();
     } catch (err) {
       console.error('Error resetting queue:', err);
       addNotification('Erro ao resetar lista.', 'error', { showToastForMs: 5000 });
@@ -1588,9 +1367,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                         ? 'Remover Jogador'
                         : showPasswordModal.type === 'START_MATCH'
                           ? 'Iniciar Partida'
-                          : showPasswordModal.type === 'RESET_TIMER'
-                            ? 'Zerar Cronômetro'
-                            : showPasswordModal.type === 'CLEAR_MOCK'
+                          : showPasswordModal.type === 'CLEAR_MOCK'
                               ? 'Limpar dados fictícios'
                               : 'Encerrar Partida'}
                 </h3>
@@ -1603,9 +1380,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                         ? 'Digite a senha para remover este jogador da lista.'
                         : showPasswordModal.type === 'START_MATCH'
                           ? 'Digite a senha para iniciar a sessão de partidas.'
-                          : showPasswordModal.type === 'RESET_TIMER'
-                            ? 'Digite a senha para zerar o cronômetro.'
-                            : showPasswordModal.type === 'CLEAR_MOCK'
+                          : showPasswordModal.type === 'CLEAR_MOCK'
                               ? 'Remove fila, ranking e partida. Senha para confirmar.'
                               : 'Digite a senha para encerrar a sessão de partidas.'}
                 </p>
@@ -1726,31 +1501,6 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
         )}
       </AnimatePresence>
 
-      {/* Modal de timeout (10 min sem 12 pontos) */}
-      <AnimatePresence>
-        {showTimeoutModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className={cn(
-                'border p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center',
-                darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
-              )}
-            >
-              <Timer className={cn('w-12 h-12 mx-auto mb-3', darkMode ? 'text-amber-400' : 'text-amber-500')} />
-              <h3 className={cn('text-lg font-bold mb-1', darkMode ? 'text-white' : 'text-slate-900')}>Timeout!</h3>
-              <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-                Ambas as equipes foram para a fila de espera.
-              </p>
-              {isProcessingTimeout && (
-                <p className={cn('text-xs mt-2', darkMode ? 'text-slate-500' : 'text-slate-400')}>Iniciando próxima partida...</p>
-              )}
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* Modal de estatísticas do jogador - otimizado para touch em mobile */}
       <AnimatePresence>
@@ -2102,48 +1852,11 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                 </button>
               </div>
             )}
-            {isMatchStarted && waitingList.length < 10 && !isAdminMode && (
-              <div
-                className={cn(
-                  'mb-6 p-4 rounded-2xl border flex items-center gap-3',
-                  darkMode ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-200'
-                )}
-              >
-                <Timer className={cn('w-8 h-8 shrink-0', darkMode ? 'text-slate-500' : 'text-slate-400')} />
-                <p className={cn('font-medium', darkMode ? 'text-slate-300' : 'text-slate-700')}>
-                  Próxima partida não haverá cronômetro.
+            {pointsBlocked && (
+              <div className={cn('mb-6')}>
+                <p className={cn('mt-2 text-sm', darkMode ? 'text-amber-400' : 'text-amber-600')}>
+                  {pointsBlockedMessage}
                 </p>
-              </div>
-            )}
-            {(waitingList.length >= 10 || (isMatchStarted && (timerState.timerRunning || timerStartedOnce))) && (
-              <div className={cn('mb-6', !isMatchStarted && 'pointer-events-auto')}>
-                <MatchTimer
-                  state={timerState}
-                  darkMode={darkMode}
-                  isAdmin={isAdminMode}
-                  onStart={handleTimerStart}
-                  onPause={handleTimerPause}
-                  onResetRequest={handleTimerResetRequest}
-                  onTimeout={handleTimerTimeout}
-                  startDisabled={isMatchStarted && (team1.length < 5 || team2.length < 5)}
-                  startDisabledReason="O cronômetro só pode ser iniciado com jogadores nos dois times (5 em cada)."
-                />
-                {pointsBlocked && (
-                  <p className={cn('mt-2 text-sm', darkMode ? 'text-amber-400' : 'text-amber-600')}>
-                    {pointsBlockedMessage}
-                  </p>
-                )}
-              </div>
-            )}
-            {waitingList.length >= 10 && !isMatchStarted && (
-              <div
-                className={cn(
-                  'mb-4 p-3 rounded-xl flex items-center gap-3 text-sm',
-                  darkMode ? 'bg-amber-500/10 border border-amber-500/20 text-amber-200' : 'bg-amber-50 border border-amber-200 text-amber-800'
-                )}
-              >
-                <AlertCircle className="w-5 h-5 shrink-0" />
-                <p>Os times são formados automaticamente. Inicie o cronômetro para começar a partida.</p>
               </div>
             )}
             {!canSeeList ? (

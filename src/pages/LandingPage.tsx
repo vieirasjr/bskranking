@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield, Calendar } from 'lucide-react';
+import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield } from 'lucide-react';
 import { motion } from 'motion/react';
 
 const PLANS = [
@@ -144,102 +144,84 @@ export default function LandingPage() {
       </section>
 
       {/* Pricing */}
-      <section className="px-6 pb-28 max-w-6xl mx-auto" id="precos">
-        <div className="text-center mb-12">
+      <section className="pb-28" id="precos">
+        <div className="text-center mb-10 px-6">
           <h2 className="text-3xl font-black mb-3">Planos e preços</h2>
           <p className="text-slate-400">Para um evento ou uso contínuo — escolha o que faz sentido para você.</p>
         </div>
 
-        {/* Avulso destacado */}
-        <div className="mb-6">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="relative flex flex-col sm:flex-row items-start sm:items-center justify-between rounded-2xl border border-slate-700 bg-slate-900/60 p-6 gap-4"
+        {/* Carrossel */}
+        <div className="relative">
+          {/* Fade direita — sinaliza continuidade */}
+          <div className="pointer-events-none absolute right-0 top-0 bottom-5 w-20 z-10
+            bg-gradient-to-l from-slate-950 via-slate-950/70 to-transparent" />
+
+          <div
+            className="flex gap-4 overflow-x-auto scroll-smooth snap-x snap-mandatory pb-5 px-6 [&::-webkit-scrollbar]:hidden"
+            style={{ scrollbarWidth: 'none' }}
           >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-orange-500/10 rounded-xl flex items-center justify-center shrink-0">
-                <Calendar className="w-5 h-5 text-orange-400" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="font-bold text-white">Evento Avulso</p>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-700 text-slate-300">Evento único</span>
-                </div>
-                <p className="text-slate-400 text-sm mt-0.5">20 jogadores · 1 local · acesso por 72 horas</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-6">
-              <div>
-                <span className="text-3xl font-black text-white">R$50</span>
-                <span className="text-slate-400 text-sm ml-1">/ evento</span>
-              </div>
-              <button
-                onClick={() => navigate('/cadastro?plano=avulso')}
-                className="px-5 py-2.5 rounded-xl font-bold bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 transition-all whitespace-nowrap"
+
+            {PLANS.map((plan) => (
+              <div
+                key={plan.id}
+                className={`relative flex flex-col shrink-0 snap-start rounded-2xl border p-6 w-72
+                  ${plan.highlight
+                    ? 'border-orange-500 bg-orange-500/5 shadow-xl shadow-orange-500/10'
+                    : 'border-slate-800 bg-slate-900/60'
+                  }`}
               >
-                Assinar agora
-              </button>
-            </div>
-          </motion.div>
-        </div>
-
-        {/* Planos mensais */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 items-stretch">
-          {PLANS.filter(p => p.period === 'mês').map((plan) => (
-            <motion.div
-              key={plan.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`relative flex flex-col rounded-2xl border p-6 ${
-                plan.highlight
-                  ? 'border-orange-500 bg-orange-500/5 shadow-xl shadow-orange-500/10'
-                  : 'border-slate-800 bg-slate-900/60'
-              }`}
-            >
-              {plan.badge && (
-                <div className={`absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap ${
-                  plan.highlight ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-300'
-                }`}>
-                  {plan.badge}
+                {/* Badge */}
+                <div className="h-6 mb-3 flex items-center">
+                  {plan.badge ? (
+                    <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap
+                      ${plan.highlight ? 'bg-orange-500 text-white' : 'bg-slate-700 text-slate-300'}`}>
+                      {plan.badge}
+                    </span>
+                  ) : null}
                 </div>
-              )}
 
-              <div className="mb-4">
-                <p className={`text-sm font-semibold mb-1 ${plan.highlight ? 'text-orange-400' : 'text-slate-400'}`}>
-                  {plan.name}
-                </p>
-                <div className="flex items-end gap-1">
-                  <span className="text-4xl font-black">R${plan.price}</span>
-                  <span className="text-slate-400 text-sm mb-1">/mês</span>
+                {/* Nome e preço */}
+                <div className="mb-4">
+                  <p className={`text-sm font-semibold mb-1 ${plan.highlight ? 'text-orange-400' : 'text-slate-400'}`}>
+                    {plan.name}
+                  </p>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-black text-white">R${plan.price}</span>
+                    <span className="text-slate-400 text-sm mb-1">/{plan.period}</span>
+                  </div>
+                  <p className="text-slate-500 text-xs mt-1.5">
+                    {plan.players ? `${plan.players} jogadores` : 'Jogadores ilimitados'} ·{' '}
+                    {plan.locations ? `${plan.locations} ${plan.locations === 1 ? 'local' : 'locais'}` : 'Locais ilimitados'}
+                  </p>
                 </div>
-                <p className="text-slate-400 text-sm mt-1">
-                  {plan.players ? `${plan.players} jogadores` : 'Jogadores ilimitados'} ·{' '}
-                  {plan.locations ? `${plan.locations} ${plan.locations === 1 ? 'local' : 'locais'}` : 'Locais ilimitados'}
-                </p>
+
+                {/* Features */}
+                <ul className="space-y-2 flex-1 mb-6">
+                  {plan.features.map((f) => (
+                    <li key={f} className="flex items-start gap-2 text-sm">
+                      <Check className={`w-4 h-4 shrink-0 mt-0.5 ${plan.highlight ? 'text-orange-500' : 'text-slate-500'}`} />
+                      <span className="text-slate-300">{f}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                {/* CTA */}
+                <button
+                  onClick={() => navigate(`/cadastro?plano=${plan.id}`)}
+                  className={`w-full py-3 rounded-xl font-bold transition-all text-sm
+                    ${plan.highlight
+                      ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20'
+                      : 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-700'
+                    }`}
+                >
+                  Assinar agora
+                </button>
               </div>
+            ))}
 
-              <ul className="space-y-2.5 flex-1 mb-6">
-                {plan.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2 text-sm">
-                    <Check className={`w-4 h-4 shrink-0 mt-0.5 ${plan.highlight ? 'text-orange-500' : 'text-slate-500'}`} />
-                    <span className="text-slate-300">{f}</span>
-                  </li>
-                ))}
-              </ul>
-
-              <button
-                onClick={() => navigate(`/cadastro?plano=${plan.id}`)}
-                className={`w-full py-3 rounded-xl font-bold transition-all ${
-                  plan.highlight
-                    ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20'
-                    : 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-700'
-                }`}
-              >
-                Assinar agora
-              </button>
-            </motion.div>
-          ))}
+            {/* Espaço no final para continuidade */}
+            <div className="shrink-0 w-2" />
+          </div>
         </div>
       </section>
 
