@@ -56,6 +56,7 @@ interface RegisteredUserSuggestion {
   full_name?: string | null;
   email: string;
   avatar_url?: string | null;
+  player_code?: string | null;
 }
 
 function getRegisteredUserLabel(user: RegisteredUserSuggestion) {
@@ -181,7 +182,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   const [adminUserSuggestions, setAdminUserSuggestions] = useState<RegisteredUserSuggestion[]>([]);
   const [showAdminSuggestions, setShowAdminSuggestions] = useState(false);
   const [isSearchingAdminUsers, setIsSearchingAdminUsers] = useState(false);
-  const [selectedAdminUser, setSelectedAdminUser] = useState<RegisteredUserSuggestion | null>(null);
+  const [selectedAdminUsers, setSelectedAdminUsers] = useState<RegisteredUserSuggestion[]>([]);
   const [unregisteredAddName, setUnregisteredAddName] = useState('');
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
@@ -220,7 +221,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     }
 
     const normalizedSearch = searchTerm.replace(/[%,]/g, ' ').trim();
-    if (normalizedSearch.length < 4) {
+    const isCodeSearch = /^\d{4}$/.test(normalizedSearch);
+    if (!isCodeSearch && normalizedSearch.length < 4) {
       setAdminUserSuggestions([]);
       setShowAdminSuggestions(false);
       setIsSearchingAdminUsers(false);
@@ -234,10 +236,14 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       let userQuery = supabase
         .from('basquete_users')
         .select(locationId
-          ? 'id, display_name, email, avatar_url, location_members!inner(location_id)'
-          : 'id, display_name, email, avatar_url')
-        .ilike('display_name', `%${normalizedSearch}%`)
-        .limit(8);
+          ? 'id, display_name, email, avatar_url, player_code, location_members!inner(location_id)'
+          : 'id, display_name, email, avatar_url, player_code');
+      if (isCodeSearch) {
+        userQuery = userQuery.eq('player_code', normalizedSearch);
+      } else {
+        userQuery = userQuery.ilike('display_name', `%${normalizedSearch}%`);
+      }
+      userQuery = userQuery.limit(8);
       if (locationId) userQuery = (userQuery as typeof userQuery).eq('location_members.location_id', locationId);
       const { data, error } = await userQuery;
 
@@ -637,16 +643,18 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
           }
           const { data: partidaSessao, error: insertErr } = await supabase
             .from('partida_sessoes')
-            .insert({})
+            .insert(locationId ? { location_id: locationId } : {})
             .select('id')
             .single();
           if (insertErr) throw insertErr;
           const now = new Date().toISOString();
+          const sessionId = locationId ?? 'current';
           await supabase.from('session').upsert({
-            id: 'current',
+            id: sessionId,
             is_started: true,
             started_at: now,
             current_partida_sessao_id: partidaSessao?.id,
+            ...(locationId ? { location_id: locationId } : {}),
           });
           setIsMatchStarted(true);
           setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
@@ -770,53 +778,77 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
 
   const addPlayerByNameForAdmin = async () => {
     if (!isAdminMode || !canAddToList) return;
-    const name = adminAddName.trim();
-    if (!name) return;
 
-    if (maxPlayers != null && players.length >= maxPlayers) {
+    // Build the list of players to add: selected tags first, then any typed name
+    const toAdd: { name: string; userId: string | null }[] = [];
+    for (const u of selectedAdminUsers) {
+      toAdd.push({ name: getRegisteredUserLabel(u), userId: u.id });
+    }
+    const typed = adminAddName.trim();
+    if (typed && !selectedAdminUsers.some((u) => getRegisteredUserLabel(u) === typed)) {
+      toAdd.push({ name: typed, userId: null });
+    }
+    if (toAdd.length === 0) return;
+
+    if (maxPlayers != null && players.length + toAdd.length > maxPlayers) {
       addNotification(`Limite de ${maxPlayers} atletas atingido para este evento.`, 'warning', { showToastForMs: 5000 });
       return;
     }
-    const canAdd = isMatchStarted || waitingList.length < 10;
-    if (!canAdd) {
-      addNotification('A fila está cheia. Aguarde a partida começar.', 'warning', { showToastForMs: 5000 });
-      return;
-    }
 
-    const alreadyInList = players.some((p) => p.name.toLowerCase().trim() === name.toLowerCase());
-    if (alreadyInList) {
-      addNotification('Este nome já está na lista.', 'warning', { showToastForMs: 5000 });
-      return;
-    }
+    let currentTeam1Count = team1.length;
+    let currentTeam2Count = team2.length;
+    let currentWaitingCount = waitingList.length;
+    const addedPlayers: Player[] = [];
 
     try {
-      // Apenas vincula ao cadastro se o admin selecionou explicitamente da lista de sugestões.
-      // Sem seleção = visitante (user_id null, sem estatísticas).
-      const resolvedUserId = selectedAdminUser ? selectedAdminUser.id : null;
+      for (const entry of toAdd) {
+        const canAdd = isMatchStarted || (currentWaitingCount + currentTeam1Count + currentTeam2Count - team1.length - team2.length) < 10
+          ? true
+          : currentWaitingCount < 10;
+        if (!isMatchStarted && currentWaitingCount >= 10) {
+          addNotification('A fila está cheia. Aguarde a partida começar.', 'warning', { showToastForMs: 5000 });
+          break;
+        }
 
-      let status: 'waiting' | 'team1' | 'team2';
-      if (isMatchStarted) {
-        if (team1.length < PLAYERS_PER_TEAM) status = 'team1';
-        else if (team2.length < PLAYERS_PER_TEAM) status = 'team2';
-        else status = 'waiting';
-      } else {
-        status = 'waiting';
+        const alreadyInList = players.some((p) =>
+            p.name.toLowerCase().trim() === entry.name.toLowerCase()
+            || (entry.userId && p.user_id && p.user_id === entry.userId)
+          )
+          || addedPlayers.some((p) =>
+            p.name.toLowerCase().trim() === entry.name.toLowerCase()
+            || (entry.userId && p.user_id && p.user_id === entry.userId)
+          );
+        if (alreadyInList) {
+          addNotification(`${entry.name} já está na lista.`, 'warning', { showToastForMs: 3000 });
+          continue;
+        }
+
+        let status: 'waiting' | 'team1' | 'team2';
+        if (isMatchStarted) {
+          if (currentTeam1Count < PLAYERS_PER_TEAM) { status = 'team1'; currentTeam1Count++; }
+          else if (currentTeam2Count < PLAYERS_PER_TEAM) { status = 'team2'; currentTeam2Count++; }
+          else { status = 'waiting'; currentWaitingCount++; }
+        } else {
+          status = 'waiting';
+          currentWaitingCount++;
+        }
+
+        const { data: newPlayer, error: err } = await supabase
+          .from('players')
+          .insert({ name: entry.name, status, user_id: entry.userId, ...(locationId ? { location_id: locationId } : {}) })
+          .select()
+          .single();
+
+        if (err) throw err;
+        if (newPlayer) addedPlayers.push(newPlayer as Player);
       }
 
-      const { data: newPlayer, error: err } = await supabase
-        .from('players')
-        .insert({ name, status, user_id: resolvedUserId, ...(locationId ? { location_id: locationId } : {}) })
-        .select()
-        .single();
-
-      if (err) throw err;
-
-      if (newPlayer) {
+      if (addedPlayers.length > 0) {
         setAdminAddName('');
-        setSelectedAdminUser(null);
+        setSelectedAdminUsers([]);
         setAdminUserSuggestions([]);
         setShowAdminSuggestions(false);
-        setPlayers((prev) => [...prev, newPlayer as Player].sort(
+        setPlayers((prev) => [...prev, ...addedPlayers].sort(
           (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime()
         ));
       }
@@ -835,9 +867,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   };
 
   const [showPasswordModal, setShowPasswordModal] = useState<{
-    type: 'MOVE' | 'REMOVE' | 'START_MATCH' | 'END_MATCH' | 'ADMIN_ACTIVATE' | 'CLEAR_MOCK';
-    moveInfo?: { playerId: string; direction: 'up' | 'down' };
-    removeInfo?: { playerId: string };
+    type: 'START_MATCH' | 'END_MATCH' | 'ADMIN_ACTIVATE' | 'CLEAR_MOCK';
   } | null>(null);
   const [statsModalPlayer, setStatsModalPlayer] = useState<Player | null>(null);
   const [registeringStatLabel, setRegisteringStatLabel] = useState<string | null>(null);
@@ -875,11 +905,22 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     await supabase.from('players').update({ joined_at: currentPlayer.joined_at }).eq('id', targetPlayer.id);
   };
 
-  const handleRemoveAttempt = (playerId: string) => {
+  const handleRemoveAttempt = async (playerId: string) => {
     if (!isAdminMode) return;
-    setShowPasswordModal({ type: 'REMOVE', removeInfo: { playerId } });
-    setPasswordInput('');
-    setPasswordError(false);
+    const playerToRemove = players.find((p) => p.id === playerId);
+    if (!playerToRemove) return;
+    if (!window.confirm(`Remover ${playerToRemove.name} da lista?`)) return;
+    try {
+      const status = playerToRemove.status;
+      await supabase.from('players').delete().eq('id', playerId);
+      if ((status === 'team1' || status === 'team2') && waitingList.length > 0) {
+        const nextInLine = waitingList[0];
+        await supabase.from('players').update({ status }).eq('id', nextInLine.id);
+      }
+    } catch (err) {
+      console.error('Error removing player:', err);
+      addNotification('Erro ao remover jogador.', 'error', { showToastForMs: 5000 });
+    }
   };
 
   const handleStartMatchAttempt = () => {
@@ -1153,63 +1194,49 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     }
 
     try {
-      if (showPasswordModal.type === 'MOVE' && showPasswordModal.moveInfo) {
-        const { playerId, direction } = showPasswordModal.moveInfo;
-        const currentIndex = waitingList.findIndex((p) => p.id === playerId);
-        const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-
-        if (targetIndex >= 0 && targetIndex < waitingList.length) {
-          const currentPlayer = waitingList[currentIndex];
-          const targetPlayer = waitingList[targetIndex];
-
-          await supabase
-            .from('players')
-            .update({ joined_at: targetPlayer.joined_at })
-            .eq('id', currentPlayer.id);
-          await supabase
-            .from('players')
-            .update({ joined_at: currentPlayer.joined_at })
-            .eq('id', targetPlayer.id);
-        }
-      } else if (showPasswordModal.type === 'REMOVE' && showPasswordModal.removeInfo) {
-        const { playerId } = showPasswordModal.removeInfo;
-        const playerToRemove = players.find((p) => p.id === playerId);
-
-        if (playerToRemove) {
-          const status = playerToRemove.status;
-
-          await supabase.from('players').delete().eq('id', playerId);
-
-          if ((status === 'team1' || status === 'team2') && waitingList.length > 0) {
-            const nextInLine = waitingList[0];
-            await supabase
-              .from('players')
-              .update({ status })
-              .eq('id', nextInLine.id);
-          }
-        }
-      } else if (showPasswordModal.type === 'START_MATCH') {
+      if (showPasswordModal.type === 'START_MATCH') {
         const { data: partidaSessao, error: insertErr } = await supabase
           .from('partida_sessoes')
-          .insert({})
+          .insert(locationId ? { location_id: locationId } : {})
           .select('id')
           .single();
 
         if (insertErr) throw insertErr;
 
+        const sessionId = locationId ?? 'current';
         await supabase
           .from('session')
           .upsert({
-            id: 'current',
+            id: sessionId,
             is_started: true,
             started_at: new Date().toISOString(),
             current_partida_sessao_id: partidaSessao?.id,
+            ...(locationId ? { location_id: locationId } : {}),
           });
+
+        // Alocar jogadores da lista de espera nos times
+        const sorted = [...waitingList].sort(
+          (a, b) => new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime()
+        );
+        let t1 = team1.length;
+        let t2 = team2.length;
+        for (const p of sorted) {
+          if (t1 < PLAYERS_PER_TEAM) {
+            await supabase.from('players').update({ status: 'team1' }).eq('id', p.id);
+            t1++;
+          } else if (t2 < PLAYERS_PER_TEAM) {
+            await supabase.from('players').update({ status: 'team2' }).eq('id', p.id);
+            t2++;
+          } else {
+            break;
+          }
+        }
 
         setIsMatchStarted(true);
         setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
         setTeam1MatchPoints(0);
         setTeam2MatchPoints(0);
+        await fetchPlayers();
       } else if (showPasswordModal.type === 'CLEAR_MOCK') {
         await supabase.from('session').update({
           is_started: false,
@@ -1361,28 +1388,20 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                 <h3 className={cn('text-xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>
                   {showPasswordModal.type === 'ADMIN_ACTIVATE'
                     ? 'Modo Administrador'
-                    : showPasswordModal.type === 'MOVE'
-                      ? 'Mover Jogador'
-                      : showPasswordModal.type === 'REMOVE'
-                        ? 'Remover Jogador'
-                        : showPasswordModal.type === 'START_MATCH'
-                          ? 'Iniciar Partida'
-                          : showPasswordModal.type === 'CLEAR_MOCK'
-                              ? 'Limpar dados fictícios'
-                              : 'Encerrar Partida'}
+                    : showPasswordModal.type === 'START_MATCH'
+                      ? 'Iniciar Partida'
+                      : showPasswordModal.type === 'CLEAR_MOCK'
+                        ? 'Limpar dados fictícios'
+                        : 'Encerrar Partida'}
                 </h3>
                 <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
                   {showPasswordModal.type === 'ADMIN_ACTIVATE'
                     ? 'Digite a senha para ativar o modo administrador.'
-                    : showPasswordModal.type === 'MOVE'
-                      ? 'Digite a senha para alterar a ordem da fila.'
-                      : showPasswordModal.type === 'REMOVE'
-                        ? 'Digite a senha para remover este jogador da lista.'
-                        : showPasswordModal.type === 'START_MATCH'
-                          ? 'Digite a senha para iniciar a sessão de partidas.'
-                          : showPasswordModal.type === 'CLEAR_MOCK'
-                              ? 'Remove fila, ranking e partida. Senha para confirmar.'
-                              : 'Digite a senha para encerrar a sessão de partidas.'}
+                    : showPasswordModal.type === 'START_MATCH'
+                      ? 'Digite a senha para iniciar a sessão de partidas.'
+                      : showPasswordModal.type === 'CLEAR_MOCK'
+                        ? 'Remove fila, ranking e partida. Senha para confirmar.'
+                        : 'Digite a senha para encerrar a sessão de partidas.'}
                 </p>
               </div>
 
@@ -1680,7 +1699,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                       darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-600 hover:bg-red-100'
                     )}
                   >
-                    Encerrar Partida
+                    Encerrar Evento
                   </button>
                 )}
                 <button
@@ -1916,7 +1935,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
               >
                 <div>
                   <p className={cn('font-semibold text-sm', darkMode ? 'text-green-300' : 'text-green-800')}>
-                    Iniciar Partida
+                    Iniciar a sessão
                   </p>
                   <p className={cn('text-xs mt-0.5', darkMode ? 'text-green-400/70' : 'text-green-600')}>
                     Inicia a sessão mesmo com menos de 10 jogadores na fila.
@@ -2016,28 +2035,56 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                 <>
                 <div className={cn('flex gap-2 mt-3', darkMode ? 'text-slate-300' : 'text-slate-600')}>
                   <div ref={adminSuggestionsRef} className="relative flex-1">
-                    <input
-                      type="text"
-                      placeholder="Adicionar por nome (sem celular)"
-                      value={adminAddName}
-                      onChange={(e) => {
-                        setAdminAddName(e.target.value);
-                        setSelectedAdminUser(null);
-                      }}
-                      onFocus={() => {
-                        if (adminAddName.trim().length >= 4) {
-                          setShowAdminSuggestions(true);
-                        }
-                      }}
-                      onKeyDown={(e) => e.key === 'Enter' && addPlayerByNameForAdmin()}
-                      disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
-                      maxLength={50}
+                    <div
                       className={cn(
-                        'w-full px-3 py-2 rounded-lg text-sm border outline-none focus:ring-2 focus:ring-orange-500/50',
-                        darkMode ? 'bg-slate-800 border-slate-600 placeholder:text-slate-500' : 'bg-white border-slate-300 placeholder:text-slate-400'
+                        'flex items-center flex-wrap gap-1 min-h-[38px] px-2 py-1 rounded-lg text-sm border outline-none transition-all',
+                        darkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300',
+                        'focus-within:ring-2 focus-within:ring-orange-500/50'
                       )}
-                    />
-                    {showAdminSuggestions && adminAddName.trim().length >= 4 && (
+                    >
+                      {selectedAdminUsers.map((u, idx) => (
+                        <span
+                          key={u.id}
+                          className={cn(
+                            'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium',
+                            darkMode ? 'bg-orange-500/20 text-orange-300' : 'bg-orange-100 text-orange-700'
+                          )}
+                        >
+                          {getRegisteredUserLabel(u)}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedAdminUsers((prev) => prev.filter((_, i) => i !== idx));
+                            }}
+                            className={cn('hover:opacity-70 transition-opacity', darkMode ? 'text-orange-400' : 'text-orange-600')}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                      <input
+                        type="text"
+                        placeholder={selectedAdminUsers.length > 0 ? 'Buscar mais...' : 'Nome ou código do jogador'}
+                        value={adminAddName}
+                        onChange={(e) => {
+                          setAdminAddName(e.target.value);
+                        }}
+                        onFocus={() => {
+                          const term = adminAddName.trim();
+                          if (term.length >= 4 || /^\d{4}$/.test(term)) {
+                            setShowAdminSuggestions(true);
+                          }
+                        }}
+                        onKeyDown={(e) => e.key === 'Enter' && addPlayerByNameForAdmin()}
+                        disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
+                        maxLength={50}
+                        className={cn(
+                          'flex-1 min-w-[80px] bg-transparent outline-none text-sm',
+                          darkMode ? 'placeholder:text-slate-500' : 'placeholder:text-slate-400'
+                        )}
+                      />
+                    </div>
+                    {showAdminSuggestions && (adminAddName.trim().length >= 4 || /^\d{4}$/.test(adminAddName.trim())) && (
                       <div
                         className={cn(
                           'absolute left-0 right-0 top-full mt-2 z-[999] rounded-xl border shadow-2xl overflow-hidden',
@@ -2053,20 +2100,26 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                             {adminUserSuggestions.map((candidate) => {
                               const candidateLabel = getRegisteredUserLabel(candidate);
                               const alreadyInQueue = players.some(
-                                (player) => player.name.toLowerCase().trim() === candidateLabel.toLowerCase().trim()
+                                (player) => player.user_id === candidate.id
+                                  || player.name.toLowerCase().trim() === candidateLabel.toLowerCase().trim()
                               );
+                              const alreadySelected = selectedAdminUsers.some((u) => u.id === candidate.id);
+                              const disabled = alreadyInQueue || alreadySelected;
 
                               return (
                                 <button
                                   key={candidate.id}
                                   type="button"
+                                  disabled={disabled}
                                   onClick={() => {
-                                    setAdminAddName(candidateLabel);
-                                    setSelectedAdminUser(candidate);
+                                    if (disabled) return;
+                                    setSelectedAdminUsers((prev) => [...prev, candidate]);
+                                    setAdminAddName('');
                                     setShowAdminSuggestions(false);
                                   }}
                                   className={cn(
                                     'w-full px-3 py-3 text-left border-b last:border-b-0 transition-colors',
+                                    disabled && 'opacity-50 cursor-not-allowed',
                                     darkMode
                                       ? 'border-slate-800 hover:bg-slate-800'
                                       : 'border-slate-100 hover:bg-slate-50'
@@ -2078,17 +2131,19 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                                         {candidateLabel}
                                       </p>
                                       <p className={cn('text-xs truncate', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-                                        {candidate.email}
+                                        {candidate.player_code ? `#${candidate.player_code} · ` : ''}{candidate.email}
                                       </p>
                                     </div>
-                                    {alreadyInQueue && (
+                                    {(alreadyInQueue || alreadySelected) && (
                                       <span
                                         className={cn(
                                           'shrink-0 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wider',
-                                          darkMode ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700'
+                                          alreadyInQueue
+                                            ? (darkMode ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-700')
+                                            : (darkMode ? 'bg-green-500/20 text-green-300' : 'bg-green-100 text-green-700')
                                         )}
                                       >
-                                        Na fila
+                                        {alreadyInQueue ? 'Na fila' : 'Selecionado'}
                                       </span>
                                     )}
                                   </div>
@@ -2109,28 +2164,30 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                     onClick={addPlayerByNameForAdmin}
                     disabled={
                       !canAddToList ||
-                      !adminAddName.trim() ||
+                      (selectedAdminUsers.length === 0 && !adminAddName.trim()) ||
                       (waitingList.length >= 10 && !isMatchStarted)
                     }
                     className={cn(
                       'px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all',
                       canAddToList &&
-                      adminAddName.trim() &&
+                      (selectedAdminUsers.length > 0 || adminAddName.trim()) &&
                       !(waitingList.length >= 10 && !isMatchStarted)
                         ? 'bg-orange-500 hover:bg-orange-600 text-white'
                         : 'bg-slate-300 text-slate-500 cursor-not-allowed'
                     )}
                   >
-                    Adicionar
+                    Adicionar{selectedAdminUsers.length > 1 ? ` (${selectedAdminUsers.length})` : ''}
                   </button>
                 </div>
-                {adminAddName.trim() && (
+                {(selectedAdminUsers.length > 0 || adminAddName.trim()) && (
                   <div className="mt-1 ml-1 flex items-center gap-1 text-xs">
-                    {selectedAdminUser ? (
+                    {selectedAdminUsers.length > 0 ? (
                       <>
                         <CheckCircle className="w-3 h-3 text-green-500 shrink-0" />
                         <span className={darkMode ? 'text-green-400' : 'text-green-600'}>
-                          Jogador cadastrado selecionado — estatísticas serão registradas
+                          {selectedAdminUsers.length === 1
+                            ? 'Jogador cadastrado selecionado — estatísticas serão registradas'
+                            : `${selectedAdminUsers.length} jogadores selecionados — estatísticas serão registradas`}
                         </span>
                       </>
                     ) : (
