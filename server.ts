@@ -495,6 +495,179 @@ async function startServer() {
     }
   });
 
+  // ── Admin middleware ────────────────────────────────────────
+  async function validateAdmin(req: express.Request): Promise<{ userId: string } | null> {
+    const auth = await validateJWT(req);
+    if (!auth) return null;
+    const { data } = await getSupabaseAdmin()
+      .from("basquete_users")
+      .select("issuperusuario")
+      .eq("auth_id", auth.userId)
+      .maybeSingle();
+    if (!data?.issuperusuario) return null;
+    return auth;
+  }
+
+  // ── GET /api/admin/stats ────────────────────────────────────
+  app.get("/api/admin/stats", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const sb = getSupabaseAdmin();
+    const [tenants, users, events] = await Promise.all([
+      sb.from("tenants").select("id, status, plan_id"),
+      sb.from("basquete_users").select("id", { count: "exact", head: true }),
+      sb.from("subscription_events").select("id, mp_status, processed_at").order("processed_at", { ascending: false }).limit(20),
+    ]);
+
+    const all = tenants.data ?? [];
+    const stats = {
+      totalTenants: all.length,
+      active: all.filter((t: any) => t.status === "active").length,
+      pastDue: all.filter((t: any) => t.status === "past_due").length,
+      cancelled: all.filter((t: any) => t.status === "cancelled").length,
+      trial: all.filter((t: any) => t.status === "trial").length,
+      totalUsers: users.count ?? 0,
+      recentPayments: events.data ?? [],
+    };
+    return res.json(stats);
+  });
+
+  // ── GET /api/admin/tenants ──────────────────────────────────
+  app.get("/api/admin/tenants", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { data } = await getSupabaseAdmin()
+      .from("tenants")
+      .select("*, plan:plans(id, name, price_brl)")
+      .order("created_at", { ascending: false });
+
+    // Buscar emails dos owners
+    const tenantList = data ?? [];
+    const ownerIds = [...new Set(tenantList.map((t: any) => t.owner_auth_id))];
+    const emails: Record<string, string> = {};
+    for (const oid of ownerIds) {
+      const { data: u } = await getSupabaseAdmin().auth.admin.getUserById(oid);
+      if (u?.user?.email) emails[oid] = u.user.email;
+    }
+
+    return res.json(tenantList.map((t: any) => ({ ...t, owner_email: emails[t.owner_auth_id] ?? "" })));
+  });
+
+  // ── PATCH /api/admin/tenants/:id ────────────────────────────
+  app.patch("/api/admin/tenants/:id", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { id } = req.params;
+    const { status, plan_id } = req.body as { status?: string; plan_id?: string };
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (status) update.status = status;
+    if (plan_id) update.plan_id = plan_id;
+
+    const { error } = await getSupabaseAdmin().from("tenants").update(update).eq("id", id);
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json({ ok: true });
+  });
+
+  // ── GET /api/admin/plans ────────────────────────────────────
+  app.get("/api/admin/plans", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { data } = await getSupabaseAdmin().from("plans").select("*").order("price_brl");
+    return res.json(data ?? []);
+  });
+
+  // ── PATCH /api/admin/plans/:id ──────────────────────────────
+  app.patch("/api/admin/plans/:id", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { id } = req.params;
+    const { is_active, price_brl, max_players, max_locations, max_events } = req.body as {
+      is_active?: boolean; price_brl?: number; max_players?: number | null;
+      max_locations?: number | null; max_events?: number | null;
+    };
+    const update: Record<string, unknown> = {};
+    if (is_active !== undefined) update.is_active = is_active;
+    if (price_brl !== undefined) update.price_brl = price_brl;
+    if (max_players !== undefined) update.max_players = max_players;
+    if (max_locations !== undefined) update.max_locations = max_locations;
+    if (max_events !== undefined) update.max_events = max_events;
+
+    const { error } = await getSupabaseAdmin().from("plans").update(update).eq("id", id);
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json({ ok: true });
+  });
+
+  // ── CRUD /api/admin/events ──────────────────────────────────
+  app.get("/api/admin/events", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { data } = await getSupabaseAdmin()
+      .from("system_events")
+      .select("*")
+      .order("event_date", { ascending: false });
+    return res.json(data ?? []);
+  });
+
+  app.post("/api/admin/events", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { title, description, event_date, event_time, type, modality, max_participants, image_url, website, status } = req.body;
+    const { data, error } = await getSupabaseAdmin()
+      .from("system_events")
+      .insert({
+        title, description, event_date, event_time: event_time || null,
+        type: type || "comunicado", modality: modality || null,
+        max_participants: max_participants || null,
+        image_url: image_url || null, website: website || null,
+        status: status || "published",
+        created_by: admin.userId,
+      })
+      .select()
+      .single();
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json(data);
+  });
+
+  app.patch("/api/admin/events/:id", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { id } = req.params;
+    const { title, description, event_date, event_time, type, modality, max_participants, image_url, website, status } = req.body;
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (title !== undefined) update.title = title;
+    if (description !== undefined) update.description = description;
+    if (event_date !== undefined) update.event_date = event_date;
+    if (event_time !== undefined) update.event_time = event_time || null;
+    if (type !== undefined) update.type = type;
+    if (modality !== undefined) update.modality = modality || null;
+    if (max_participants !== undefined) update.max_participants = max_participants || null;
+    if (image_url !== undefined) update.image_url = image_url || null;
+    if (website !== undefined) update.website = website || null;
+    if (status !== undefined) update.status = status;
+
+    const { error } = await getSupabaseAdmin().from("system_events").update(update).eq("id", id);
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json({ ok: true });
+  });
+
+  app.delete("/api/admin/events/:id", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { id } = req.params;
+    const { error } = await getSupabaseAdmin().from("system_events").delete().eq("id", id);
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json({ ok: true });
+  });
+
   // ── Vite / Static ────────────────────────────────────────
   console.log(`NODE_ENV is: ${process.env.NODE_ENV}`);
   if (process.env.NODE_ENV !== "production") {

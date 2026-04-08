@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Trophy, MapPin, CreditCard, LogOut, ExternalLink, AlertCircle, Menu, X, ChevronLeft, ChevronRight, LayoutDashboard, Calendar } from 'lucide-react';
+import { Trophy, MapPin, CreditCard, LogOut, ExternalLink, AlertCircle, Menu, X, ChevronLeft, ChevronRight, LayoutDashboard, Calendar, Shield } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
+import { supabase } from '../../supabase';
 
 const STATUS_COLOR: Record<string, string> = {
   active:    'bg-green-500',
@@ -25,11 +26,22 @@ const NAV_ITEMS = [
 ];
 
 export default function DashboardLayout() {
-  const { signOut } = useAuth();
+  const { signOut, user } = useAuth();
   const { tenant, locations, loading } = useTenant();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    supabase
+      .from('basquete_users')
+      .select('issuperusuario')
+      .eq('auth_id', user.id)
+      .maybeSingle()
+      .then(({ data }) => setIsAdmin(data?.issuperusuario === true));
+  }, [user?.id]);
 
   if (!loading && !tenant) {
     return (
@@ -117,8 +129,15 @@ export default function DashboardLayout() {
         </div>
       )}
 
-      {/* Sign out */}
-      <div className={`px-2 pb-4 border-t border-slate-800 pt-3 ${!isMobile && collapsed ? '' : ''}`}>
+      {/* Admin + Sign out */}
+      <div className={`px-2 pb-4 border-t border-slate-800 pt-3 space-y-1`}>
+        {isAdmin && (
+          <button onClick={() => { navigate('/admin'); isMobile && setDrawerOpen(false); }}
+            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors ${collapsed && !isMobile ? 'justify-center' : ''}`}>
+            <Shield className="w-4 h-4 shrink-0" />
+            {(!collapsed || isMobile) && 'Super Admin'}
+          </button>
+        )}
         <button onClick={signOut}
           className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ${collapsed && !isMobile ? 'justify-center' : ''}`}>
           <LogOut className="w-4 h-4 shrink-0" />

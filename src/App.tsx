@@ -32,6 +32,8 @@ import {
   AlertTriangle,
   CheckCircle,
   Settings,
+  UserMinus,
+  RotateCcw,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -120,10 +122,15 @@ async function resolveRegisteredUserByName(
 interface Player {
   id: string;
   name: string;
-  status: 'waiting' | 'team1' | 'team2';
+  status: 'waiting' | 'team1' | 'team2' | 'suspended';
   joined_at: string;
   admin?: boolean;
   user_id?: string | null;
+}
+
+interface SuspendedInfo {
+  originalTeam: 'team1' | 'team2';
+  replacedById: string | null;
 }
 
 interface PlayerStats {
@@ -381,6 +388,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     if (!partidaSessaoId) {
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
+      setMatchPlayerStats({});
       setShowWinnerModal(null);
       return;
     }
@@ -634,6 +642,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   const team1 = useMemo(() => players.filter((p) => p.status === 'team1'), [players]);
   const team2 = useMemo(() => players.filter((p) => p.status === 'team2'), [players]);
   const waitingList = useMemo(() => players.filter((p) => p.status === 'waiting'), [players]);
+  const suspendedList = useMemo(() => players.filter((p) => p.status === 'suspended'), [players]);
 
   // Corrige sessão sem partida: se partida em andamento (5+5) mas currentPartidaSessaoId é null
   const repairPartidaRef = useRef(false);
@@ -909,6 +918,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   const [statsModalPlayer, setStatsModalPlayer] = useState<Player | null>(null);
   const [registeringStatLabel, setRegisteringStatLabel] = useState<string | null>(null);
   const isRegisteringStatRef = useRef(false);
+  const [matchPlayerStats, setMatchPlayerStats] = useState<Record<string, { points: number; blocks: number; steals: number; assists: number; rebounds: number }>>({});
+  const [suspendedPlayers, setSuspendedPlayers] = useState<Record<string, SuspendedInfo>>({});
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
@@ -993,11 +1004,12 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     ? 'Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.'
     : '';
 
-  const addPlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists' | 'rebounds') => {
+  const addPlayerStat = async (player: Player, stat: 'points_1' | 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists' | 'rebounds') => {
     if (pointsBlocked) return;
     if (isRegisteringStatRef.current) return;
     isRegisteringStatRef.current = true;
     const statLabels: Record<typeof stat, string> = {
+      points_1: '1 Ponto',
       points_2: '2 Pontos',
       points_3: '3 Pontos',
       blocks: 'Bloqueio',
@@ -1017,6 +1029,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       return;
     }
 
+    const pts = stat === 'points_1' ? 1 : stat === 'points_2' ? 2 : stat === 'points_3' ? 3 : 0;
+
     try {
       // Atualizar stats (ranking) apenas para jogadores cadastrados
       if (userId) {
@@ -1025,17 +1039,15 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
 
         if (existing) {
           const updates =
-            stat === 'points_2'
-              ? { points: (existing.points ?? 0) + 2, user_id: userId }
-              : stat === 'points_3'
-                ? { points: (existing.points ?? 0) + 3, user_id: userId }
-                : stat === 'blocks'
-                  ? { blocks: (existing.blocks ?? 0) + 1, user_id: userId }
-                  : stat === 'steals'
-                    ? { steals: (existing.steals ?? 0) + 1, user_id: userId }
-                    : stat === 'rebounds'
-                      ? { rebounds: (existing.rebounds ?? 0) + 1, user_id: userId }
-                      : { assists: (existing.assists ?? 0) + 1, user_id: userId };
+            (stat === 'points_1' || stat === 'points_2' || stat === 'points_3')
+              ? { points: (existing.points ?? 0) + pts, user_id: userId }
+              : stat === 'blocks'
+                ? { blocks: (existing.blocks ?? 0) + 1, user_id: userId }
+                : stat === 'steals'
+                  ? { steals: (existing.steals ?? 0) + 1, user_id: userId }
+                  : stat === 'rebounds'
+                    ? { rebounds: (existing.rebounds ?? 0) + 1, user_id: userId }
+                    : { assists: (existing.assists ?? 0) + 1, user_id: userId };
           const { error: updErr } = await supabase.from('stats').update(updates).eq('id', existing.id);
           if (updErr) throw updErr;
         } else {
@@ -1043,7 +1055,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
             name: player.name,
             user_id: userId,
             wins: 0,
-            points: stat === 'points_2' ? 2 : stat === 'points_3' ? 3 : 0,
+            points: pts,
             blocks: stat === 'blocks' ? 1 : 0,
             steals: stat === 'steals' ? 1 : 0,
             rebounds: stat === 'rebounds' ? 1 : 0,
@@ -1057,9 +1069,16 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
         fetchStats();
       }
 
+      // Atualizar matchPlayerStats (tracking por partida)
+      const matchStatKey = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? 'points' : stat;
+      const delta = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? pts : 1;
+      setMatchPlayerStats((prev) => {
+        const current = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+        return { ...prev, [player.id]: { ...current, [matchStatKey]: (current[matchStatKey as keyof typeof current] ?? 0) + delta } };
+      });
+
       // Pontos: sempre atualiza o placar da partida (visitantes só contam para o jogo)
-      if ((stat === 'points_2' || stat === 'points_3') && (player.status === 'team1' || player.status === 'team2')) {
-        const pts = stat === 'points_2' ? 2 : 3;
+      if ((stat === 'points_1' || stat === 'points_2' || stat === 'points_3') && (player.status === 'team1' || player.status === 'team2')) {
         let partidaId = currentPartidaSessaoId;
 
         // Garantir partida_sessao existe (corrige sessão sem current_partida_sessao_id)
@@ -1120,16 +1139,17 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     }
   };
 
-  const removePlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists' | 'rebounds') => {
+  const removePlayerStat = async (player: Player, stat: 'points_1' | 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists' | 'rebounds') => {
     if (!isAdminMode) return;
     if (isRegisteringStatRef.current) return;
     isRegisteringStatRef.current = true;
     const statLabels: Record<typeof stat, string> = {
-      points_2: '-2 Pontos', points_3: '-3 Pontos', blocks: '-Bloqueio',
+      points_1: '-1 Ponto', points_2: '-2 Pontos', points_3: '-3 Pontos', blocks: '-Bloqueio',
       steals: '-Roubo', assists: '-Assistência', rebounds: '-Rebote',
     };
     setRegisteringStatLabel(statLabels[stat]);
     const userId = player.user_id;
+    const pts = stat === 'points_1' ? 1 : stat === 'points_2' ? 2 : stat === 'points_3' ? 3 : 0;
 
     try {
       // Update ranking stats for registered players
@@ -1137,25 +1157,30 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
         const existing = stats.find((s) => s.user_id === userId) ?? null;
         if (existing) {
           const updates =
-            stat === 'points_2'
-              ? { points: Math.max((existing.points ?? 0) - 2, 0) }
-              : stat === 'points_3'
-                ? { points: Math.max((existing.points ?? 0) - 3, 0) }
-                : stat === 'blocks'
-                  ? { blocks: Math.max((existing.blocks ?? 0) - 1, 0) }
-                  : stat === 'steals'
-                    ? { steals: Math.max((existing.steals ?? 0) - 1, 0) }
-                    : stat === 'rebounds'
-                      ? { rebounds: Math.max((existing.rebounds ?? 0) - 1, 0) }
-                      : { assists: Math.max((existing.assists ?? 0) - 1, 0) };
+            (stat === 'points_1' || stat === 'points_2' || stat === 'points_3')
+              ? { points: Math.max((existing.points ?? 0) - pts, 0) }
+              : stat === 'blocks'
+                ? { blocks: Math.max((existing.blocks ?? 0) - 1, 0) }
+                : stat === 'steals'
+                  ? { steals: Math.max((existing.steals ?? 0) - 1, 0) }
+                  : stat === 'rebounds'
+                    ? { rebounds: Math.max((existing.rebounds ?? 0) - 1, 0) }
+                    : { assists: Math.max((existing.assists ?? 0) - 1, 0) };
           await supabase.from('stats').update(updates).eq('id', existing.id);
           fetchStats();
         }
       }
 
+      // Atualizar matchPlayerStats (tracking por partida)
+      const matchStatKey = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? 'points' : stat;
+      const delta = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? pts : 1;
+      setMatchPlayerStats((prev) => {
+        const current = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+        return { ...prev, [player.id]: { ...current, [matchStatKey]: Math.max((current[matchStatKey as keyof typeof current] ?? 0) - delta, 0) } };
+      });
+
       // Update match scoreboard for points
-      if ((stat === 'points_2' || stat === 'points_3') && (player.status === 'team1' || player.status === 'team2')) {
-        const pts = stat === 'points_2' ? 2 : 3;
+      if ((stat === 'points_1' || stat === 'points_2' || stat === 'points_3') && (player.status === 'team1' || player.status === 'team2')) {
         const partidaId = currentPartidaSessaoId;
         if (partidaId) {
           const { data: sessao } = await supabase
@@ -1186,6 +1211,109 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     }
   };
 
+  // Ajusta stat inline no resumo da partida — sem spinner, sem fechar modal
+  const adjustStatFromSummary = async (player: Player, statKey: 'points' | 'blocks' | 'steals' | 'assists' | 'rebounds', delta: number) => {
+    if (!isAdminMode && delta < 0) return;
+    const userId = player.user_id;
+
+    // Atualizar matchPlayerStats otimisticamente
+    setMatchPlayerStats((prev) => {
+      const current = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+      const newVal = Math.max((current[statKey] ?? 0) + delta, 0);
+      return { ...prev, [player.id]: { ...current, [statKey]: newVal } };
+    });
+
+    // Atualizar ranking no DB (apenas cadastrados)
+    if (userId) {
+      const existing = stats.find((s) => s.user_id === userId) ?? null;
+      if (existing) {
+        const newVal = Math.max((existing[statKey] ?? 0) + delta, 0);
+        await supabase.from('stats').update({ [statKey]: newVal }).eq('id', existing.id);
+        fetchStats();
+      }
+    }
+
+    // Atualizar placar da partida se for pontos
+    if (statKey === 'points' && (player.status === 'team1' || player.status === 'team2')) {
+      const partidaId = currentPartidaSessaoId;
+      if (partidaId) {
+        const { data: sessao } = await supabase
+          .from('partida_sessoes')
+          .select('team1_points, team2_points')
+          .eq('id', partidaId)
+          .single();
+        if (sessao) {
+          const t1 = (sessao.team1_points ?? 0) as number;
+          const t2 = (sessao.team2_points ?? 0) as number;
+          const newT1 = player.status === 'team1' ? Math.max(t1 + delta, 0) : t1;
+          const newT2 = player.status === 'team2' ? Math.max(t2 + delta, 0) : t2;
+          await supabase.from('partida_sessoes').update({ team1_points: newT1, team2_points: newT2 }).eq('id', partidaId);
+          setTeam1MatchPoints(newT1);
+          setTeam2MatchPoints(newT2);
+          if (delta < 0) setShowWinnerModal(null);
+          else if (newT1 >= 12) setShowWinnerModal('team1');
+          else if (newT2 >= 12) setShowWinnerModal('team2');
+          fetchPartidaSessao(partidaId);
+        }
+      }
+    }
+  };
+
+  // ── Suspensão temporária de jogador ──────────────────────
+  const suspendPlayer = async (player: Player) => {
+    if (!isAdminMode) return;
+    if (player.status !== 'team1' && player.status !== 'team2') return;
+
+    const originalTeam = player.status as 'team1' | 'team2';
+    let replacedById: string | null = null;
+
+    // Mover jogador para status suspended
+    await supabase.from('players').update({ status: 'suspended' }).eq('id', player.id);
+
+    // Promover próximo da fila de espera para o time
+    if (waitingList.length > 0) {
+      const next = waitingList[0];
+      await supabase.from('players').update({ status: originalTeam }).eq('id', next.id);
+      replacedById = next.id;
+    }
+
+    setSuspendedPlayers((prev) => ({ ...prev, [player.id]: { originalTeam, replacedById } }));
+    setStatsModalPlayer(null);
+    await fetchPlayers();
+    addNotification(`${player.name} suspenso temporariamente.`, 'info', { showToastForMs: 3000 });
+  };
+
+  const reinsertPlayer = async (player: Player) => {
+    if (!isAdminMode) return;
+    const info = suspendedPlayers[player.id];
+    if (!info) return;
+
+    const { originalTeam, replacedById } = info;
+
+    // Reinserir jogador no time original
+    await supabase.from('players').update({ status: originalTeam }).eq('id', player.id);
+
+    // Mover substituto de volta para a fila de espera
+    if (replacedById) {
+      const substitute = players.find((p) => p.id === replacedById);
+      if (substitute && (substitute.status === 'team1' || substitute.status === 'team2')) {
+        // Coloca no topo da fila (joined_at bem antigo)
+        const earlyTime = waitingList.length > 0
+          ? new Date(Math.min(...waitingList.map((p) => new Date(p.joined_at).getTime())) - 1000).toISOString()
+          : new Date(Date.now() - 60000).toISOString();
+        await supabase.from('players').update({ status: 'waiting', joined_at: earlyTime }).eq('id', replacedById);
+      }
+    }
+
+    setSuspendedPlayers((prev) => {
+      const next = { ...prev };
+      delete next[player.id];
+      return next;
+    });
+    await fetchPlayers();
+    addNotification(`${player.name} reinserido no ${originalTeam === 'team1' ? 'Time 1' : 'Time 2'}.`, 'info', { showToastForMs: 3000 });
+  };
+
   const startNextMatch = async () => {
     if (!showWinnerModal) return;
     if (team1MatchPoints < 12 && team2MatchPoints < 12) return;
@@ -1208,9 +1336,35 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       }
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
+      setMatchPlayerStats({});
+
+      // ── Lidar com jogadores suspensos ──
+      const substitutesToWaiting: string[] = [];
+      for (const sp of suspendedList) {
+        const info = suspendedPlayers[sp.id];
+        if (!info) continue;
+
+        if (info.originalTeam === winningTeamKey) {
+          // Time vencedor: reinserir suspenso, substituto vai para o novo time (primeiro da fila)
+          await supabase.from('players').update({ status: winningTeamKey }).eq('id', sp.id);
+          if (info.replacedById) {
+            const earlyTime = new Date(Date.now() - 999999000).toISOString();
+            await supabase.from('players').update({ status: 'waiting', joined_at: earlyTime }).eq('id', info.replacedById);
+            substitutesToWaiting.push(info.replacedById);
+          }
+        } else {
+          // Time perdedor: suspenso vai para fila normal como perdedor
+          await supabase.from('players').update({ status: 'waiting', joined_at: new Date().toISOString() }).eq('id', sp.id);
+        }
+      }
+      setSuspendedPlayers({});
+
+      // Re-fetch para refletir mudanças dos suspensos antes de calcular a fila
+      const { data: freshPlayers } = await supabase.from('players').select('*').order('joined_at', { ascending: true });
+      const freshWaiting = ((freshPlayers ?? []) as Player[]).filter((p) => p.status === 'waiting');
 
       // Pegar até 5 da fila; se faltar, completar com perdedores (ordem: primeiros para os últimos)
-      const nextFromWaiting = waitingList.slice(0, 5);
+      const nextFromWaiting = freshWaiting.slice(0, 5);
       const needFromLosers = 5 - nextFromWaiting.length;
       const nextFromLosers = needFromLosers > 0 ? losers.slice(0, needFromLosers) : [];
       const toWaiting = needFromLosers > 0 ? losers.slice(needFromLosers) : losers;
@@ -1489,6 +1643,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       }
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
+      setMatchPlayerStats({});
       await fetchPlayers();
     } catch (err) {
       console.error('Error resetting queue:', err);
@@ -1718,6 +1873,64 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                 </div>
               ) : (
                 <>
+                  {/* Resumo de desempenho na partida atual */}
+                  {(() => {
+                    const mStats = matchPlayerStats[statsModalPlayer.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+                    const isRegistered = !!statsModalPlayer.user_id;
+                    const summaryRows = [
+                      { key: 'points' as const, label: 'Pontos', emoji: '🏀', value: mStats.points },
+                      ...(isRegistered ? [
+                        { key: 'blocks' as const, label: 'Bloqueios', emoji: '🛡️', value: mStats.blocks },
+                        { key: 'steals' as const, label: 'Roubos', emoji: '🏃', value: mStats.steals },
+                        { key: 'assists' as const, label: 'Assistências', emoji: '🤝', value: mStats.assists },
+                        { key: 'rebounds' as const, label: 'Rebotes', emoji: '📏', value: mStats.rebounds },
+                      ] : []),
+                    ];
+                    return (
+                      <div className={cn('rounded-xl p-3 space-y-2', darkMode ? 'bg-slate-800/60' : 'bg-slate-50')}>
+                        <p className={cn('text-xs font-bold uppercase tracking-wider', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                          Desempenho na partida
+                        </p>
+                        {summaryRows.map(({ key, label, emoji, value }) => (
+                          <div key={key} className="flex items-center justify-between">
+                            <span className={cn('text-sm flex items-center gap-1.5', darkMode ? 'text-slate-300' : 'text-slate-700')}>
+                              <span>{emoji}</span> {label}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {isAdminMode && (
+                                <button
+                                  type="button"
+                                  onClick={() => adjustStatFromSummary(statsModalPlayer, key, key === 'points' ? -1 : -1)}
+                                  disabled={value <= 0}
+                                  className={cn(
+                                    'w-8 h-8 rounded-lg flex items-center justify-center text-base font-bold transition-all',
+                                    value <= 0 ? 'opacity-30 cursor-not-allowed' : '',
+                                    darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-500 hover:bg-red-100'
+                                  )}
+                                  style={{ touchAction: 'manipulation' }}
+                                >-</button>
+                              )}
+                              <span className={cn('w-10 text-center text-lg font-black tabular-nums', darkMode ? 'text-white' : 'text-slate-900')}>
+                                {value}
+                              </span>
+                              {isAdminMode && (
+                                <button
+                                  type="button"
+                                  onClick={() => adjustStatFromSummary(statsModalPlayer, key, key === 'points' ? 1 : 1)}
+                                  className={cn(
+                                    'w-8 h-8 rounded-lg flex items-center justify-center text-base font-bold transition-all',
+                                    darkMode ? 'bg-green-500/10 text-green-400 hover:bg-green-500/20' : 'bg-green-50 text-green-600 hover:bg-green-100'
+                                  )}
+                                  style={{ touchAction: 'manipulation' }}
+                                >+</button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
                   {pointsBlocked && (
                     <div
                       className={cn(
@@ -1729,69 +1942,51 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                       {pointsBlockedMessage}
                     </div>
                   )}
-                  {/* Pontos (todos os jogadores) */}
-                  <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
-                    <div className="flex items-center gap-1">
-                      {isAdminMode && (
-                        <button type="button" onClick={() => removePlayerStat(statsModalPlayer, 'points_2')}
-                          className={cn('w-9 h-9 rounded-lg flex items-center justify-center text-lg font-bold shrink-0 transition-all', darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-500 hover:bg-red-100')}
-                          style={{ touchAction: 'manipulation' }}>-</button>
-                      )}
-                      <StatButton
-                        onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
-                        disabled={pointsBlocked}
-                        className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]')}
-                      >
-                        <Target className="w-5 h-5 mx-auto mb-0.5" />
-                        +2 pts
-                      </StatButton>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      {isAdminMode && (
-                        <button type="button" onClick={() => removePlayerStat(statsModalPlayer, 'points_3')}
-                          className={cn('w-9 h-9 rounded-lg flex items-center justify-center text-lg font-bold shrink-0 transition-all', darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-500 hover:bg-red-100')}
-                          style={{ touchAction: 'manipulation' }}>-</button>
-                      )}
-                      <StatButton
-                        onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
-                        disabled={pointsBlocked}
-                        className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]')}
-                      >
-                        <Target className="w-5 h-5 mx-auto mb-0.5" />
-                        +3 pts
-                      </StatButton>
-                    </div>
+
+                  {/* Botões rápidos de pontuação */}
+                  <div className={cn('grid grid-cols-3 gap-2', pointsBlocked && 'opacity-60 pointer-events-none')}>
+                    <StatButton
+                      onClick={() => addPlayerStat(statsModalPlayer, 'points_1')}
+                      disabled={pointsBlocked}
+                      className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-orange-500/20 text-orange-600 dark:text-orange-400 hover:bg-orange-500/30 active:scale-[0.98]')}
+                    >
+                      <Target className="w-5 h-5 mx-auto mb-0.5" />
+                      +1 pt
+                    </StatButton>
+                    <StatButton
+                      onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
+                      disabled={pointsBlocked}
+                      className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]')}
+                    >
+                      <Target className="w-5 h-5 mx-auto mb-0.5" />
+                      +2 pts
+                    </StatButton>
+                    <StatButton
+                      onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
+                      disabled={pointsBlocked}
+                      className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]')}
+                    >
+                      <Target className="w-5 h-5 mx-auto mb-0.5" />
+                      +3 pts
+                    </StatButton>
                   </div>
-                  {/* Atributos extras (só cadastrados) */}
-                  {statsModalPlayer.user_id && (
-                    <div className="grid grid-cols-2 gap-3">
-                      {([
-                        { stat: 'blocks' as const, emoji: '🛡️', label: 'bloqueio', cls: 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30' },
-                        { stat: 'steals' as const, emoji: '🏃', label: 'roubo', cls: 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30' },
-                        { stat: 'assists' as const, emoji: '🤝', label: 'assistência', cls: 'bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500/30' },
-                        { stat: 'rebounds' as const, emoji: '📏', label: 'rebote', cls: 'bg-teal-500/20 text-teal-600 dark:text-teal-400 hover:bg-teal-500/30' },
-                      ]).map(({ stat, emoji, label, cls }) => (
-                        <div key={stat} className="flex items-center gap-1">
-                          {isAdminMode && (
-                            <button type="button" onClick={() => removePlayerStat(statsModalPlayer, stat)}
-                              className={cn('w-9 h-9 rounded-lg flex items-center justify-center text-lg font-bold shrink-0 transition-all', darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-500 hover:bg-red-100')}
-                              style={{ touchAction: 'manipulation' }}>-</button>
-                          )}
-                          <StatButton
-                            onClick={() => addPlayerStat(statsModalPlayer, stat)}
-                            disabled={pointsBlocked}
-                            className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : `${cls} active:scale-[0.98]`)}
-                          >
-                            <span className="text-lg">{emoji}</span>
-                            <span className="block text-xs">+1 {label}</span>
-                          </StatButton>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+
                 </>
               )}
             </motion.div>
+
+            {/* Suspender jogador — fora do modal, canto superior direito */}
+            {!registeringStatLabel && isAdminMode && isMatchStarted && (statsModalPlayer.status === 'team1' || statsModalPlayer.status === 'team2') && (
+              <button
+                type="button"
+                onClick={() => suspendPlayer(statsModalPlayer)}
+                className="fixed top-4 right-4 z-[60] flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-lg shadow-amber-500/30 transition-all active:scale-95"
+                style={{ touchAction: 'manipulation' }}
+              >
+                <UserMinus className="w-4 h-4" />
+                Suspender
+              </button>
+            )}
           </div>
         )}
       </AnimatePresence>
@@ -2462,7 +2657,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                     </motion.div>
                   ))}
                 </AnimatePresence>
-                {waitingList.length === 0 && (
+                {waitingList.length === 0 && suspendedList.length === 0 && (
                   <div
                     className={cn(
                       'col-span-full py-8 text-center text-xs sm:text-sm border-2 border-dashed rounded-2xl transition-colors duration-300',
@@ -2473,6 +2668,53 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                   </div>
                 )}
               </div>
+
+              {/* Jogadores suspensos */}
+              {suspendedList.length > 0 && (
+                <div className="mt-3 space-y-2">
+                  <p className={cn('text-xs font-bold uppercase tracking-wider flex items-center gap-1.5', darkMode ? 'text-amber-400/70' : 'text-amber-600')}>
+                    <UserMinus className="w-3.5 h-3.5" /> Suspensos ({suspendedList.length})
+                  </p>
+                  {suspendedList.map((player) => {
+                    const info = suspendedPlayers[player.id];
+                    return (
+                      <div
+                        key={player.id}
+                        className={cn(
+                          'border p-2 sm:p-3 rounded-xl flex items-center justify-between transition-colors duration-300',
+                          darkMode ? 'bg-amber-500/5 border-amber-500/20' : 'bg-amber-50 border-amber-200'
+                        )}
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <UserMinus className={cn('w-4 h-4 shrink-0', darkMode ? 'text-amber-400' : 'text-amber-600')} />
+                          <span className={cn('font-medium text-xs sm:text-sm truncate', darkMode ? 'text-amber-200' : 'text-amber-800')}>
+                            {player.name}
+                          </span>
+                          {info && (
+                            <span className={cn('text-[10px] shrink-0', darkMode ? 'text-amber-400/50' : 'text-amber-500')}>
+                              {info.originalTeam === 'team1' ? 'Time 1' : 'Time 2'}
+                            </span>
+                          )}
+                        </div>
+                        {isAdminMode && (
+                          <button
+                            onClick={() => reinsertPlayer(player)}
+                            className={cn(
+                              'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shrink-0 ml-2',
+                              darkMode
+                                ? 'bg-green-500/10 text-green-400 hover:bg-green-500/20 border border-green-500/20'
+                                : 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'
+                            )}
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            Reinserir
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </section>
             </div>
             )}

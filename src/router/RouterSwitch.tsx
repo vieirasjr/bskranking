@@ -10,6 +10,7 @@ import DashboardLocais from '../pages/dashboard/DashboardLocais';
 import DashboardEventos from '../pages/dashboard/DashboardEventos';
 import DashboardAssinatura from '../pages/dashboard/DashboardAssinatura';
 import DashboardCheckout from '../pages/dashboard/DashboardCheckout';
+import SuperAdmin from '../pages/SuperAdmin';
 import { TenantProvider } from '../contexts/TenantContext';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -56,6 +57,9 @@ export default function RouterSwitch() {
         <Route path="assinatura" element={<DashboardAssinatura />} />
         <Route path="checkout/:planId" element={<DashboardCheckout />} />
       </Route>
+
+      {/* Super Admin */}
+      <Route path="/admin" element={<PrivateRoute><SuperAdmin /></PrivateRoute>} />
 
       {/* App público de cada local (slug dinâmico) */}
       <Route path="/:slug" element={<LocalApp />} />
