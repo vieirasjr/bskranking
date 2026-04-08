@@ -26,6 +26,9 @@ export default function DashboardLocais() {
   const [slugManual, setSlugManual] = useState(false);
   const [lat, setLat] = useState('');
   const [lng, setLng] = useState('');
+  const [desc, setDesc] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
+  const [website, setWebsite] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -34,6 +37,8 @@ export default function DashboardLocais() {
   const [editDesc, setEditDesc] = useState('');
   const [editLat, setEditLat] = useState('');
   const [editLng, setEditLng] = useState('');
+  const [editImageUrl, setEditImageUrl] = useState('');
+  const [editWebsite, setEditWebsite] = useState('');
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,15 +54,18 @@ export default function DashboardLocais() {
         tenant_id: tenant.id,
         name: name.trim(),
         slug: slug.trim(),
+        description: desc.trim() || null,
         lat: lat ? parseFloat(lat) : null,
         lng: lng ? parseFloat(lng) : null,
+        image_url: imageUrl.trim() || null,
+        website: website.trim() || null,
         is_active: true,
       });
       if (err) {
         setError(err.message.includes('slug_unique') ? 'URL já em uso. Escolha outra.' : err.message);
         return;
       }
-      setName(''); setSlug(''); setLat(''); setLng('');
+      setName(''); setSlug(''); setLat(''); setLng(''); setDesc(''); setImageUrl(''); setWebsite('');
       setSlugManual(false);
       setShowForm(false);
       refresh();
@@ -78,6 +86,8 @@ export default function DashboardLocais() {
       description: editDesc || null,
       lat: editLat ? parseFloat(editLat) : null,
       lng: editLng ? parseFloat(editLng) : null,
+      image_url: editImageUrl.trim() || null,
+      website: editWebsite.trim() || null,
     }).eq('id', loc.id);
     setEditingId(null);
     refresh();
@@ -132,6 +142,24 @@ export default function DashboardLocais() {
                   placeholder="parque-ibirapuera"
                   className="flex-1 px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-r-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm" />
               </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Descrição (opcional)</label>
+              <input value={desc} onChange={(e) => setDesc(e.target.value)}
+                placeholder="Ex: Quadra coberta, entrada pela rua X"
+                className="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Logomarca / Imagem (URL)</label>
+              <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)}
+                placeholder="https://exemplo.com/logo.png"
+                className="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Site ou rede social (opcional)</label>
+              <input value={website} onChange={(e) => setWebsite(e.target.value)}
+                placeholder="https://instagram.com/seulocal"
+                className="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -189,6 +217,18 @@ export default function DashboardLocais() {
                       placeholder="Ex: Quadra coberta, entrada pela rua X"
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50" />
                   </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Logomarca / Imagem (URL)</label>
+                    <input value={editImageUrl} onChange={(e) => setEditImageUrl(e.target.value)}
+                      placeholder="https://exemplo.com/logo.png"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Site ou rede social</label>
+                    <input value={editWebsite} onChange={(e) => setEditWebsite(e.target.value)}
+                      placeholder="https://instagram.com/seulocal"
+                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50" />
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-xs font-medium text-slate-400 mb-1">Latitude</label>
@@ -229,7 +269,7 @@ export default function DashboardLocais() {
                       className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all">
                       <ExternalLink className="w-4 h-4" />
                     </button>
-                    <button onClick={() => { setEditingId(loc.id); setEditName(loc.name); setEditDesc(loc.description ?? ''); setEditLat(loc.lat?.toString() ?? ''); setEditLng(loc.lng?.toString() ?? ''); }}
+                    <button onClick={() => { setEditingId(loc.id); setEditName(loc.name); setEditDesc(loc.description ?? ''); setEditLat(loc.lat?.toString() ?? ''); setEditLng(loc.lng?.toString() ?? ''); setEditImageUrl(loc.image_url ?? ''); setEditWebsite(loc.website ?? ''); }}
                       className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-all">
                       <Pencil className="w-4 h-4" />
                     </button>

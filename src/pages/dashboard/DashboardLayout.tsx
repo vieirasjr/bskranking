@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Trophy, MapPin, CreditCard, LogOut, ExternalLink, AlertCircle, Menu, X, ChevronLeft, ChevronRight, LayoutDashboard } from 'lucide-react';
+import { Trophy, MapPin, CreditCard, LogOut, ExternalLink, AlertCircle, Menu, X, ChevronLeft, ChevronRight, LayoutDashboard, Calendar } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
 
@@ -20,6 +20,7 @@ const STATUS_LABEL: Record<string, string> = {
 const NAV_ITEMS = [
   { to: '/dashboard', end: true,              icon: LayoutDashboard, label: 'Painel'      },
   { to: '/dashboard/locais', end: false,       icon: MapPin,          label: 'Locais'      },
+  { to: '/dashboard/eventos', end: false,      icon: Calendar,        label: 'Eventos'     },
   { to: '/dashboard/assinatura', end: false,   icon: CreditCard,      label: 'Assinatura'  },
 ];
 

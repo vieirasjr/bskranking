@@ -1,11 +1,19 @@
 import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Trophy, Mail, Lock, User, Eye, EyeOff, AlertCircle, ArrowLeft } from 'lucide-react';
+import { Trophy, Mail, Lock, User, Eye, EyeOff, AlertCircle, ArrowLeft, Check } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../supabase';
 
+const PLANS = [
+  { id: 'teste', name: 'Teste', price: 1, period: 'único', desc: '5 jogadores · 1 local · 1 evento', badge: 'R$1' },
+  { id: 'basico', name: 'Básico', price: 100, period: 'mês', desc: '30 jogadores · 1 local · 2 eventos', badge: null },
+  { id: 'profissional', name: 'Profissional', price: 150, period: 'mês', desc: '60 jogadores · 2 locais · 6 eventos', badge: 'Popular', highlight: true },
+  { id: 'enterprise', name: 'Enterprise', price: 200, period: 'mês', desc: 'Ilimitado', badge: 'Completo' },
+];
+
 const PLAN_NAMES: Record<string, string> = {
+  teste: 'Teste — R$1',
   avulso: 'Evento Avulso — R$50/evento',
   basico: 'Básico — R$100/mês',
   profissional: 'Profissional — R$150/mês',
@@ -28,11 +36,12 @@ const RESERVED_SLUGS = ['entrar', 'dashboard', 'api', 'admin', 'login', 'cadastr
 export default function CadastroAdmin() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const selectedPlan = params.get('plano') ?? 'basico';
+  const preselectedPlan = params.get('plano');
   const { signUp, signIn, session } = useAuth();
 
-  // Se já tem sessão (ex: veio do dashboard sem tenant), pula direto para step 2
-  const [step, setStep] = useState<1 | 2>(session ? 2 : 1);
+  const [selectedPlan, setSelectedPlan] = useState(preselectedPlan ?? '');
+  // Se já tem plano pré-selecionado E sessão, pula para step 3; se tem plano e sem sessão, step 2; senão step 1
+  const [step, setStep] = useState<1 | 2 | 3>(preselectedPlan ? (session ? 3 : 2) : 1);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
@@ -43,8 +52,10 @@ export default function CadastroAdmin() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Step 1: criar conta Supabase Auth
-  const handleStep1 = async (e: React.FormEvent) => {
+  // Step 1: selecionar plano (handled inline)
+
+  // Step 2: criar conta Supabase Auth
+  const handleStep2 = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (!email.trim() || !password) { setError('Preencha email e senha.'); return; }
@@ -55,14 +66,14 @@ export default function CadastroAdmin() {
       if (signUpErr) { setError(signUpErr.message); return; }
       const { error: signInErr } = await signIn(email, password);
       if (signInErr) { setError('Conta criada! Verifique seu email e faça login.'); return; }
-      setStep(2);
+      setStep(3);
     } finally {
       setLoading(false);
     }
   };
 
-  // Step 2: criar tenant + location
-  const handleStep2 = async (e: React.FormEvent) => {
+  // Step 3: criar tenant + location
+  const handleStep3 = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (!tenantName.trim()) { setError('Nome do espaço obrigatório.'); return; }
@@ -128,14 +139,16 @@ export default function CadastroAdmin() {
             <Trophy className="text-white w-7 h-7" />
           </div>
           <h1 className="text-2xl font-bold text-white">Criar conta</h1>
-          <p className="text-slate-400 text-sm mt-1">
-            Plano: <span className="text-orange-400 font-semibold">{PLAN_NAMES[selectedPlan] ?? selectedPlan}</span>
-          </p>
+          {selectedPlan && step > 1 && (
+            <p className="text-slate-400 text-sm mt-1">
+              Plano: <span className="text-orange-400 font-semibold">{PLAN_NAMES[selectedPlan] ?? selectedPlan}</span>
+            </p>
+          )}
         </div>
 
         {/* Step indicators */}
         <div className="flex items-center gap-2 mb-6">
-          {[1, 2].map((s) => (
+          {[1, 2, 3].map((s) => (
             <div key={s} className={`flex-1 h-1.5 rounded-full transition-all ${s <= step ? 'bg-orange-500' : 'bg-slate-700'}`} />
           ))}
         </div>
@@ -144,12 +157,47 @@ export default function CadastroAdmin() {
           key={step}
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
-          className="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-xl"
+          className={step === 1 ? '' : 'bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-xl'}
         >
           {step === 1 ? (
             <>
+              <h2 className="font-bold text-white mb-4 text-center">Escolha seu plano</h2>
+              <div className="space-y-3">
+                {PLANS.map((plan) => (
+                  <button
+                    key={plan.id}
+                    onClick={() => { setSelectedPlan(plan.id); setError(null); setStep(session ? 3 : 2); }}
+                    className={`w-full p-4 rounded-2xl border text-left transition-all group ${
+                      plan.highlight
+                        ? 'border-orange-500/50 bg-orange-500/5 hover:border-orange-500 hover:bg-orange-500/10'
+                        : 'border-slate-700 bg-slate-800/60 hover:border-orange-500/40 hover:bg-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-bold text-white">{plan.name}</p>
+                          {plan.badge && (
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              plan.highlight ? 'bg-orange-500 text-white' : 'bg-slate-600 text-slate-200'
+                            }`}>{plan.badge}</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">{plan.desc}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-xl font-black text-white">R${plan.price}</p>
+                        <p className="text-[10px] text-slate-500">/{plan.period}</p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : step === 2 ? (
+            <>
               <h2 className="font-bold text-white mb-4">1. Sua conta</h2>
-              <form onSubmit={handleStep1} className="space-y-4">
+              <form onSubmit={handleStep2} className="space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-400 mb-1.5">Email</label>
                   <div className="relative">
@@ -178,17 +226,23 @@ export default function CadastroAdmin() {
                     <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />{error}
                   </div>
                 )}
-                <button type="submit" disabled={loading}
-                  className="w-full py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-                  {loading ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <User className="w-4 h-4" />}
-                  Criar conta
-                </button>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { setStep(1); setError(null); }}
+                    className="px-4 py-3 rounded-xl font-semibold bg-slate-700 text-slate-300 hover:bg-slate-600 transition-all flex items-center gap-1">
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <button type="submit" disabled={loading}
+                    className="flex-1 py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                    {loading ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <User className="w-4 h-4" />}
+                    Criar conta
+                  </button>
+                </div>
               </form>
             </>
           ) : (
             <>
               <h2 className="font-bold text-white mb-4">2. Seu espaço e primeiro local</h2>
-              <form onSubmit={handleStep2} className="space-y-4">
+              <form onSubmit={handleStep3} className="space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-400 mb-1.5">Nome do espaço / organização</label>
                   <input value={tenantName} onChange={(e) => setTenantName(e.target.value)}
@@ -220,7 +274,7 @@ export default function CadastroAdmin() {
                   </div>
                 )}
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => setStep(1)}
+                  <button type="button" onClick={() => { setStep(session ? 1 : 2); setError(null); }}
                     className="px-4 py-3 rounded-xl font-semibold bg-slate-700 text-slate-300 hover:bg-slate-600 transition-all flex items-center gap-1">
                     <ArrowLeft className="w-4 h-4" />
                   </button>

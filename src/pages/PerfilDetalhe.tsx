@@ -27,6 +27,7 @@ export interface PerfilDetalheData {
   steals: number;
   clutch_points: number;
   assists: number;
+  rebounds: number;
   avatar_url?: string | null;
 }
 
@@ -51,6 +52,7 @@ const PERF_BARS: { key: keyof PerfilDetalheData; label: string; color: string }[
   { key: 'points',       label: 'Pts',  color: '#10b981' },
   { key: 'wins',         label: 'Vit',  color: '#f59e0b' },
   { key: 'assists',      label: 'Ast',  color: '#06b6d4' },
+  { key: 'rebounds',     label: 'Reb',  color: '#14b8a6' },
   { key: 'blocks',       label: 'Blk',  color: '#3b82f6' },
   { key: 'steals',       label: 'Rou',  color: '#8b5cf6' },
   { key: 'clutch_points',label: 'Dec',  color: '#f43f5e' },
@@ -60,6 +62,7 @@ const PERF_BARS: { key: keyof PerfilDetalheData; label: string; color: string }[
 const STAT_ROWS: { key: keyof PerfilDetalheData; label: string; emoji: string }[] = [
   { key: 'points',        label: 'Pontos',       emoji: '🏀' },
   { key: 'assists',       label: 'Assistências', emoji: '🤝' },
+  { key: 'rebounds',      label: 'Rebotes',      emoji: '📏' },
   { key: 'blocks',        label: 'Tocos',        emoji: '🛡️' },
   { key: 'steals',        label: 'Roubos',       emoji: '⚡' },
   { key: 'clutch_points', label: 'Decisivos',    emoji: '🎯' },
@@ -427,6 +430,67 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
           );
         })}
       </div>
+
+      {/* ── BADGES / MARCOS ────────────────────────────────────── */}
+      {(() => {
+        const THRESHOLDS = [10, 100, 200, 500];
+        const BADGE_DEFS: { key: keyof PerfilDetalheData; label: string; emoji: string; colors: string[] }[] = [
+          { key: 'points',   label: 'Pontos',       emoji: '🏀', colors: ['#a3e635', '#22c55e', '#14b8a6', '#f59e0b'] },
+          { key: 'assists',  label: 'Assistências', emoji: '🤝', colors: ['#a3e635', '#22c55e', '#14b8a6', '#f59e0b'] },
+          { key: 'rebounds', label: 'Rebotes',      emoji: '📏', colors: ['#a3e635', '#22c55e', '#14b8a6', '#f59e0b'] },
+          { key: 'blocks',   label: 'Tocos',        emoji: '🛡️', colors: ['#a3e635', '#22c55e', '#14b8a6', '#f59e0b'] },
+          { key: 'steals',   label: 'Roubos',       emoji: '⚡', colors: ['#a3e635', '#22c55e', '#14b8a6', '#f59e0b'] },
+          { key: 'wins',     label: 'Vitórias',     emoji: '🏆', colors: ['#a3e635', '#22c55e', '#14b8a6', '#f59e0b'] },
+        ];
+        const earned: { label: string; emoji: string; threshold: number; color: string; value: number }[] = [];
+        for (const def of BADGE_DEFS) {
+          const val = Number(data[def.key]) || 0;
+          for (let i = 0; i < THRESHOLDS.length; i++) {
+            if (val >= THRESHOLDS[i]) {
+              earned.push({ label: def.label, emoji: def.emoji, threshold: THRESHOLDS[i], color: def.colors[i], value: val });
+            }
+          }
+        }
+        if (earned.length === 0) return null;
+        return (
+          <div className={cn('rounded-2xl border overflow-hidden', darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm')}>
+            <div className={cn('px-5 py-4 border-b', darkMode ? 'border-slate-800' : 'border-slate-100')}>
+              <h2 className={cn('font-bold text-base', darkMode ? 'text-white' : 'text-slate-900')}>
+                Marcos alcançados
+              </h2>
+            </div>
+            <div className="px-5 py-4 flex flex-wrap gap-2">
+              {earned.map((b, i) => (
+                <motion.div
+                  key={`${b.label}-${b.threshold}`}
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: i * 0.05 }}
+                  className={cn(
+                    'flex items-center gap-2 px-3 py-2 rounded-xl border',
+                    darkMode ? 'border-slate-700 bg-slate-800/60' : 'border-slate-200 bg-slate-50'
+                  )}
+                >
+                  <div
+                    className="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0"
+                    style={{ backgroundColor: b.color + '20' }}
+                  >
+                    {b.emoji}
+                  </div>
+                  <div className="min-w-0">
+                    <p className={cn('text-xs font-bold leading-tight', darkMode ? 'text-white' : 'text-slate-800')}>
+                      {b.threshold}+ {b.label}
+                    </p>
+                    <p className="text-[10px]" style={{ color: b.color }}>
+                      {b.value} alcançados
+                    </p>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── BIO ─────────────────────────────────────────────────── */}
       {extra?.bio && (

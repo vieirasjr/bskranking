@@ -32,6 +32,8 @@ export interface Location {
   lng: number | null;
   radius_m: number;
   is_active: boolean;
+  image_url: string | null;
+  website: string | null;
 }
 
 interface TenantContextValue {

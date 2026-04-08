@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Trophy, Mail, Lock, UserPlus, User, AlertCircle, CheckCircle, Eye, EyeOff, X, Medal } from 'lucide-react';
+import { Trophy, Mail, Lock, UserPlus, User, AlertCircle, CheckCircle, Eye, EyeOff, X, Medal, MapPin, Search, Shield, ChevronRight } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '../contexts/AuthContext';
@@ -42,6 +42,8 @@ function validateForm(email: string, password: string, mode: Mode): string | nul
   if (mode === 'signup' && password.length < 6) return 'A senha deve ter pelo menos 6 caracteres.';
   return null;
 }
+
+interface LocationResult { id: string; name: string; slug: string; description: string | null }
 
 interface RankEntry { name: string; points: number; wins: number }
 
@@ -225,6 +227,11 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
   const [formOpen, setFormOpen] = useState(false);
   const [showGuestWarning, setShowGuestWarning] = useState(false);
   const [ranking, setRanking] = useState<RankEntry[]>([]);
+  const [showRoleChoice, setShowRoleChoice] = useState(false);
+  const [showLocationConfirm, setShowLocationConfirm] = useState(false);
+  const [locationSearch, setLocationSearch] = useState('');
+  const [locationResults, setLocationResults] = useState<LocationResult[]>([]);
+  const [searchingLocations, setSearchingLocations] = useState(false);
 
   useEffect(() => {
     if (!isPlayerMode || !locationId) return;
@@ -237,8 +244,29 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
       .then(({ data }) => { if (data?.length) setRanking(data as RankEntry[]); });
   }, [locationId, isPlayerMode]);
 
+  useEffect(() => {
+    const term = locationSearch.trim();
+    if (term.length < 2) { setLocationResults([]); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setSearchingLocations(true);
+      const { data } = await supabase
+        .from('locations')
+        .select('id, name, slug, description')
+        .eq('is_active', true)
+        .ilike('name', `%${term}%`)
+        .limit(10);
+      if (!cancelled) {
+        setLocationResults((data ?? []) as LocationResult[]);
+        setSearchingLocations(false);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [locationSearch]);
+
   const handleSuccess = () => navigate(redirectTo ?? '/dashboard', { replace: true });
   const openForm = (m: Mode) => { setMode(m); setFormOpen(true); };
+  const handleCreateAccount = () => { setShowRoleChoice(true); };
 
   // ── Modo admin (tela clássica) ─────────────────────────────────────────────
   if (!isPlayerMode) {
@@ -309,7 +337,7 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
       {/* Bottom CTA — fixo na base */}
       <div className="fixed bottom-0 inset-x-0 z-20 px-5 pb-8 pt-4 flex flex-col gap-3"
         style={{ background: 'linear-gradient(to top, rgba(2,6,23,1) 60%, rgba(2,6,23,0))' }}>
-        <button onClick={() => openForm('signup')}
+        <button onClick={handleCreateAccount}
           className="w-full py-4 rounded-2xl font-bold text-white text-base
             bg-gradient-to-r from-orange-500 to-orange-600
             shadow-xl shadow-orange-500/40
@@ -416,6 +444,152 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
                   className="flex-1 py-3 rounded-xl font-semibold bg-orange-500 hover:bg-orange-600 text-white transition-all">
                   Entendi, continuar
                 </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal escolha de perfil */}
+      <AnimatePresence>
+        {showRoleChoice && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
+          >
+            <motion.div initial={{ y: 60, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 60, opacity: 0 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+              className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl bg-slate-900 border border-slate-700"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="font-black text-white text-lg">Como deseja participar?</h2>
+                <button onClick={() => setShowRoleChoice(false)}
+                  className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white/60 hover:text-white hover:bg-white/20 transition-all">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => { setShowRoleChoice(false); setShowLocationConfirm(true); setLocationSearch(''); setLocationResults([]); }}
+                  className="w-full p-4 rounded-2xl border border-slate-700 bg-slate-800/60 hover:border-orange-500/40 hover:bg-slate-800 transition-all text-left group"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-orange-500/10 flex items-center justify-center shrink-0 group-hover:bg-orange-500/20 transition-colors">
+                      <User className="w-6 h-6 text-orange-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-white">Sou atleta</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Quero jogar, entrar na fila e acompanhar minhas estatísticas</p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-slate-600 group-hover:text-orange-400 transition-colors shrink-0" />
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => { setShowRoleChoice(false); navigate('/cadastro'); }}
+                  className="w-full p-4 rounded-2xl border border-slate-700 bg-slate-800/60 hover:border-orange-500/40 hover:bg-slate-800 transition-all text-left group"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-emerald-500/10 flex items-center justify-center shrink-0 group-hover:bg-emerald-500/20 transition-colors">
+                      <Shield className="w-6 h-6 text-emerald-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-white">Sou administrador</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Quero criar e gerenciar quadras, eventos e campeonatos</p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-slate-600 group-hover:text-emerald-400 transition-colors shrink-0" />
+                  </div>
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal confirmação de local (atleta) */}
+      <AnimatePresence>
+        {showLocationConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm"
+          >
+            <motion.div initial={{ y: 60, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 60, opacity: 0 }}
+              transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+              className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl bg-slate-900 border border-slate-700 max-h-[85vh] flex flex-col"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-black text-white text-lg">Confirme seu local</h2>
+                <button onClick={() => setShowLocationConfirm(false)}
+                  className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white/60 hover:text-white hover:bg-white/20 transition-all">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Local atual */}
+              <button
+                onClick={() => { setShowLocationConfirm(false); openForm('signup'); }}
+                className="w-full p-4 rounded-2xl border-2 border-orange-500/50 bg-orange-500/5 hover:bg-orange-500/10 transition-all text-left mb-4"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-orange-500/20 flex items-center justify-center shrink-0">
+                    <MapPin className="w-5 h-5 text-orange-400" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-white text-sm">{locationName}</p>
+                    <p className="text-xs text-orange-400 mt-0.5">Local atual — toque para confirmar</p>
+                  </div>
+                  <CheckCircle className="w-5 h-5 text-orange-500 shrink-0" />
+                </div>
+              </button>
+
+              {/* Separador */}
+              <div className="relative my-2">
+                <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-700" /></div>
+                <div className="relative flex justify-center text-xs"><span className="bg-slate-900 px-3 text-slate-500">ou escolha outro local</span></div>
+              </div>
+
+              {/* Busca */}
+              <div className="relative mt-3 mb-3">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={locationSearch}
+                  onChange={(e) => setLocationSearch(e.target.value)}
+                  placeholder="Buscar por nome do local..."
+                  className="w-full pl-10 pr-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50"
+                />
+              </div>
+
+              {/* Resultados */}
+              <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
+                {searchingLocations && (
+                  <div className="flex items-center justify-center py-6">
+                    <div className="w-5 h-5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
+                {!searchingLocations && locationSearch.trim().length >= 2 && locationResults.length === 0 && (
+                  <p className="text-slate-500 text-sm text-center py-6">Nenhum local encontrado</p>
+                )}
+                {locationResults.map((loc) => (
+                  <button
+                    key={loc.id}
+                    onClick={() => { setShowLocationConfirm(false); navigate(`/${loc.slug}`); }}
+                    className="w-full p-3 rounded-xl border border-slate-700 bg-slate-800/60 hover:border-orange-500/30 hover:bg-slate-800 transition-all text-left"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-slate-700 flex items-center justify-center shrink-0">
+                        <MapPin className="w-4 h-4 text-slate-400" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-white text-sm truncate">{loc.name}</p>
+                        {loc.description && <p className="text-xs text-slate-500 truncate">{loc.description}</p>}
+                        <p className="text-[11px] text-slate-600">/{loc.slug}</p>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-slate-600 shrink-0" />
+                    </div>
+                  </button>
+                ))}
               </div>
             </motion.div>
           </motion.div>

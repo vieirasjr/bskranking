@@ -35,12 +35,14 @@ const PLAN_NAMES: Record<string, string> = {
   profissional: "Basquete Next - Plano Profissional",
   enterprise:   "Basquete Next - Plano Enterprise",
   avulso:       "Basquete Next - Evento Avulso",
+  teste:        "Basquete Next - Teste",
 };
 const PLAN_PRICES: Record<string, number> = {
   basico: 100,
   profissional: 150,
   enterprise: 200,
   avulso: 50,
+  teste: 1,
 };
 // Planos com expiração por tempo (horas) em vez de ciclo mensal
 const PLAN_EXPIRY_HOURS: Record<string, number> = {
@@ -415,6 +417,17 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
+  // ── OPTIONS /api/webhook/mercadopago ──────────────────────
+  // MP pode enviar preflight CORS antes do POST
+  app.options("/api/webhook/mercadopago", (_req, res) => {
+    res.set({
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+    });
+    res.status(200).end();
+  });
+
   // ── GET /api/webhook/mercadopago ─────────────────────────
   // MP valida o endpoint com GET antes de enviar notificações
   app.get("/api/webhook/mercadopago", (_req, res) => {
@@ -425,6 +438,7 @@ async function startServer() {
   // Recebe notificações do MP (pagamentos, assinaturas)
   app.post("/api/webhook/mercadopago", async (req, res) => {
     // Responde 200 imediatamente para o MP não retentar
+    res.set("Access-Control-Allow-Origin", "*");
     res.status(200).json({ ok: true });
 
     try {

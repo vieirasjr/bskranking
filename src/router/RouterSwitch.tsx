@@ -7,6 +7,7 @@ import LocalApp from '../pages/LocalApp';
 import DashboardLayout from '../pages/dashboard/DashboardLayout';
 import DashboardHome from '../pages/dashboard/DashboardHome';
 import DashboardLocais from '../pages/dashboard/DashboardLocais';
+import DashboardEventos from '../pages/dashboard/DashboardEventos';
 import DashboardAssinatura from '../pages/dashboard/DashboardAssinatura';
 import DashboardCheckout from '../pages/dashboard/DashboardCheckout';
 import { TenantProvider } from '../contexts/TenantContext';
@@ -51,6 +52,7 @@ export default function RouterSwitch() {
       }>
         <Route index element={<DashboardHome />} />
         <Route path="locais" element={<DashboardLocais />} />
+        <Route path="eventos" element={<DashboardEventos />} />
         <Route path="assinatura" element={<DashboardAssinatura />} />
         <Route path="checkout/:planId" element={<DashboardCheckout />} />
       </Route>

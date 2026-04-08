@@ -137,10 +137,28 @@ interface PlayerStats {
   steals: number;
   clutch_points: number;
   assists: number;
+  rebounds: number;
 }
 
+interface Evento {
+  id: string;
+  title: string;
+  description: string | null;
+  event_date: string;
+  event_time: string | null;
+  type: 'torneio' | 'campeonato' | 'festival';
+  modality: '5x5' | '3x3' | '1x1';
+  max_participants: number | null;
+  status: 'draft' | 'open' | 'in_progress' | 'finished' | 'cancelled';
+  created_at: string;
+  _inscricoes_count?: number;
+}
+
+const EVENT_TYPE_LABELS: Record<Evento['type'], string> = { torneio: 'Torneio', campeonato: 'Campeonato', festival: 'Festival' };
+const EVENT_STATUS_LABELS: Record<Evento['status'], string> = { draft: 'Rascunho', open: 'Inscrições abertas', in_progress: 'Em andamento', finished: 'Encerrado', cancelled: 'Cancelado' };
+
 type Tab = 'inicio' | 'lista' | 'eventos' | 'perfil';
-type SortKey = 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assists';
+type SortKey = 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assists' | 'rebounds';
 
 const ADMIN_PASSWORD = '1710';
 const ADMIN_STORAGE_KEY = 'basquete_admin';
@@ -185,6 +203,9 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   const [selectedAdminUsers, setSelectedAdminUsers] = useState<RegisteredUserSuggestion[]>([]);
   const [unregisteredAddName, setUnregisteredAddName] = useState('');
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [eventos, setEventos] = useState<Evento[]>([]);
+  const [showEventoForm, setShowEventoForm] = useState(false);
+  const [eventoForm, setEventoForm] = useState({ title: '', description: '', event_date: '', event_time: '', type: 'torneio' as Evento['type'], modality: '5x5' as Evento['modality'], max_participants: '' });
   const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
   const [userCodes, setUserCodes] = useState<Record<string, string>>({});
   const [showAdminGestao, setShowAdminGestao] = useState(false);
@@ -268,6 +289,21 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       window.clearTimeout(timeoutId);
     };
   }, [adminAddName, isAdminMode]);
+
+  const fetchEventos = useCallback(async () => {
+    if (!locationId) return;
+    const { data, error } = await supabase
+      .from('eventos')
+      .select('*, evento_inscricoes(count)')
+      .eq('location_id', locationId)
+      .neq('status', 'cancelled')
+      .order('event_date', { ascending: true });
+    if (error) { console.error('Eventos fetch error:', error); return; }
+    setEventos((data ?? []).map((e: any) => ({
+      ...e,
+      _inscricoes_count: Array.isArray(e.evento_inscricoes) ? e.evento_inscricoes[0]?.count ?? 0 : 0,
+    })));
+  }, [locationId]);
 
   const fetchPlayers = useCallback(async () => {
     let q = supabase.from('players').select('*').order('joined_at', { ascending: true });
@@ -372,8 +408,9 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   useEffect(() => {
     fetchPlayers();
     fetchSession();
+    fetchEventos();
     setLoading(false);
-  }, [fetchPlayers, fetchSession]);
+  }, [fetchPlayers, fetchSession, fetchEventos]);
 
   useEffect(() => {
     fetchStats();
@@ -956,7 +993,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     ? 'Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.'
     : '';
 
-  const addPlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists') => {
+  const addPlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists' | 'rebounds') => {
     if (pointsBlocked) return;
     if (isRegisteringStatRef.current) return;
     isRegisteringStatRef.current = true;
@@ -966,14 +1003,15 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       blocks: 'Bloqueio',
       steals: 'Roubo',
       assists: 'Assistência',
+      rebounds: 'Rebote',
     };
     setRegisteringStatLabel(statLabels[stat]);
     const userId = player.user_id;
     const isVisitante = !userId;
 
     // Bloqueios, roubos e assistências: só cadastrados (não afetam placar)
-    if (isVisitante && (stat === 'blocks' || stat === 'steals' || stat === 'assists')) {
-      addNotification('Apenas jogadores cadastrados podem receber bloqueios, roubos e assistências no ranking.', 'warning', { showToastForMs: 5000 });
+    if (isVisitante && (stat === 'blocks' || stat === 'steals' || stat === 'assists' || stat === 'rebounds')) {
+      addNotification('Apenas jogadores cadastrados podem receber bloqueios, roubos, assistências e rebotes no ranking.', 'warning', { showToastForMs: 5000 });
       isRegisteringStatRef.current = false;
       setRegisteringStatLabel(null);
       return;
@@ -995,7 +1033,9 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                   ? { blocks: (existing.blocks ?? 0) + 1, user_id: userId }
                   : stat === 'steals'
                     ? { steals: (existing.steals ?? 0) + 1, user_id: userId }
-                    : { assists: (existing.assists ?? 0) + 1, user_id: userId };
+                    : stat === 'rebounds'
+                      ? { rebounds: (existing.rebounds ?? 0) + 1, user_id: userId }
+                      : { assists: (existing.assists ?? 0) + 1, user_id: userId };
           const { error: updErr } = await supabase.from('stats').update(updates).eq('id', existing.id);
           if (updErr) throw updErr;
         } else {
@@ -1006,6 +1046,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
             points: stat === 'points_2' ? 2 : stat === 'points_3' ? 3 : 0,
             blocks: stat === 'blocks' ? 1 : 0,
             steals: stat === 'steals' ? 1 : 0,
+            rebounds: stat === 'rebounds' ? 1 : 0,
             clutch_points: 0,
             ...(locationId ? { location_id: locationId } : {}),
           };
@@ -1073,6 +1114,72 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       if (msg !== 'fetch_sessao_failed') {
         addNotification('Erro ao registrar estatística.', 'error', { showToastForMs: 5000 });
       }
+    } finally {
+      isRegisteringStatRef.current = false;
+      setRegisteringStatLabel(null);
+    }
+  };
+
+  const removePlayerStat = async (player: Player, stat: 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists' | 'rebounds') => {
+    if (!isAdminMode) return;
+    if (isRegisteringStatRef.current) return;
+    isRegisteringStatRef.current = true;
+    const statLabels: Record<typeof stat, string> = {
+      points_2: '-2 Pontos', points_3: '-3 Pontos', blocks: '-Bloqueio',
+      steals: '-Roubo', assists: '-Assistência', rebounds: '-Rebote',
+    };
+    setRegisteringStatLabel(statLabels[stat]);
+    const userId = player.user_id;
+
+    try {
+      // Update ranking stats for registered players
+      if (userId) {
+        const existing = stats.find((s) => s.user_id === userId) ?? null;
+        if (existing) {
+          const updates =
+            stat === 'points_2'
+              ? { points: Math.max((existing.points ?? 0) - 2, 0) }
+              : stat === 'points_3'
+                ? { points: Math.max((existing.points ?? 0) - 3, 0) }
+                : stat === 'blocks'
+                  ? { blocks: Math.max((existing.blocks ?? 0) - 1, 0) }
+                  : stat === 'steals'
+                    ? { steals: Math.max((existing.steals ?? 0) - 1, 0) }
+                    : stat === 'rebounds'
+                      ? { rebounds: Math.max((existing.rebounds ?? 0) - 1, 0) }
+                      : { assists: Math.max((existing.assists ?? 0) - 1, 0) };
+          await supabase.from('stats').update(updates).eq('id', existing.id);
+          fetchStats();
+        }
+      }
+
+      // Update match scoreboard for points
+      if ((stat === 'points_2' || stat === 'points_3') && (player.status === 'team1' || player.status === 'team2')) {
+        const pts = stat === 'points_2' ? 2 : 3;
+        const partidaId = currentPartidaSessaoId;
+        if (partidaId) {
+          const { data: sessao } = await supabase
+            .from('partida_sessoes')
+            .select('team1_points, team2_points')
+            .eq('id', partidaId)
+            .single();
+          if (sessao) {
+            const t1 = (sessao.team1_points ?? 0) as number;
+            const t2 = (sessao.team2_points ?? 0) as number;
+            const newT1 = player.status === 'team1' ? Math.max(t1 - pts, 0) : t1;
+            const newT2 = player.status === 'team2' ? Math.max(t2 - pts, 0) : t2;
+            await supabase.from('partida_sessoes').update({ team1_points: newT1, team2_points: newT2 }).eq('id', partidaId);
+            setTeam1MatchPoints(newT1);
+            setTeam2MatchPoints(newT2);
+            setShowWinnerModal(null);
+            fetchPartidaSessao(partidaId);
+          }
+        }
+      }
+      setStatsModalPlayer(null);
+    } catch (err) {
+      console.error('Error removing stat:', err);
+      addNotification('Erro ao corrigir estatística.', 'error', { showToastForMs: 5000 });
     } finally {
       isRegisteringStatRef.current = false;
       setRegisteringStatLabel(null);
@@ -1282,6 +1389,47 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     } catch (err) {
       console.error('Error performing action:', err);
       addNotification('Erro ao realizar ação.', 'error', { showToastForMs: 5000 });
+    }
+  };
+
+  const handleCreateEvento = async () => {
+    if (!isAdminMode || !locationId) return;
+    const { title, description, event_date, type, modality, max_participants, event_time } = eventoForm;
+    if (!title.trim() || !event_date) {
+      addNotification('Preencha o título e a data do evento.', 'warning', { showToastForMs: 4000 });
+      return;
+    }
+    try {
+      const { error } = await supabase.from('eventos').insert({
+        location_id: locationId,
+        title: title.trim(),
+        description: description.trim() || null,
+        event_date,
+        event_time: event_time || null,
+        type,
+        modality,
+        max_participants: max_participants ? parseInt(max_participants) : null,
+        status: 'open',
+      });
+      if (error) throw error;
+      setShowEventoForm(false);
+      setEventoForm({ title: '', description: '', event_date: '', event_time: '', type: 'torneio', modality: '5x5', max_participants: '' });
+      await fetchEventos();
+      addNotification('Evento criado com sucesso!', 'info', { showToastForMs: 3000 });
+    } catch (err) {
+      console.error('Error creating evento:', err);
+      addNotification('Erro ao criar evento.', 'error', { showToastForMs: 5000 });
+    }
+  };
+
+  const handleDeleteEvento = async (eventoId: string) => {
+    if (!isAdminMode) return;
+    if (!window.confirm('Excluir este evento?')) return;
+    try {
+      await supabase.from('eventos').delete().eq('id', eventoId);
+      await fetchEventos();
+    } catch (err) {
+      console.error('Error deleting evento:', err);
     }
   };
 
@@ -1581,69 +1729,64 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                       {pointsBlockedMessage}
                     </div>
                   )}
-                  {/* Visitantes: apenas pontos */}
-                  {!statsModalPlayer.user_id ? (
-                    <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
+                  {/* Pontos (todos os jogadores) */}
+                  <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
+                    <div className="flex items-center gap-1">
+                      {isAdminMode && (
+                        <button type="button" onClick={() => removePlayerStat(statsModalPlayer, 'points_2')}
+                          className={cn('w-9 h-9 rounded-lg flex items-center justify-center text-lg font-bold shrink-0 transition-all', darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-500 hover:bg-red-100')}
+                          style={{ touchAction: 'manipulation' }}>-</button>
+                      )}
                       <StatButton
                         onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
                         disabled={pointsBlocked}
-                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]'}
+                        className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]')}
                       >
-                        <Target className="w-6 h-6 mx-auto mb-1" />
-                        2 pts
-                      </StatButton>
-                      <StatButton
-                        onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
-                        disabled={pointsBlocked}
-                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]'}
-                      >
-                        <Target className="w-6 h-6 mx-auto mb-1" />
-                        3 pts
+                        <Target className="w-5 h-5 mx-auto mb-0.5" />
+                        +2 pts
                       </StatButton>
                     </div>
-                  ) : (
-                    /* Cadastrados: pontos + tocos + roubos + assistências */
-                    <div className={cn('grid grid-cols-2 gap-3', pointsBlocked && 'opacity-60 pointer-events-none')}>
-                      <StatButton
-                        onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
-                        disabled={pointsBlocked}
-                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]'}
-                      >
-                        <Target className="w-6 h-6 mx-auto mb-1" />
-                        2 pts
-                      </StatButton>
+                    <div className="flex items-center gap-1">
+                      {isAdminMode && (
+                        <button type="button" onClick={() => removePlayerStat(statsModalPlayer, 'points_3')}
+                          className={cn('w-9 h-9 rounded-lg flex items-center justify-center text-lg font-bold shrink-0 transition-all', darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-500 hover:bg-red-100')}
+                          style={{ touchAction: 'manipulation' }}>-</button>
+                      )}
                       <StatButton
                         onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
                         disabled={pointsBlocked}
-                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]'}
+                        className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]')}
                       >
-                        <Target className="w-6 h-6 mx-auto mb-1" />
-                        3 pts
+                        <Target className="w-5 h-5 mx-auto mb-0.5" />
+                        +3 pts
                       </StatButton>
-                      <StatButton
-                        onClick={() => addPlayerStat(statsModalPlayer, 'blocks')}
-                        disabled={pointsBlocked}
-                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30 active:scale-[0.98]'}
-                      >
-                        <span className="text-xl">🛡️</span>
-                        <span className="block text-sm">1 bloqueio</span>
-                      </StatButton>
-                      <StatButton
-                        onClick={() => addPlayerStat(statsModalPlayer, 'steals')}
-                        disabled={pointsBlocked}
-                        className={pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30 active:scale-[0.98]'}
-                      >
-                        <span className="text-xl">🏃</span>
-                        <span className="block text-sm">1 roubo</span>
-                      </StatButton>
-                      <StatButton
-                        onClick={() => addPlayerStat(statsModalPlayer, 'assists')}
-                        disabled={pointsBlocked}
-                        className={cn('col-span-2', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500/30 active:scale-[0.98]')}
-                      >
-                        <span className="text-xl">🤝</span>
-                        <span className="block text-sm">1 assistência</span>
-                      </StatButton>
+                    </div>
+                  </div>
+                  {/* Atributos extras (só cadastrados) */}
+                  {statsModalPlayer.user_id && (
+                    <div className="grid grid-cols-2 gap-3">
+                      {([
+                        { stat: 'blocks' as const, emoji: '🛡️', label: 'bloqueio', cls: 'bg-amber-500/20 text-amber-600 dark:text-amber-400 hover:bg-amber-500/30' },
+                        { stat: 'steals' as const, emoji: '🏃', label: 'roubo', cls: 'bg-purple-500/20 text-purple-600 dark:text-purple-400 hover:bg-purple-500/30' },
+                        { stat: 'assists' as const, emoji: '🤝', label: 'assistência', cls: 'bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500/30' },
+                        { stat: 'rebounds' as const, emoji: '📏', label: 'rebote', cls: 'bg-teal-500/20 text-teal-600 dark:text-teal-400 hover:bg-teal-500/30' },
+                      ]).map(({ stat, emoji, label, cls }) => (
+                        <div key={stat} className="flex items-center gap-1">
+                          {isAdminMode && (
+                            <button type="button" onClick={() => removePlayerStat(statsModalPlayer, stat)}
+                              className={cn('w-9 h-9 rounded-lg flex items-center justify-center text-lg font-bold shrink-0 transition-all', darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-500 hover:bg-red-100')}
+                              style={{ touchAction: 'manipulation' }}>-</button>
+                          )}
+                          <StatButton
+                            onClick={() => addPlayerStat(statsModalPlayer, stat)}
+                            disabled={pointsBlocked}
+                            className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : `${cls} active:scale-[0.98]`)}
+                          >
+                            <span className="text-lg">{emoji}</span>
+                            <span className="block text-xs">+1 {label}</span>
+                          </StatButton>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </>
@@ -1769,7 +1912,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       </header>
 
       <main className="max-w-5xl mx-auto px-2 sm:px-4 py-6 sm:py-10 space-y-6 sm:space-y-8 pb-40">
-        {!isGuest && !profileComplete && user && (
+        {!isGuest && !profileComplete && user && activeTab === 'perfil' && (
           <div className="space-y-6">
             <EditarPerfil
               darkMode={darkMode}
@@ -1781,8 +1924,6 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
             />
           </div>
         )}
-        {(!user || isGuest || profileComplete) && (
-        <>
         {activeTab === 'inicio' && (
           <>
             <AnimatePresence mode="wait">
@@ -1804,6 +1945,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                         steals: stat.steals,
                         clutch_points: stat.clutch_points,
                         assists: stat.assists ?? 0,
+                        rebounds: stat.rebounds ?? 0,
                         avatar_url: stat.user_id ? userAvatars[stat.user_id] ?? null : null,
                       }}
                       darkMode={darkMode}
@@ -2339,50 +2481,189 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
 
         {activeTab === 'eventos' && (
           <div className="space-y-6">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center shadow-lg shadow-orange-500/20">
-                <Calendar className="text-white w-6 h-6" />
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-3">
+                <div className={cn('w-10 h-10 rounded-full flex items-center justify-center shadow-lg', darkMode ? 'bg-orange-500 shadow-orange-500/20' : 'bg-orange-500 shadow-orange-500/20')}>
+                  <Calendar className="text-white w-5 h-5" />
+                </div>
+                <h2 className={cn('text-xl sm:text-2xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>Eventos</h2>
               </div>
-              <h2 className={cn('text-2xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>Próximos Eventos</h2>
-            </div>
-
-            <div className="grid gap-4">
-              {[
-                { title: 'Torneio de Verão 3x3', date: '25 Mar, 2026', time: '14:00', location: 'Quadra Central', type: 'Torneio' },
-                { title: 'Treino Aberto - Iniciantes', date: '28 Mar, 2026', time: '09:00', location: 'Quadra B', type: 'Treino' },
-                { title: 'Desafio de Habilidades', date: '02 Abr, 2026', time: '18:30', location: 'Quadra Central', type: 'Desafio' },
-              ].map((event, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.1 }}
+              {isAdminMode && (
+                <button
+                  onClick={() => setShowEventoForm((v) => !v)}
                   className={cn(
-                    'p-5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:scale-[1.02]',
-                    darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+                    'flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold transition-all',
+                    showEventoForm
+                      ? (darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-200 text-slate-600')
+                      : 'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20'
                   )}
                 >
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-orange-500">{event.type}</span>
-                    <h3 className={cn('font-bold text-lg', darkMode ? 'text-white' : 'text-slate-900')}>{event.title}</h3>
-                    <div className={cn('flex items-center gap-3 text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-                      <span className="flex items-center gap-1">
-                        <Calendar className="w-3 h-3" /> {event.date}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <RefreshCw className="w-3 h-3" /> {event.time}
-                      </span>
+                  {showEventoForm ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                  {showEventoForm ? 'Cancelar' : 'Novo evento'}
+                </button>
+              )}
+            </div>
+
+            {/* Formulário de criação */}
+            <AnimatePresence>
+              {showEventoForm && isAdminMode && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="overflow-hidden"
+                >
+                  <div className={cn('p-5 rounded-2xl border space-y-4', darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm')}>
+                    <input
+                      type="text"
+                      placeholder="Título do evento"
+                      value={eventoForm.title}
+                      onChange={(e) => setEventoForm((f) => ({ ...f, title: e.target.value }))}
+                      className={cn('w-full px-3 py-2.5 rounded-xl text-sm border outline-none focus:ring-2 focus:ring-orange-500/50', darkMode ? 'bg-slate-800 border-slate-700 text-white placeholder:text-slate-500' : 'bg-slate-50 border-slate-200')}
+                    />
+                    <textarea
+                      placeholder="Descrição (opcional)"
+                      value={eventoForm.description}
+                      onChange={(e) => setEventoForm((f) => ({ ...f, description: e.target.value }))}
+                      rows={2}
+                      className={cn('w-full px-3 py-2.5 rounded-xl text-sm border outline-none focus:ring-2 focus:ring-orange-500/50 resize-none', darkMode ? 'bg-slate-800 border-slate-700 text-white placeholder:text-slate-500' : 'bg-slate-50 border-slate-200')}
+                    />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className={cn('text-xs font-medium mb-1 block', darkMode ? 'text-slate-400' : 'text-slate-500')}>Data</label>
+                        <input
+                          type="date"
+                          value={eventoForm.event_date}
+                          onChange={(e) => setEventoForm((f) => ({ ...f, event_date: e.target.value }))}
+                          className={cn('w-full px-3 py-2 rounded-xl text-sm border outline-none focus:ring-2 focus:ring-orange-500/50', darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200')}
+                        />
+                      </div>
+                      <div>
+                        <label className={cn('text-xs font-medium mb-1 block', darkMode ? 'text-slate-400' : 'text-slate-500')}>Horário</label>
+                        <input
+                          type="time"
+                          value={eventoForm.event_time}
+                          onChange={(e) => setEventoForm((f) => ({ ...f, event_time: e.target.value }))}
+                          className={cn('w-full px-3 py-2 rounded-xl text-sm border outline-none focus:ring-2 focus:ring-orange-500/50', darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200')}
+                        />
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center justify-between sm:justify-end gap-4">
-                    <span className={cn('text-sm font-medium', darkMode ? 'text-slate-500' : 'text-slate-400')}>{event.location}</span>
-                    <button className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-sm font-bold transition-all active:scale-95">
-                      Participar
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className={cn('text-xs font-medium mb-1 block', darkMode ? 'text-slate-400' : 'text-slate-500')}>Tipo</label>
+                        <select
+                          value={eventoForm.type}
+                          onChange={(e) => setEventoForm((f) => ({ ...f, type: e.target.value as Evento['type'] }))}
+                          className={cn('w-full px-3 py-2 rounded-xl text-sm border outline-none focus:ring-2 focus:ring-orange-500/50', darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200')}
+                        >
+                          <option value="torneio">Torneio</option>
+                          <option value="campeonato">Campeonato</option>
+                          <option value="festival">Festival</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={cn('text-xs font-medium mb-1 block', darkMode ? 'text-slate-400' : 'text-slate-500')}>Modalidade</label>
+                        <select
+                          value={eventoForm.modality}
+                          onChange={(e) => setEventoForm((f) => ({ ...f, modality: e.target.value as Evento['modality'] }))}
+                          className={cn('w-full px-3 py-2 rounded-xl text-sm border outline-none focus:ring-2 focus:ring-orange-500/50', darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-200')}
+                        >
+                          <option value="5x5">5x5</option>
+                          <option value="3x3">3x3</option>
+                          <option value="1x1">1x1</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={cn('text-xs font-medium mb-1 block', darkMode ? 'text-slate-400' : 'text-slate-500')}>Máx. jogadores</label>
+                        <input
+                          type="number"
+                          placeholder="Sem limite"
+                          value={eventoForm.max_participants}
+                          onChange={(e) => setEventoForm((f) => ({ ...f, max_participants: e.target.value }))}
+                          className={cn('w-full px-3 py-2 rounded-xl text-sm border outline-none focus:ring-2 focus:ring-orange-500/50', darkMode ? 'bg-slate-800 border-slate-700 text-white placeholder:text-slate-500' : 'bg-slate-50 border-slate-200')}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleCreateEvento}
+                      className="w-full py-3 rounded-xl font-bold text-sm bg-orange-500 hover:bg-orange-600 text-white transition-all shadow-lg shadow-orange-500/20"
+                    >
+                      Criar evento
                     </button>
                   </div>
                 </motion.div>
-              ))}
-            </div>
+              )}
+            </AnimatePresence>
+
+            {/* Lista de eventos */}
+            {eventos.length === 0 ? (
+              <div className={cn('text-center py-16 rounded-2xl border', darkMode ? 'bg-slate-900/50 border-slate-800' : 'bg-slate-50 border-slate-200')}>
+                <Calendar className={cn('w-10 h-10 mx-auto mb-3', darkMode ? 'text-slate-700' : 'text-slate-300')} />
+                <p className={cn('font-semibold', darkMode ? 'text-slate-400' : 'text-slate-500')}>Nenhum evento agendado</p>
+                {isAdminMode && (
+                  <p className={cn('text-sm mt-1', darkMode ? 'text-slate-500' : 'text-slate-400')}>Crie um torneio, campeonato ou festival.</p>
+                )}
+              </div>
+            ) : (
+              <div className="grid gap-4">
+                {eventos.map((evento, i) => {
+                  const dateObj = new Date(evento.event_date + 'T12:00:00');
+                  const dateStr = dateObj.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+                  const statusColors: Record<string, string> = {
+                    open: darkMode ? 'bg-green-500/15 text-green-400 border-green-500/20' : 'bg-green-50 text-green-700 border-green-200',
+                    draft: darkMode ? 'bg-slate-500/15 text-slate-400 border-slate-500/20' : 'bg-slate-100 text-slate-600 border-slate-200',
+                    in_progress: darkMode ? 'bg-blue-500/15 text-blue-400 border-blue-500/20' : 'bg-blue-50 text-blue-700 border-blue-200',
+                    finished: darkMode ? 'bg-slate-500/15 text-slate-500 border-slate-500/20' : 'bg-slate-100 text-slate-500 border-slate-200',
+                  };
+                  return (
+                    <motion.div
+                      key={evento.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.05 }}
+                      className={cn(
+                        'p-5 rounded-2xl border transition-all',
+                        darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-orange-500">
+                            {EVENT_TYPE_LABELS[evento.type]} · {evento.modality}
+                          </span>
+                          <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full border', statusColors[evento.status] ?? '')}>
+                            {EVENT_STATUS_LABELS[evento.status]}
+                          </span>
+                        </div>
+                        {isAdminMode && (
+                          <button onClick={() => handleDeleteEvento(evento.id)} className={cn('p-1.5 rounded-lg transition-colors', darkMode ? 'text-slate-500 hover:text-red-400 hover:bg-red-500/10' : 'text-slate-400 hover:text-red-500 hover:bg-red-50')}>
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <h3 className={cn('font-bold text-lg mb-1', darkMode ? 'text-white' : 'text-slate-900')}>{evento.title}</h3>
+                      {evento.description && (
+                        <p className={cn('text-sm mb-2', darkMode ? 'text-slate-400' : 'text-slate-500')}>{evento.description}</p>
+                      )}
+                      <div className={cn('flex items-center gap-4 text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5" /> {dateStr}
+                        </span>
+                        {evento.event_time && (
+                          <span className="flex items-center gap-1">
+                            <Timer className="w-3.5 h-3.5" /> {evento.event_time.slice(0, 5)}
+                          </span>
+                        )}
+                        <span className="flex items-center gap-1">
+                          <Users className="w-3.5 h-3.5" />
+                          {evento._inscricoes_count ?? 0}{evento.max_participants ? `/${evento.max_participants}` : ''}
+                        </span>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -2532,12 +2813,9 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
             )}
           </div>
         )}
-        </>
-        )}
       </main>
 
-      {/* Navigation Bar - oculta quando perfil incompleto (cadastro obrigatório) */}
-      {(profileComplete || isGuest) && (
+      {/* Navigation Bar */}
       <nav
         className={cn(
           'fixed bottom-0 left-0 right-0 border-t backdrop-blur-lg z-50 transition-colors duration-300',
@@ -2552,7 +2830,6 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
           <NavButton active={activeTab === 'perfil'} onClick={() => setActiveTab('perfil')} icon={<User className="w-5 h-5" />} label="Perfil" darkMode={darkMode} />
         </div>
       </nav>
-      )}
 
       <footer className={cn('max-w-5xl mx-auto px-4 py-12 text-center text-sm transition-colors duration-300', darkMode ? 'text-slate-600' : 'text-slate-400')}>
         <p>Basquete Next &bull; Sistema de Fila em Tempo Real</p>
@@ -2810,6 +3087,7 @@ const SKILL_LABELS: Record<SortKey, string> = {
   steals: 'Roubos',
   clutch_points: 'Decisivos',
   assists: 'Assistências',
+  rebounds: 'Rebotes',
 };
 
 function ShimmerRing({ sizePx, borderPx = 3, children }: { sizePx: number; borderPx?: number; children: React.ReactNode }) {
@@ -3024,6 +3302,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
   const filterOptions: { key: SortKey; label: string }[] = [
     { key: 'points', label: 'Pontos' },
     { key: 'assists', label: 'Assistências' },
+    { key: 'rebounds', label: 'Rebotes' },
     { key: 'blocks', label: 'Tocos' },
     { key: 'steals', label: 'Roubos' },
   ];
