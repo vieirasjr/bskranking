@@ -5,6 +5,7 @@ import { useTenant } from '../../contexts/TenantContext';
 import { useAuth } from '../../contexts/AuthContext';
 
 const PLANS = [
+  { id: 'teste',        name: 'Teste',          price: 1,   players: 5,    locations: 1,    note: 'único · para teste' },
   { id: 'avulso',       name: 'Evento Avulso', price: 50,  players: 20,   locations: 1,    note: '72h · evento único' },
   { id: 'basico',       name: 'Básico',         price: 100, players: 30,   locations: 1,    note: 'mensal' },
   { id: 'profissional', name: 'Profissional',   price: 150, players: 60,   locations: 2,    note: 'mensal' },
