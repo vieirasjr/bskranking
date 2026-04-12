@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowLeft,
@@ -47,6 +47,71 @@ interface PerfilDetalheProps {
   onBack: () => void;
 }
 
+type PerfMode = 'total' | 'perGame';
+
+function computePlayerScore(d: PerfilDetalheData): string {
+  return (
+    (d.points ?? 0) * 1.0 +
+    (d.assists ?? 0) * 1.5 +
+    (d.rebounds ?? 0) * 1.2 +
+    (d.blocks ?? 0) * 1.5 +
+    (d.steals ?? 0) * 1.3 +
+    (d.clutch_points ?? 0) * 2.0 +
+    (d.wins ?? 0) * 3.0
+  ).toFixed(1);
+}
+
+/** Valores do gráfico: total acumulado ou média por partida (PTS = pontos/jogo; VIT = % vitórias no modo por partida). */
+function getPerformanceBars(data: PerfilDetalheData, mode: PerfMode) {
+  const pj = Math.max(data.partidas, 1);
+  const safe = (n: number) => (Number.isFinite(n) ? n : 0);
+  const total = (k: keyof PerfilDetalheData) => safe(Number(data[k]) || 0);
+  const winRateRaw =
+    data.partidas > 0 ? Math.min(1, Math.max(0, data.wins / data.partidas)) : 0;
+  const winRatePct = Math.round(winRateRaw * 100);
+
+  const bars = PERF_BARS.map((s) => {
+    if (mode === 'total') {
+      return {
+        key: s.key,
+        label: s.label,
+        color: s.color,
+        value: total(s.key),
+        display: undefined as string | undefined,
+      };
+    }
+    if (s.key === 'wins') {
+      return {
+        key: s.key,
+        label: 'Vit%',
+        color: s.color,
+        value: winRatePct,
+        display: `${winRatePct}%`,
+      };
+    }
+    const v = total(s.key) / pj;
+    return {
+      key: s.key,
+      label: s.label,
+      color: s.color,
+      value: v,
+      display: v >= 10 ? v.toFixed(1) : v.toFixed(2),
+    };
+  });
+
+  const maxVal = Math.max(...bars.map((b) => b.value), 0.01);
+  return { bars, maxVal };
+}
+
+function getStatListValue(data: PerfilDetalheData, key: keyof PerfilDetalheData, mode: PerfMode): string {
+  const pj = Math.max(data.partidas, 1);
+  const t = Number(data[key]) || 0;
+  if (mode === 'total') return String(Math.round(t));
+  if (key === 'wins') return `${Math.min(100, Math.round((data.wins / pj) * 100))}%`;
+  const v = t / pj;
+  return v >= 10 ? v.toFixed(1) : v.toFixed(2);
+}
+
 /* ── Stat bars do gráfico de performance ─────────────────────────── */
 const PERF_BARS: { key: keyof PerfilDetalheData; label: string; color: string }[] = [
   { key: 'points',       label: 'Pts',  color: '#10b981' },
@@ -76,6 +141,7 @@ function AnimatedBar({
   label,
   delay,
   darkMode,
+  display,
 }: {
   value: number;
   maxValue: number;
@@ -83,9 +149,14 @@ function AnimatedBar({
   label: string;
   delay: number;
   darkMode: boolean;
+  /** Texto exibido acima da barra (ex.: médias com decimais) */
+  display?: string;
 }) {
   const MAX_PX = 90;
   const heightPx = maxValue > 0 ? Math.max((value / maxValue) * MAX_PX, value > 0 ? 4 : 0) : 0;
+  const labelTop =
+    display ??
+    (value > 0 ? (Number.isInteger(value) ? String(value) : value.toFixed(1)) : '');
 
   return (
     <div className="flex flex-col items-center gap-1 flex-1 min-w-0">
@@ -93,7 +164,7 @@ function AnimatedBar({
         className="text-[10px] font-bold tabular-nums"
         style={{ color, minHeight: 14 }}
       >
-        {value > 0 ? value : ''}
+        {labelTop}
       </span>
 
       {/* track */}
@@ -118,58 +189,10 @@ function AnimatedBar({
   );
 }
 
-/* ── Anel de win-rate SVG animado ───────────────────────────────── */
-function WinRateRing({ rate, darkMode }: { rate: number; darkMode: boolean }) {
-  const r = 34;
-  const circ = 2 * Math.PI * r;
-  const offset = circ - (rate / 100) * circ;
-
-  return (
-    <div className="relative w-20 h-20 shrink-0 flex items-center justify-center">
-      <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 80 80">
-        <circle
-          cx="40" cy="40" r={r} fill="none"
-          stroke={darkMode ? '#1e293b' : '#f1f5f9'} strokeWidth="8"
-        />
-        <motion.circle
-          cx="40" cy="40" r={r} fill="none"
-          stroke="#f59e0b" strokeWidth="8" strokeLinecap="round"
-          strokeDasharray={circ}
-          initial={{ strokeDashoffset: circ }}
-          animate={{ strokeDashoffset: offset }}
-          transition={{ duration: 1, delay: 0.4, ease: 'easeOut' }}
-        />
-      </svg>
-      <div className="text-center z-10">
-        <p className={cn('text-base font-black leading-none', darkMode ? 'text-white' : 'text-slate-900')}>
-          {rate}%
-        </p>
-        <p className={cn('text-[8px] font-bold uppercase tracking-wide', darkMode ? 'text-slate-500' : 'text-slate-400')}>
-          win
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/* ── Barra de progresso horizontal animada ──────────────────────── */
-function ProgressBar({ pct, color = '#f97316', delay = 0 }: { pct: number; color?: string; delay?: number }) {
-  return (
-    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden mt-2">
-      <motion.div
-        className="h-full rounded-full"
-        style={{ backgroundColor: color }}
-        initial={{ width: 0 }}
-        animate={{ width: `${pct}%` }}
-        transition={{ duration: 0.8, delay, ease: 'easeOut' }}
-      />
-    </div>
-  );
-}
-
 /* ── Componente principal ───────────────────────────────────────── */
 export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheProps) {
   const [extra, setExtra] = useState<ProfileExtra | null>(null);
+  const [perfMode, setPerfMode] = useState<PerfMode>('total');
 
   useEffect(() => {
     if (!data.user_id) return;
@@ -181,10 +204,20 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
       .then(({ data: p }) => { if (p) setExtra(p as ProfileExtra); });
   }, [data.user_id]);
 
-  const maxVal = Math.max(...PERF_BARS.map((s) => Number(data[s.key]) || 0), 1);
-  const winRate = data.partidas > 0 ? Math.round((data.wins / data.partidas) * 100) : 0;
-  const avgPts = data.partidas > 0 ? (data.points / data.partidas).toFixed(1) : '0.0';
-  const losses = data.partidas - data.wins;
+  const pj = Math.max(data.partidas, 1);
+  const winRatePct =
+    data.partidas > 0
+      ? Math.min(100, Math.max(0, Math.round((data.wins / data.partidas) * 100)))
+      : 0;
+  const { bars: perfBars, maxVal: perfMaxVal } = getPerformanceBars(data, perfMode);
+  const listMax = useMemo(() => {
+    if (perfMode === 'total') {
+      return Math.max(...STAT_ROWS.map((s) => Number(data[s.key]) || 0), 1);
+    }
+    return Math.max(...STAT_ROWS.map((s) => (Number(data[s.key]) || 0) / pj), 0.01);
+  }, [data, perfMode, pj]);
+
+  const playerScore = computePlayerScore(data);
 
   return (
     <motion.div
@@ -273,24 +306,12 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
           </div>
         </div>
 
-        {/* mini stats row */}
-        <div className="grid grid-cols-3 border-t border-white/10">
-          {[
-            { value: data.partidas, label: 'Partidas' },
-            { value: `${winRate}%`, label: 'Win Rate' },
-            { value: avgPts, label: 'Pts/Jogo' },
-          ].map((item, i) => (
-            <div
-              key={i}
-              className={cn(
-                'py-3 text-center',
-                i < 2 && 'border-r border-white/10'
-              )}
-            >
-              <p className="text-white font-black text-xl leading-none">{item.value}</p>
-              <p className="text-white/40 text-[9px] font-semibold uppercase tracking-wide mt-0.5">{item.label}</p>
-            </div>
-          ))}
+        {/* Score — único destaque no card principal */}
+        <div className="border-t border-white/10 px-5 py-8 text-center">
+          <p className="text-white/50 text-[10px] font-bold uppercase tracking-[0.2em] mb-3">Score</p>
+          <p className="text-5xl sm:text-6xl font-black text-white tabular-nums leading-none tracking-tight">
+            {playerScore}
+          </p>
         </div>
       </div>
 
@@ -301,82 +322,94 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
           darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
         )}
       >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className={cn('font-bold text-base', darkMode ? 'text-white' : 'text-slate-900')}>
-            Performance
-          </h2>
-          <span className={cn('text-[10px] font-semibold uppercase tracking-wide', darkMode ? 'text-slate-500' : 'text-slate-400')}>
-            Total acumulado
-          </span>
+        <div className="flex flex-col gap-4 mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <h2 className={cn('font-bold text-base shrink-0', darkMode ? 'text-white' : 'text-slate-900')}>
+              Performance
+            </h2>
+            <div
+              className={cn(
+                'inline-flex rounded-xl p-1 gap-0.5 w-full sm:w-auto',
+                darkMode ? 'bg-slate-800' : 'bg-slate-100'
+              )}
+              role="tablist"
+              aria-label="Modo de visualização"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={perfMode === 'total'}
+                onClick={() => setPerfMode('total')}
+                className={cn(
+                  'flex-1 sm:flex-initial px-3 py-2 rounded-lg text-xs font-bold transition-all',
+                  perfMode === 'total'
+                    ? darkMode
+                      ? 'bg-slate-700 text-white shadow'
+                      : 'bg-white text-slate-900 shadow-sm'
+                    : darkMode
+                      ? 'text-slate-400 hover:text-slate-200'
+                      : 'text-slate-500 hover:text-slate-800'
+                )}
+              >
+                Total acumulado
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={perfMode === 'perGame'}
+                onClick={() => setPerfMode('perGame')}
+                className={cn(
+                  'flex-1 sm:flex-initial px-3 py-2 rounded-lg text-xs font-bold transition-all',
+                  perfMode === 'perGame'
+                    ? darkMode
+                      ? 'bg-slate-700 text-white shadow'
+                      : 'bg-white text-slate-900 shadow-sm'
+                    : darkMode
+                      ? 'text-slate-400 hover:text-slate-200'
+                      : 'text-slate-500 hover:text-slate-800'
+                )}
+              >
+                Por partida
+              </button>
+            </div>
+          </div>
+
+          <div
+            className={cn(
+              'flex flex-wrap items-center gap-x-6 gap-y-2 text-sm',
+              darkMode ? 'text-slate-300' : 'text-slate-600'
+            )}
+          >
+            <span>
+              <span className={cn('font-semibold', darkMode ? 'text-slate-500' : 'text-slate-400')}>Partidas </span>
+              <span className="font-black tabular-nums">{data.partidas}</span>
+            </span>
+            <span>
+              <span className={cn('font-semibold', darkMode ? 'text-slate-500' : 'text-slate-400')}>Win rate </span>
+              <span className="font-black tabular-nums text-amber-500">{winRatePct}%</span>
+            </span>
+            {perfMode === 'perGame' && data.partidas > 0 && (
+              <span className={cn('text-xs', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+                Coluna Pts = pontos por jogo
+              </span>
+            )}
+          </div>
         </div>
 
-        <div className="flex items-end gap-2">
-          {PERF_BARS.map((stat, i) => (
+        <div className="flex items-end gap-1.5 sm:gap-2">
+          {perfBars.map((stat, i) => (
             <AnimatedBar
               key={stat.key}
-              value={Number(data[stat.key]) || 0}
-              maxValue={maxVal}
+              value={stat.value}
+              maxValue={perfMaxVal}
               color={stat.color}
               label={stat.label}
+              display={stat.display}
               delay={i * 0.07}
               darkMode={darkMode}
             />
           ))}
         </div>
-      </div>
-
-      {/* ── ATIVIDADE ───────────────────────────────────────────── */}
-      <div
-        className={cn(
-          'rounded-2xl border p-5',
-          darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
-        )}
-      >
-        <h2 className={cn('font-bold text-base mb-4', darkMode ? 'text-white' : 'text-slate-900')}>
-          Atividade
-        </h2>
-
-        <div className="flex items-center gap-5">
-          {/* Win rate ring */}
-          <WinRateRing rate={winRate} darkMode={darkMode} />
-
-          {/* breakdown */}
-          <div className="flex-1 space-y-2.5">
-            {[
-              { label: 'Vitórias', value: data.wins, color: '#f59e0b', pct: winRate },
-              { label: 'Derrotas', value: losses, color: '#f43f5e', pct: data.partidas > 0 ? Math.round((losses / data.partidas) * 100) : 0 },
-            ].map((row, i) => (
-              <div key={i}>
-                <div className="flex items-center justify-between">
-                  <span className={cn('text-xs font-semibold', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-                    {row.label}
-                  </span>
-                  <span className="text-sm font-black" style={{ color: row.color }}>
-                    {row.value}
-                  </span>
-                </div>
-                <ProgressBar pct={row.pct} color={row.color} delay={0.3 + i * 0.15} />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* pontos por jogo destaque */}
-        {data.partidas > 0 && (
-          <div
-            className={cn(
-              'mt-4 rounded-xl p-3 flex items-center justify-between',
-              darkMode ? 'bg-slate-800' : 'bg-slate-50'
-            )}
-          >
-            <span className={cn('text-xs font-semibold', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-              Média de pontos por partida
-            </span>
-            <span className={cn('text-lg font-black text-orange-500')}>
-              {avgPts}
-            </span>
-          </div>
-        )}
       </div>
 
       {/* ── ESTATÍSTICAS (estilo "Performed Training") ───────────── */}
@@ -386,15 +419,20 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
           darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
         )}
       >
-        <div className={cn('px-5 py-4 border-b', darkMode ? 'border-slate-800' : 'border-slate-100')}>
+        <div className={cn('px-5 py-4 border-b flex items-center justify-between gap-2', darkMode ? 'border-slate-800' : 'border-slate-100')}>
           <h2 className={cn('font-bold text-base', darkMode ? 'text-white' : 'text-slate-900')}>
             Estatísticas
           </h2>
+          <span className={cn('text-[10px] font-semibold uppercase tracking-wide', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+            {perfMode === 'total' ? 'Total acumulado' : 'Média por partida'}
+          </span>
         </div>
 
         {STAT_ROWS.map((stat, i) => {
-          const value = Number(data[stat.key]) || 0;
-          const pct = maxVal > 0 ? (value / maxVal) * 100 : 0;
+          const rowNum =
+            perfMode === 'total' ? Number(data[stat.key]) || 0 : (Number(data[stat.key]) || 0) / pj;
+          const pct = listMax > 0 ? (rowNum / listMax) * 100 : 0;
+          const valueLabel = getStatListValue(data, stat.key, perfMode);
 
           return (
             <div
@@ -421,8 +459,8 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
-                <span className={cn('font-black text-xl w-10 text-right tabular-nums', darkMode ? 'text-white' : 'text-slate-900')}>
-                  {value}
+                <span className={cn('font-black text-xl min-w-[3rem] text-right tabular-nums', darkMode ? 'text-white' : 'text-slate-900')}>
+                  {valueLabel}
                 </span>
                 <ChevronRight className={cn('w-4 h-4', darkMode ? 'text-slate-700' : 'text-slate-300')} />
               </div>

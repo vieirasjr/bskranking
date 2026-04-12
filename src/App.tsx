@@ -34,6 +34,8 @@ import {
   RotateCcw,
   GripVertical,
   QrCode,
+  Crown,
+  Percent,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -50,7 +52,7 @@ import {
 import {
   SortableContext,
   useSortable,
-  rectSortingStrategy,
+  verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { QRCodeSVG } from 'qrcode.react';
@@ -62,6 +64,40 @@ import PerfilDetalhe from './pages/PerfilDetalhe';
 import { NotificationsPanel } from './components/NotificationsPanel';
 import { useLocationCheck } from './hooks/useLocationCheck';
 import { useNotifications } from './contexts/NotificationContext';
+import {
+  applyPlayerPointsDelta,
+  parsePartidaPlayerPoints,
+  partidaPlayerPointsToJson,
+  totalsFromPlayerPoints,
+} from './lib/partidaPlayerPoints';
+
+/** Pontos da cesta que levam o time a ≥12 (vitória): somam em clutch_points (1/2/3 por unidade). */
+function decisiveBasketPoints(
+  team: 'team1' | 'team2',
+  t1Before: number,
+  t2Before: number,
+  t1After: number,
+  t2After: number,
+  basketPts: number
+): number {
+  if (team === 'team1' && t1Before < 12 && t1After >= 12) return basketPts;
+  if (team === 'team2' && t2Before < 12 && t2After >= 12) return basketPts;
+  return 0;
+}
+
+/** Ao remover pontos, se o time cai de ≥12 para <12, reverte o mesmo tanto em clutch_points. */
+function reverseDecisiveBasketPoints(
+  team: 'team1' | 'team2',
+  t1Before: number,
+  t2Before: number,
+  t1After: number,
+  t2After: number,
+  removedPts: number
+): number {
+  if (team === 'team1' && t1Before >= 12 && t1After < 12) return removedPts;
+  if (team === 'team2' && t2Before >= 12 && t2After < 12) return removedPts;
+  return 0;
+}
 
 // Utility for tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -147,6 +183,8 @@ interface Player {
 interface SuspendedInfo {
   originalTeam: 'team1' | 'team2';
   replacedById: string | null;
+  /** joined_at no momento da suspensão — restaurado ao voltar para a fila (derrota ou partida sem vencedor). */
+  joined_at_before_suspend: string;
 }
 
 interface PlayerStats {
@@ -182,7 +220,7 @@ const EVENT_TYPE_LABELS: Record<Evento['type'], string> = { torneio: 'Torneio', 
 const EVENT_STATUS_LABELS: Record<Evento['status'], string> = { draft: 'Rascunho', open: 'Inscrições abertas', in_progress: 'Em andamento', finished: 'Encerrado', cancelled: 'Cancelado' };
 
 type Tab = 'inicio' | 'lista' | 'eventos' | 'perfil';
-type SortKey = 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assists' | 'rebounds';
+type SortKey = 'efficiency' | 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assists' | 'rebounds';
 
 const ADMIN_PASSWORD = '1710';
 const ADMIN_STORAGE_KEY = 'basquete_admin';
@@ -202,6 +240,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const isLoggedIn = !!user;
 
   const [players, setPlayers] = useState<Player[]>([]);
+  const playersRef = useRef<Player[]>([]);
+  playersRef.current = players;
+  /** Em caso de empate no placar ao resetar times, desempate: time que marcou primeiro na partida. */
+  const firstScoringTeamRef = useRef<'team1' | 'team2' | null>(null);
   const [stats, setStats] = useState<PlayerStats[]>([]);
   const [showNotificationsPanel, setShowNotificationsPanel] = useState(false);
   const shownVisitanteRef = useRef(false);
@@ -210,7 +252,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [isMatchStarted, setIsMatchStarted] = useState(false);
   const [currentPartidaSessaoId, setCurrentPartidaSessaoId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('inicio');
-  const [sortKey, setSortKey] = useState<SortKey>('points');
+  const [sortKey, setSortKey] = useState<SortKey>('efficiency');
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
   const [isAdminMode, setIsAdminMode] = useState(() => isOwner || localStorage.getItem(ADMIN_STORAGE_KEY) === 'true');
@@ -359,12 +401,14 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       if (!existing) {
         byUserId.set(s.user_id, {
           ...s,
+          partidas: s.partidas ?? 0,
           wins: s.wins ?? 0,
           points: s.points ?? 0,
           blocks: s.blocks ?? 0,
           steals: s.steals ?? 0,
           clutch_points: s.clutch_points ?? 0,
           assists: s.assists ?? 0,
+          rebounds: s.rebounds ?? 0,
         });
       } else {
         // Manter o hot_streak_since mais recente entre linhas duplicadas
@@ -417,7 +461,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     }
     const { data, error } = await supabase
       .from('partida_sessoes')
-      .select('team1_points, team2_points')
+      .select('team1_points, team2_points, player_points')
       .eq('id', partidaSessaoId)
       .single();
     if (error || !data) {
@@ -427,6 +471,21 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     const t2 = (data.team2_points ?? 0) as number;
     setTeam1MatchPoints(t1);
     setTeam2MatchPoints(t2);
+    const parsed = parsePartidaPlayerPoints(data.player_points);
+    setMatchPlayerStats((prev) => {
+      const teamIds = playersRef.current
+        .filter((p) => p.status === 'team1' || p.status === 'team2')
+        .map((p) => p.id);
+      const next: typeof prev = {};
+      for (const pid of teamIds) {
+        const e1 = parsed.team1[pid];
+        const e2 = parsed.team2[pid];
+        const pts = (e1 ?? e2)?.points ?? 0;
+        const base = prev[pid] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+        next[pid] = { ...base, points: pts };
+      }
+      return next;
+    });
     if (t1 >= 12) {
       setShowWinnerModal('team1');
     } else if (t2 >= 12) {
@@ -517,7 +576,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
   useEffect(() => {
     fetchPartidaSessao(currentPartidaSessaoId);
-  }, [currentPartidaSessaoId, fetchPartidaSessao]);
+  }, [currentPartidaSessaoId, players, fetchPartidaSessao]);
 
   // Admin por email no banco (basquete_users.admin): se usuário logado for admin, ativa modo admin
   useEffect(() => {
@@ -685,6 +744,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       const { data: novaPartida, error } = await supabase.from('partida_sessoes').insert(locationId ? { location_id: locationId } : {}).select('id').single();
       if (!error && novaPartida?.id) {
         await supabase.from('session').update({ current_partida_sessao_id: novaPartida.id }).eq('id', locationId ?? 'current');
+        firstScoringTeamRef.current = null;
         setCurrentPartidaSessaoId(novaPartida.id);
         fetchPartidaSessao(novaPartida.id);
       }
@@ -729,6 +789,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           });
           setIsMatchStarted(true);
           setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
+          firstScoringTeamRef.current = null;
           setTeam1MatchPoints(0);
           setTeam2MatchPoints(0);
           await fetchPlayers();
@@ -943,7 +1004,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [statsModalPlayer, setStatsModalPlayer] = useState<Player | null>(null);
   const [registeringStatLabel, setRegisteringStatLabel] = useState<string | null>(null);
   const isRegisteringStatRef = useRef(false);
-  const [matchPlayerStats, setMatchPlayerStats] = useState<Record<string, { points: number; blocks: number; steals: number; assists: number; rebounds: number }>>({});
+  const [matchPlayerStats, setMatchPlayerStats] = useState<
+    Record<string, { points: number; blocks: number; steals: number; assists: number; rebounds: number; clutch_points?: number }>
+  >({});
   const [suspendedPlayers, setSuspendedPlayers] = useState<Record<string, SuspendedInfo>>({});
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
@@ -1127,7 +1190,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         if (!partidaId && isMatchStarted && (team1.length === 5 && team2.length === 5)) {
           const { data: novaPartida, error: insErr } = await supabase
             .from('partida_sessoes')
-            .insert({})
+            .insert(locationId ? { location_id: locationId } : {})
             .select('id')
             .single();
           if (!insErr && novaPartida?.id) {
@@ -1140,31 +1203,59 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         if (partidaId) {
           const { data: sessao, error: fetchErr } = await supabase
             .from('partida_sessoes')
-            .select('team1_points, team2_points')
+            .select('team1_points, team2_points, player_points')
             .eq('id', partidaId)
             .single();
           if (fetchErr || !sessao) {
             addNotification('Erro ao buscar placar da partida.', 'error', { showToastForMs: 5000 });
             throw new Error('fetch_sessao_failed');
           }
-          const t1 = (sessao.team1_points ?? 0) as number;
-          const t2 = (sessao.team2_points ?? 0) as number;
-          const newT1 = player.status === 'team1' ? t1 + pts : t1;
-          const newT2 = player.status === 'team2' ? t2 + pts : t2;
-          setTeam1MatchPoints(newT1);
-          setTeam2MatchPoints(newT2);
-          if (newT1 >= 12) setShowWinnerModal('team1');
-          else if (newT2 >= 12) setShowWinnerModal('team2');
+          const parsed = parsePartidaPlayerPoints(sessao.player_points);
+          const teamKey = player.status as 'team1' | 'team2';
+          const identity = { user_id: player.user_id ?? null, name: player.name };
+          const nextPp = applyPlayerPointsDelta(parsed, teamKey, player.id, pts, identity);
+          const totals = totalsFromPlayerPoints(nextPp);
+          const t1Before = (sessao.team1_points ?? 0) as number;
+          const t2Before = (sessao.team2_points ?? 0) as number;
+          if (t1Before === 0 && t2Before === 0 && pts > 0) {
+            firstScoringTeamRef.current = teamKey;
+          }
+          const decisivePts = decisiveBasketPoints(teamKey, t1Before, t2Before, totals.t1, totals.t2, pts);
+          setTeam1MatchPoints(totals.t1);
+          setTeam2MatchPoints(totals.t2);
+          if (totals.t1 >= 12) setShowWinnerModal('team1');
+          else if (totals.t2 >= 12) setShowWinnerModal('team2');
           const { error: updErr } = await supabase
             .from('partida_sessoes')
-            .update({ team1_points: newT1, team2_points: newT2 })
+            .update({ player_points: partidaPlayerPointsToJson(nextPp) })
             .eq('id', partidaId);
           if (updErr) {
-            setTeam1MatchPoints(t1);
-            setTeam2MatchPoints(t2);
+            const prevT = totalsFromPlayerPoints(parsed);
+            setTeam1MatchPoints(prevT.t1);
+            setTeam2MatchPoints(prevT.t2);
             addNotification(updErr.message || 'Erro ao atualizar placar.', 'error', { showToastForMs: 5000 });
           } else {
             fetchPartidaSessao(partidaId);
+            if (userId && decisivePts > 0) {
+              const row = stats.find((s) => s.user_id === userId);
+              if (row) {
+                await supabase
+                  .from('stats')
+                  .update({ clutch_points: (row.clutch_points ?? 0) + decisivePts })
+                  .eq('id', row.id);
+                fetchStats();
+              }
+              setMatchPlayerStats((prev) => {
+                const cur = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+                return {
+                  ...prev,
+                  [player.id]: {
+                    ...cur,
+                    clutch_points: (cur.clutch_points ?? 0) + decisivePts,
+                  },
+                };
+              });
+            }
           }
         }
       }
@@ -1227,19 +1318,49 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         if (partidaId) {
           const { data: sessao } = await supabase
             .from('partida_sessoes')
-            .select('team1_points, team2_points')
+            .select('player_points, team1_points, team2_points')
             .eq('id', partidaId)
             .single();
           if (sessao) {
-            const t1 = (sessao.team1_points ?? 0) as number;
-            const t2 = (sessao.team2_points ?? 0) as number;
-            const newT1 = player.status === 'team1' ? Math.max(t1 - pts, 0) : t1;
-            const newT2 = player.status === 'team2' ? Math.max(t2 - pts, 0) : t2;
-            await supabase.from('partida_sessoes').update({ team1_points: newT1, team2_points: newT2 }).eq('id', partidaId);
-            setTeam1MatchPoints(newT1);
-            setTeam2MatchPoints(newT2);
+            const parsed = parsePartidaPlayerPoints(sessao.player_points);
+            const teamKey = player.status as 'team1' | 'team2';
+            const identity = { user_id: player.user_id ?? null, name: player.name };
+            const t1Before = (sessao.team1_points ?? 0) as number;
+            const t2Before = (sessao.team2_points ?? 0) as number;
+            const nextPp = applyPlayerPointsDelta(parsed, teamKey, player.id, -pts, identity);
+            const totals = totalsFromPlayerPoints(nextPp);
+            const reversePts = reverseDecisiveBasketPoints(teamKey, t1Before, t2Before, totals.t1, totals.t2, pts);
+            if (totals.t1 === 0 && totals.t2 === 0) {
+              firstScoringTeamRef.current = null;
+            }
+            await supabase
+              .from('partida_sessoes')
+              .update({ player_points: partidaPlayerPointsToJson(nextPp) })
+              .eq('id', partidaId);
+            setTeam1MatchPoints(totals.t1);
+            setTeam2MatchPoints(totals.t2);
             setShowWinnerModal(null);
             fetchPartidaSessao(partidaId);
+            if (userId && reversePts > 0) {
+              const row = stats.find((s) => s.user_id === userId);
+              if (row) {
+                await supabase
+                  .from('stats')
+                  .update({ clutch_points: Math.max((row.clutch_points ?? 0) - reversePts, 0) })
+                  .eq('id', row.id);
+                fetchStats();
+              }
+              setMatchPlayerStats((prev) => {
+                const cur = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+                return {
+                  ...prev,
+                  [player.id]: {
+                    ...cur,
+                    clutch_points: Math.max((cur.clutch_points ?? 0) - reversePts, 0),
+                  },
+                };
+              });
+            }
           }
         }
       }
@@ -1258,45 +1379,86 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     if (!isAdminMode && delta < 0) return;
     const userId = player.user_id;
 
-    // Atualizar matchPlayerStats otimisticamente
+    // Pontos: placar + decisivos (cesta da vitória) alinhados ao mesmo update
+    if (statKey === 'points' && (player.status === 'team1' || player.status === 'team2')) {
+      const partidaId = currentPartidaSessaoId;
+      if (!partidaId) return;
+
+      const { data: sessao } = await supabase
+        .from('partida_sessoes')
+        .select('player_points, team1_points, team2_points')
+        .eq('id', partidaId)
+        .single();
+      if (!sessao) return;
+
+      const t1B = (sessao.team1_points ?? 0) as number;
+      const t2B = (sessao.team2_points ?? 0) as number;
+      const parsed = parsePartidaPlayerPoints(sessao.player_points);
+      const teamKey = player.status as 'team1' | 'team2';
+      const identity = { user_id: player.user_id ?? null, name: player.name };
+      const nextPp = applyPlayerPointsDelta(parsed, teamKey, player.id, delta, identity);
+      const totals = totalsFromPlayerPoints(nextPp);
+
+      let clutchDelta = 0;
+      if (delta > 0) {
+        clutchDelta = decisiveBasketPoints(teamKey, t1B, t2B, totals.t1, totals.t2, delta);
+      } else if (delta < 0) {
+        clutchDelta = -reverseDecisiveBasketPoints(teamKey, t1B, t2B, totals.t1, totals.t2, -delta);
+      }
+
+      await supabase
+        .from('partida_sessoes')
+        .update({ player_points: partidaPlayerPointsToJson(nextPp) })
+        .eq('id', partidaId);
+      setTeam1MatchPoints(totals.t1);
+      setTeam2MatchPoints(totals.t2);
+      if (delta < 0) setShowWinnerModal(null);
+      else if (totals.t1 >= 12) setShowWinnerModal('team1');
+      else if (totals.t2 >= 12) setShowWinnerModal('team2');
+      fetchPartidaSessao(partidaId);
+
+      if (userId) {
+        const existing = stats.find((s) => s.user_id === userId) ?? null;
+        if (existing) {
+          const newPoints = Math.max((existing.points ?? 0) + delta, 0);
+          await supabase
+            .from('stats')
+            .update({
+              points: newPoints,
+              clutch_points: Math.max((existing.clutch_points ?? 0) + clutchDelta, 0),
+            })
+            .eq('id', existing.id);
+          fetchStats();
+        }
+      }
+
+      setMatchPlayerStats((prev) => {
+        const current = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+        const newPts = Math.max((current.points ?? 0) + delta, 0);
+        return {
+          ...prev,
+          [player.id]: {
+            ...current,
+            points: newPts,
+            clutch_points: Math.max((current.clutch_points ?? 0) + clutchDelta, 0),
+          },
+        };
+      });
+      return;
+    }
+
     setMatchPlayerStats((prev) => {
       const current = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
       const newVal = Math.max((current[statKey] ?? 0) + delta, 0);
       return { ...prev, [player.id]: { ...current, [statKey]: newVal } };
     });
 
-    // Atualizar ranking no DB (apenas cadastrados)
     if (userId) {
       const existing = stats.find((s) => s.user_id === userId) ?? null;
       if (existing) {
         const newVal = Math.max((existing[statKey] ?? 0) + delta, 0);
         await supabase.from('stats').update({ [statKey]: newVal }).eq('id', existing.id);
         fetchStats();
-      }
-    }
-
-    // Atualizar placar da partida se for pontos
-    if (statKey === 'points' && (player.status === 'team1' || player.status === 'team2')) {
-      const partidaId = currentPartidaSessaoId;
-      if (partidaId) {
-        const { data: sessao } = await supabase
-          .from('partida_sessoes')
-          .select('team1_points, team2_points')
-          .eq('id', partidaId)
-          .single();
-        if (sessao) {
-          const t1 = (sessao.team1_points ?? 0) as number;
-          const t2 = (sessao.team2_points ?? 0) as number;
-          const newT1 = player.status === 'team1' ? Math.max(t1 + delta, 0) : t1;
-          const newT2 = player.status === 'team2' ? Math.max(t2 + delta, 0) : t2;
-          await supabase.from('partida_sessoes').update({ team1_points: newT1, team2_points: newT2 }).eq('id', partidaId);
-          setTeam1MatchPoints(newT1);
-          setTeam2MatchPoints(newT2);
-          if (delta < 0) setShowWinnerModal(null);
-          else if (newT1 >= 12) setShowWinnerModal('team1');
-          else if (newT2 >= 12) setShowWinnerModal('team2');
-          fetchPartidaSessao(partidaId);
-        }
       }
     }
   };
@@ -1319,7 +1481,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       replacedById = next.id;
     }
 
-    setSuspendedPlayers((prev) => ({ ...prev, [player.id]: { originalTeam, replacedById } }));
+    setSuspendedPlayers((prev) => ({
+      ...prev,
+      [player.id]: { originalTeam, replacedById, joined_at_before_suspend: player.joined_at },
+    }));
     setStatsModalPlayer(null);
     await fetchPlayers();
     addNotification(`${player.name} suspenso temporariamente.`, 'info', { showToastForMs: 3000 });
@@ -1380,15 +1545,35 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     setIsStartingNextMatch(true);
 
     try {
-      if (currentPartidaSessaoId) {
+      const oldPartidaId = currentPartidaSessaoId;
+      const { data: novaPartida, error: insPartidaErr } = await supabase
+        .from('partida_sessoes')
+        .insert(locationId ? { location_id: locationId } : {})
+        .select('id')
+        .single();
+      if (insPartidaErr) throw insPartidaErr;
+      const newPartidaId = novaPartida?.id ?? null;
+      if (!newPartidaId) throw new Error('new_partida_missing');
+
+      await supabase
+        .from('session')
+        .update({ current_partida_sessao_id: newPartidaId })
+        .eq('id', locationId ?? 'current');
+      setCurrentPartidaSessaoId(newPartidaId);
+      firstScoringTeamRef.current = null;
+
+      if (oldPartidaId) {
         await supabase
           .from('partida_sessoes')
-          .update({ team1_points: 0, team2_points: 0 })
-          .eq('id', currentPartidaSessaoId);
+          .update({ ended_at: new Date().toISOString() })
+          .eq('id', oldPartidaId);
       }
+
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
       setMatchPlayerStats({});
+
+      const suspendSnapshot: Record<string, SuspendedInfo> = { ...suspendedPlayers };
 
       // ── Lidar com jogadores suspensos ──
       // Substitutos sempre vão para o novo time (primeiro a entrar)
@@ -1398,7 +1583,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       const reinsertedToWinning = new Set<string>();
 
       for (const sp of suspendedList) {
-        const info = suspendedPlayers[sp.id];
+        const info = suspendSnapshot[sp.id];
 
         if (!info) {
           // Fallback: estado de suspensão perdido (ex: refresh da página).
@@ -1410,7 +1595,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
             await supabase.from('players').update({ status: winningTeamKey }).eq('id', sp.id);
             reinsertedToWinning.add(sp.id);
           } else {
-            await supabase.from('players').update({ status: 'waiting', joined_at: new Date().toISOString() }).eq('id', sp.id);
+            await supabase
+              .from('players')
+              .update({ status: 'waiting', joined_at: sp.joined_at })
+              .eq('id', sp.id);
           }
           continue;
         }
@@ -1419,10 +1607,8 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           // Suspenso do time vencedor → volta ao time vencedor
           await supabase.from('players').update({ status: winningTeamKey }).eq('id', sp.id);
           reinsertedToWinning.add(sp.id);
-        } else {
-          // Suspenso do time perdedor → fila de espera com os demais perdedores
-          await supabase.from('players').update({ status: 'waiting', joined_at: new Date().toISOString() }).eq('id', sp.id);
         }
+        // Perdedor: vai à fila junto com o time no bloco único abaixo (não volta ao time — time “some” na nova partida)
 
         // Substituto sempre vai direto para o novo time
         if (info.replacedById) {
@@ -1437,17 +1623,28 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         await supabase.from('players').update({ status: losingTeamKey }).eq('id', subId);
       }
 
-      // Perdedores (exceto substitutos que já estão no novo time) → fila de espera
-      const losersToWaiting = losers.filter((p) => !substituteSet.has(p.id));
+      // Perdedores de quadra + suspensos do time perdedor → mesma fila, ordenados (juntos com o time)
+      const fieldLosers = losers.filter((p) => !substituteSet.has(p.id));
+      const suspendedLosers = suspendedList.filter((sp) => suspendSnapshot[sp.id]?.originalTeam === losingTeamKey);
+      const sortLosingKey = (p: Player) => {
+        const inf = suspendSnapshot[p.id];
+        if (inf?.originalTeam === losingTeamKey) {
+          return new Date(inf.joined_at_before_suspend).getTime();
+        }
+        return new Date(p.joined_at).getTime();
+      };
+      const losingGroupOrdered = [...fieldLosers, ...suspendedLosers].sort(
+        (a, b) => sortLosingKey(a) - sortLosingKey(b)
+      );
 
       const maxWaitingTime =
         waitingList.length > 5
           ? Math.max(...waitingList.slice(5).map((p) => new Date(p.joined_at).getTime()))
           : Date.now() - 10000;
 
-      for (let i = 0; i < losersToWaiting.length; i++) {
+      for (let i = 0; i < losingGroupOrdered.length; i++) {
         const joinedAt = new Date(maxWaitingTime + (i + 1) * 1000).toISOString();
-        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', losersToWaiting[i].id);
+        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', losingGroupOrdered[i].id);
       }
 
       // Re-fetch para obter estado real do banco após todas as movimentações
@@ -1491,6 +1688,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           await supabase
             .from('stats')
             .update({
+              partidas: (s.partidas ?? 0) + 1,
               wins: (s.wins ?? 0) + (venceu ? 1 : 0),
               user_id: userId,
             })
@@ -1499,6 +1697,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           await supabase.from('stats').insert({
             name: p.name,
             user_id: userId,
+            partidas: 1,
             wins: venceu ? 1 : 0,
             points: 0,
             blocks: 0,
@@ -1586,6 +1785,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
         setIsMatchStarted(true);
         setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
+        firstScoringTeamRef.current = null;
         setTeam1MatchPoints(0);
         setTeam2MatchPoints(0);
         await fetchPlayers();
@@ -1681,25 +1881,68 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const resetQueue = async () => {
     if (!window.confirm('Resetar os times? Todos os jogadores dos times voltam para a lista de espera.')) return;
     try {
-      const teamPlayers = players.filter((p) => p.status === 'team1' || p.status === 'team2');
-      if (teamPlayers.length === 0) {
+      const t1 = team1MatchPoints;
+      const t2 = team2MatchPoints;
+      const sortByJoined = (a: Player, b: Player) =>
+        new Date(a.joined_at).getTime() - new Date(b.joined_at).getTime();
+      const team1Players = players.filter((p) => p.status === 'team1').sort(sortByJoined);
+      const team2Players = players.filter((p) => p.status === 'team2').sort(sortByJoined);
+
+      const suspendSnap = suspendedPlayers;
+      const sortKeyInclSuspended = (p: Player) =>
+        p.status === 'suspended' && suspendSnap[p.id]
+          ? new Date(suspendSnap[p.id].joined_at_before_suspend).getTime()
+          : new Date(p.joined_at).getTime();
+      const mergeTeamWithSuspended = (active: Player[], teamKey: 'team1' | 'team2') => {
+        const sus = suspendedList.filter((sp) => suspendSnap[sp.id]?.originalTeam === teamKey);
+        return [...active, ...sus].sort((a, b) => sortKeyInclSuspended(a) - sortKeyInclSuspended(b));
+      };
+
+      const block1 = mergeTeamWithSuspended(team1Players, 'team1');
+      const block2 = mergeTeamWithSuspended(team2Players, 'team2');
+
+      let teamPlayersOrdered: Player[] =
+        t1 > t2
+          ? [...block1, ...block2]
+          : t2 > t1
+            ? [...block2, ...block1]
+            : firstScoringTeamRef.current === 'team2'
+              ? [...block2, ...block1]
+              : [...block1, ...block2];
+
+      const inOrdered = new Set(teamPlayersOrdered.map((p) => p.id));
+      const orphanSuspended = suspendedList.filter((sp) => !inOrdered.has(sp.id));
+      if (orphanSuspended.length > 0) {
+        teamPlayersOrdered = [...teamPlayersOrdered, ...orphanSuspended.sort(sortByJoined)];
+      }
+
+      if (teamPlayersOrdered.length === 0 && suspendedList.length === 0) {
         addNotification('Nenhum jogador nos times para resetar.', 'info', { showToastForMs: 3000 });
         return;
       }
-      // Enviar jogadores dos times para o final da fila
-      const lastWaiting = waitingList.length > 0
-        ? Math.max(...waitingList.map((p) => new Date(p.joined_at).getTime()))
-        : Date.now() - 60000;
-      for (let i = 0; i < teamPlayers.length; i++) {
-        const joinedAt = new Date(lastWaiting + (i + 1) * 1000).toISOString();
-        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', teamPlayers[i].id);
+
+      const oldPartidaId = currentPartidaSessaoId;
+      if (oldPartidaId) {
+        await supabase.from('partida_sessoes').update({ ended_at: new Date().toISOString() }).eq('id', oldPartidaId);
       }
 
-      // Buscar fila atualizada e formar novos times se houver 10+ jogadores
-      const { data: updatedPlayers } = await supabase
-        .from('players')
-        .select('*')
-        .order('joined_at', { ascending: true });
+      setShowWinnerModal(null);
+
+      // Suspensos entram na fila no mesmo bloco do seu time (ordem relativa por joined_at / antes da suspensão), depois do último que já estava em espera
+      const waitingTimes = waitingList.map((p) => new Date(p.joined_at).getTime());
+      const lastWaiting =
+        waitingTimes.length > 0 ? Math.max(...waitingTimes) : Date.now() - 60000;
+
+      for (let i = 0; i < teamPlayersOrdered.length; i++) {
+        const joinedAt = new Date(lastWaiting + (i + 1) * 1000).toISOString();
+        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', teamPlayersOrdered[i].id);
+      }
+      setSuspendedPlayers({});
+
+      firstScoringTeamRef.current = null;
+
+      const emptyPlayerPoints = partidaPlayerPointsToJson({ team1: {}, team2: {} });
+      const { data: updatedPlayers } = await supabase.from('players').select('*').order('joined_at', { ascending: true });
       const allWaiting = ((updatedPlayers ?? []) as Player[]).filter((p) => p.status === 'waiting');
 
       if (allWaiting.length >= 10) {
@@ -1712,15 +1955,21 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         }
         const { data: partidaSessao, error: insertErr } = await supabase
           .from('partida_sessoes')
-          .insert({})
+          .insert(
+            locationId
+              ? { location_id: locationId, player_points: emptyPlayerPoints }
+              : { player_points: emptyPlayerPoints }
+          )
           .select('id')
           .single();
         if (insertErr) throw insertErr;
+        const sessionRowId = locationId ?? 'current';
         await supabase.from('session').upsert({
-          id: 'current',
+          id: sessionRowId,
           is_started: true,
           started_at: new Date().toISOString(),
           current_partida_sessao_id: partidaSessao?.id,
+          ...(locationId ? { location_id: locationId } : {}),
         });
         setIsMatchStarted(true);
         setCurrentPartidaSessaoId(partidaSessao?.id ?? null);
@@ -1736,6 +1985,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       setTeam2MatchPoints(0);
       setMatchPlayerStats({});
       await fetchPlayers();
+      await fetchSession();
     } catch (err) {
       console.error('Error resetting queue:', err);
       addNotification('Erro ao resetar lista.', 'error', { showToastForMs: 5000 });
@@ -1987,6 +2237,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                         { key: 'rebounds' as const, label: 'Rebotes', emoji: '📏', value: mStats.rebounds },
                       ] : []),
                     ];
+                    const decisivosPartida = mStats.clutch_points ?? 0;
                     return (
                       <div className={cn('rounded-xl p-3 space-y-2', darkMode ? 'bg-slate-800/60' : 'bg-slate-50')}>
                         <p className={cn('text-xs font-bold uppercase tracking-wider', darkMode ? 'text-slate-400' : 'text-slate-500')}>
@@ -2028,6 +2279,21 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                             </div>
                           </div>
                         ))}
+                        {isRegistered && (
+                          <div
+                            className={cn(
+                              'flex items-center justify-between pt-2 mt-1 border-t',
+                              darkMode ? 'border-slate-700' : 'border-slate-200'
+                            )}
+                          >
+                            <span className={cn('text-sm flex items-center gap-1.5', darkMode ? 'text-slate-300' : 'text-slate-700')}>
+                              <span>🎯</span> Decisivos <span className={cn('text-[10px] font-normal', darkMode ? 'text-slate-500' : 'text-slate-400')}>(cesta da vitória)</span>
+                            </span>
+                            <span className={cn('text-lg font-black tabular-nums', darkMode ? 'text-rose-300' : 'text-rose-600')}>
+                              {decisivosPartida}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     );
                   })()}
@@ -2234,7 +2500,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                         id: stat.id,
                         user_id: stat.user_id ?? null,
                         name: stat.name,
-                        partidas: stat.partidas,
+                        partidas: stat.partidas ?? 0,
                         wins: stat.wins,
                         points: stat.points,
                         blocks: stat.blocks,
@@ -2692,8 +2958,8 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
               </div>
 
               <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                <SortableContext items={waitingList.map((p) => p.id)} strategy={rectSortingStrategy}>
-                  <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
+                <SortableContext items={waitingList.map((p) => p.id)} strategy={verticalListSortingStrategy}>
+                  <div className="flex flex-col gap-2 sm:gap-3">
                     {waitingList.map((player, index) => (
                       <SortableWaitingCard
                         key={player.id}
@@ -2711,7 +2977,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                     {waitingList.length === 0 && suspendedList.length === 0 && (
                       <div
                         className={cn(
-                          'col-span-full py-8 text-center text-xs sm:text-sm border-2 border-dashed rounded-2xl transition-colors duration-300',
+                          'w-full py-8 text-center text-xs sm:text-sm border-2 border-dashed rounded-2xl transition-colors duration-300',
                           darkMode ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-200'
                         )}
                       >
@@ -3048,9 +3314,14 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   const userStat = stats.find((s) => s.user_id === userProfile?.id);
                   const sortedByWins = [...stats].sort((a, b) => b.wins - a.wins);
                   const rankPos = userProfile?.id ? sortedByWins.findIndex((s) => s.user_id === userProfile.id) + 1 : 0;
+                  const pj = userStat?.partidas ?? 0;
+                  const winRateStr = pj > 0 ? `${Math.round(((userStat?.wins ?? 0) / pj) * 100)}%` : '—';
+                  const avgPtsStr = pj > 0 ? ((userStat?.points ?? 0) / pj).toFixed(1) : '—';
                   const profileStats = [
                     { label: 'Partidas', value: String(userStat?.partidas ?? 0), icon: <Trophy className="w-4 h-4" /> },
                     { label: 'Vitórias', value: String(userStat?.wins ?? 0), icon: <Trophy className="w-4 h-4 text-yellow-500" /> },
+                    { label: 'Win rate', value: winRateStr, icon: <Percent className="w-4 h-4 text-emerald-500" /> },
+                    { label: 'Pts / jogo', value: avgPtsStr, icon: <Target className="w-4 h-4 text-orange-500" /> },
                     { label: 'Pontos', value: String(userStat?.points ?? 0), icon: <Plus className="w-4 h-4 text-blue-500" /> },
                     { label: 'Assistências', value: String(userStat?.assists ?? 0), icon: <Target className="w-4 h-4 text-cyan-500" /> },
                     { label: 'Tocos', value: String(userStat?.blocks ?? 0), icon: <Shield className="w-4 h-4 text-amber-500" /> },
@@ -3187,7 +3458,7 @@ function SortableWaitingCard({ player, index, darkMode, isAdminMode, userAvatars
       ref={setNodeRef}
       style={style}
       className={cn(
-        'border p-2 sm:p-4 rounded-xl flex items-center justify-between group transition-colors duration-300',
+        'w-full border p-2 sm:p-4 rounded-xl flex items-center justify-between group transition-colors duration-300',
         darkMode ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm',
         isDragging && 'shadow-xl ring-2 ring-orange-500/40 scale-[1.03]'
       )}
@@ -3551,6 +3822,41 @@ function NavButton({ active, onClick, icon, label, darkMode }: NavButtonProps) {
   );
 }
 
+function getWeekRangeLabel(): string {
+  const now = new Date();
+  const day = now.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diffToMonday);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  const fmt = (d: Date) => `${d.getDate().toString().padStart(2, '0')} ${months[d.getMonth()]}`;
+  return `${fmt(monday)} - ${fmt(sunday)} ${sunday.getFullYear()}`;
+}
+
+function calculateHighlightScore(p: PlayerStats): number {
+  return (
+    (p.points ?? 0) * 1.0 +
+    (p.assists ?? 0) * 1.5 +
+    (p.rebounds ?? 0) * 1.2 +
+    (p.blocks ?? 0) * 1.5 +
+    (p.steals ?? 0) * 1.3 +
+    (p.clutch_points ?? 0) * 2.0 +
+    (p.wins ?? 0) * 3.0
+  );
+}
+
+function getStatValue(player: PlayerStats, key: SortKey): number {
+  if (key === 'efficiency') return calculateHighlightScore(player);
+  return (player[key] as number) ?? 0;
+}
+
+function formatStatValue(player: PlayerStats, key: SortKey): string {
+  if (key === 'efficiency') return calculateHighlightScore(player).toFixed(1);
+  return String((player[key] as number) ?? 0);
+}
+
 interface RankingViewProps {
   stats: PlayerStats[];
   darkMode: boolean;
@@ -3558,7 +3864,7 @@ interface RankingViewProps {
   onSortChange: (key: SortKey) => void;
   userAvatars: Record<string, string>;
   onProfileClick: (stat: PlayerStats) => void;
-  userProfile: { display_name: string | null; avatar_url: string | null } | null;
+  userProfile: { id: string; display_name: string | null; avatar_url: string | null } | null;
   isGuest: boolean;
   locationSlug?: string;
 }
@@ -3566,11 +3872,12 @@ interface RankingViewProps {
 const layoutTransition = { type: 'spring' as const, stiffness: 350, damping: 30 };
 
 const SKILL_LABELS: Record<SortKey, string> = {
+  efficiency: 'Eficiência',
   wins: 'Vitórias',
   points: 'Pontos',
   blocks: 'Tocos',
   steals: 'Roubos',
-  clutch_points: 'Decisivos',
+  clutch_points: 'Clutch',
   assists: 'Assistências',
   rebounds: 'Rebotes',
 };
@@ -3697,7 +4004,7 @@ function RankPodiumItem({
       </button>
       <div className="text-center">
         <p className={cn('font-bold truncate max-w-[80px] sm:max-w-[100px]', size === 'lg' ? 'text-sm sm:text-base' : 'text-xs sm:text-sm', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</p>
-        <p className="text-orange-500 font-black mt-0.5" style={{ fontSize: size === 'lg' ? '1.125rem' : size === 'md' ? '0.875rem' : '0.75rem' }}>{player[sortKey]}</p>
+        <p className="text-orange-500 font-black mt-0.5" style={{ fontSize: size === 'lg' ? '1.125rem' : size === 'md' ? '0.875rem' : '0.75rem' }}>{formatStatValue(player, sortKey)}</p>
         <p className={cn('text-[9px] uppercase tracking-wider font-bold mt-0.5', darkMode ? 'text-slate-600' : 'text-slate-500')}>{SKILL_LABELS[sortKey]}</p>
       </div>
       {isTied ? (
@@ -3724,39 +4031,97 @@ function RankPodiumItem({
 
 function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest, locationSlug }: RankingViewProps) {
   const [showQrModal, setShowQrModal] = useState(false);
+  const [showHighlightModal, setShowHighlightModal] = useState(false);
+
+  const highlightPlayer = useMemo(() => {
+    if (stats.length === 0) return null;
+    let best: PlayerStats | null = null;
+    let bestScore = -1;
+    for (const p of stats) {
+      const score = calculateHighlightScore(p);
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+    return best && bestScore > 0 ? best : null;
+  }, [stats]);
+
+  const highlightScore = highlightPlayer ? calculateHighlightScore(highlightPlayer) : 0;
+  const highlightAvatarUrl = highlightPlayer?.user_id ? userAvatars[highlightPlayer.user_id] : undefined;
+  const weekLabel = getWeekRangeLabel();
+  const isHighlightCurrentUser =
+    !isGuest &&
+    !!userProfile?.id &&
+    !!highlightPlayer?.user_id &&
+    userProfile.id === highlightPlayer.user_id;
+  const congratsName =
+    userProfile?.display_name?.trim() || highlightPlayer?.name?.trim() || 'Atleta';
+
+  const highlightStatBars = useMemo(() => {
+    if (!highlightPlayer) return [];
+    const defs = [
+      { key: 'points' as const, label: 'Pontos', color: '#f97316' },
+      { key: 'assists' as const, label: 'Assistências', color: '#3b82f6' },
+      { key: 'rebounds' as const, label: 'Rebotes', color: '#10b981' },
+      { key: 'blocks' as const, label: 'Tocos', color: '#8b5cf6' },
+      { key: 'steals' as const, label: 'Roubos', color: '#ec4899' },
+      { key: 'clutch_points' as const, label: 'Clutch', color: '#ef4444' },
+      { key: 'wins' as const, label: 'Vitórias', color: '#f59e0b' },
+    ];
+    return defs.map((d) => {
+      const value = (highlightPlayer[d.key] as number) ?? 0;
+      const max = Math.max(...stats.map((p) => (p[d.key] as number) ?? 0), 1);
+      return { ...d, value, max };
+    });
+  }, [highlightPlayer, stats]);
+
+  useEffect(() => {
+    if (!showHighlightModal) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtml = html.style.overflow;
+    const prevBody = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prevHtml;
+      body.style.overflow = prevBody;
+    };
+  }, [showHighlightModal]);
+
   const qrUrl = locationSlug ? `${window.location.origin}/${locationSlug}` : null;
   const sortedStats = useMemo(() => {
     return [...stats].sort((a, b) => {
-      const diff = (b[sortKey] ?? 0) - (a[sortKey] ?? 0);
+      const diff = getStatValue(b, sortKey) - getStatValue(a, sortKey);
       if (diff !== 0) return diff;
-      // desempate secundário por pontos
       return (b.points ?? 0) - (a.points ?? 0);
     });
   }, [stats, sortKey]);
 
   // Há algum jogador com valor > 0 para o filtro atual?
   const hasAnyData = useMemo(
-    () => sortedStats.some((s) => (s[sortKey] ?? 0) > 0),
+    () => sortedStats.some((s) => getStatValue(s, sortKey) > 0),
     [sortedStats, sortKey]
   );
 
   // Pódio: apenas jogadores com valor > 0 no filtro atual (máximo 3)
   const podiumPlayers = useMemo(
-    () => sortedStats.filter((s) => (s[sortKey] ?? 0) > 0).slice(0, 3),
+    () => sortedStats.filter((s) => getStatValue(s, sortKey) > 0).slice(0, 3),
     [sortedStats, sortKey]
   );
   // top3 com slots vazios (null) para posições sem jogador
   const top3: (PlayerStats | null)[] = [podiumPlayers[0] ?? null, podiumPlayers[1] ?? null, podiumPlayers[2] ?? null];
   // Lista a partir do 4º entre os que têm valor > 0, depois os que têm 0
-  const withValue = sortedStats.filter((s) => (s[sortKey] ?? 0) > 0).slice(3);
-  const withoutValue = sortedStats.filter((s) => (s[sortKey] ?? 0) === 0);
+  const withValue = sortedStats.filter((s) => getStatValue(s, sortKey) > 0).slice(3);
+  const withoutValue = sortedStats.filter((s) => getStatValue(s, sortKey) === 0);
   const remaining = [...withValue, ...withoutValue];
 
   // Empates: só marca valores > 0 (evita shimmer em todos quando todo mundo tem 0)
   const tiedValues = useMemo(() => {
     const counts = new Map<number, number>();
     for (const s of sortedStats) {
-      const v = s[sortKey] ?? 0;
+      const v = getStatValue(s, sortKey);
       if (v > 0) counts.set(v, (counts.get(v) ?? 0) + 1);
     }
     return new Set([...counts.entries()].filter(([, c]) => c > 1).map(([v]) => v));
@@ -3768,7 +4133,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
     const heights = [...defaults];
     for (let i = 0; i < top3.length; i++) {
       for (let j = i + 1; j < top3.length; j++) {
-        if (top3[i] && top3[j] && top3[i][sortKey] === top3[j][sortKey]) {
+        if (top3[i] && top3[j] && getStatValue(top3[i], sortKey) === getStatValue(top3[j], sortKey)) {
           const max = Math.max(heights[i], heights[j]);
           heights[i] = max;
           heights[j] = max;
@@ -3784,7 +4149,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
     const sizes = [...defaults];
     for (let i = 0; i < top3.length; i++) {
       for (let j = i + 1; j < top3.length; j++) {
-        if (top3[i] && top3[j] && top3[i][sortKey] === top3[j][sortKey]) {
+        if (top3[i] && top3[j] && getStatValue(top3[i], sortKey) === getStatValue(top3[j], sortKey)) {
           sizes[i] = 'lg';
           sizes[j] = 'lg';
         }
@@ -3794,11 +4159,13 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
   }, [top3, sortKey]);
 
   const filterOptions: { key: SortKey; label: string }[] = [
+    { key: 'efficiency', label: 'Eficiência' },
     { key: 'points', label: 'Pontos' },
     { key: 'assists', label: 'Assistências' },
     { key: 'rebounds', label: 'Rebotes' },
     { key: 'blocks', label: 'Tocos' },
     { key: 'steals', label: 'Roubos' },
+    { key: 'clutch_points', label: 'Clutch' },
   ];
 
   return (
@@ -3813,6 +4180,13 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
           10%  { opacity: 1; }
           90%  { opacity: 1; }
           100% { top: 120%; opacity: 0; }
+        }
+        @keyframes crown-glow {
+          0%, 100% { filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.6)); transform: rotate(-5deg); }
+          50% { filter: drop-shadow(0 0 12px rgba(251, 191, 36, 1)); transform: rotate(5deg); }
+        }
+        @keyframes highlight-bar-fill {
+          from { width: 0%; }
         }
       `}</style>
       <div className="flex flex-col gap-6">
@@ -3872,6 +4246,54 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
         </div>
       </div>
 
+      {/* Destaque da Rodada Card */}
+      {highlightPlayer && (
+        <motion.button
+          type="button"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15, type: 'spring', stiffness: 300, damping: 25 }}
+          onClick={() => setShowHighlightModal(true)}
+          className="w-full relative overflow-hidden rounded-2xl p-4 shadow-lg group cursor-pointer text-left"
+          style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #f97316 50%, #ef4444 100%)' }}
+        >
+          <div className="absolute -top-8 -right-8 w-28 h-28 rounded-full bg-white/10" />
+          <div className="absolute -bottom-5 -left-5 w-20 h-20 rounded-full bg-white/5" />
+          <div className="absolute top-3 right-14 w-3 h-3 rounded-full bg-white/15" />
+          <div className="absolute bottom-6 right-6 w-2 h-2 rounded-full bg-white/20" />
+
+          <div className="relative flex items-center gap-4">
+            <div className="relative shrink-0">
+              <div className="w-16 h-16 rounded-full overflow-hidden ring-2 ring-white/30 shadow-lg">
+                {highlightAvatarUrl ? (
+                  <img src={highlightAvatarUrl} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-white/20 flex items-center justify-center">
+                    <User className="w-7 h-7 text-white/70" />
+                  </div>
+                )}
+              </div>
+              <div className="absolute -top-3 -right-1" style={{ animation: 'crown-glow 2s ease-in-out infinite' }}>
+                <Crown className="w-6 h-6 text-yellow-300" style={{ filter: 'drop-shadow(0 0 6px rgba(251, 191, 36, 0.9))' }} />
+              </div>
+            </div>
+
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">Destaque da Rodada</p>
+              <p className="text-lg font-black text-white truncate mt-0.5">{highlightPlayer.name}</p>
+              <p className="text-xs text-white/80 mt-1">
+                {highlightPlayer.points} pts · {highlightPlayer.assists} ast · {highlightPlayer.rebounds} reb
+              </p>
+            </div>
+
+            <div className="flex flex-col items-center gap-1 shrink-0">
+              <span className="text-2xl font-black text-white leading-none">{highlightScore.toFixed(1)}</span>
+              <span className="text-[9px] font-bold uppercase tracking-wider text-white/50">Score</span>
+            </div>
+          </div>
+        </motion.button>
+      )}
+
       <>
           {/* Podium for Top 3 — slots vazios quando não há jogador com valor > 0 */}
           {(() => {
@@ -3899,7 +4321,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
                       onClick={() => onProfileClick(player)}
                       size={sizes[sizeIdx]}
                       medal={medals[sizeIdx]}
-                      isTied={tiedValues.has(player[sortKey])}
+                      isTied={tiedValues.has(getStatValue(player, sortKey))}
                       barHeightPx={barHeights[sizeIdx]}
                       hotStreak={isHotStreakActive(player.hot_streak_since)}
                     />
@@ -3948,7 +4370,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
                 >
                   <div className="flex items-center gap-4 min-w-0 flex-1">
                     <div className="relative shrink-0">
-                      {tiedValues.has(player[sortKey]) ? (
+                      {tiedValues.has(getStatValue(player, sortKey)) ? (
                         <ShimmerRing sizePx={40} borderPx={2}>
                           {player.user_id && userAvatars[player.user_id] ? (
                             <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
@@ -3998,7 +4420,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
                     </div>
                   </div>
                   <div className="text-right shrink-0 ml-3">
-                    <div className="text-xl font-black text-orange-500">{player[sortKey] ?? 0}</div>
+                    <div className="text-xl font-black text-orange-500">{formatStatValue(player, sortKey)}</div>
                     <div className={cn('text-[9px] uppercase tracking-widest font-bold', darkMode ? 'text-slate-600' : 'text-slate-500')}>
                       {SKILL_LABELS[sortKey]}
                     </div>
@@ -4009,6 +4431,155 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
             </AnimatePresence>
           </motion.div>
       </>
+
+      {/* Destaque da Rodada Modal */}
+      <AnimatePresence>
+        {showHighlightModal && highlightPlayer && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center px-4 pt-6 pb-[calc(1.5rem+3.5rem+env(safe-area-inset-bottom,0px))] bg-black/70 backdrop-blur-md overflow-hidden overscroll-none"
+            onClick={() => setShowHighlightModal(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 30 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                'rounded-3xl w-full max-w-md max-h-[min(85dvh,calc(100dvh-1.5rem-(1.5rem+3.5rem+env(safe-area-inset-bottom,0px)))] flex flex-col overflow-hidden shadow-2xl',
+                darkMode ? 'bg-slate-900' : 'bg-white'
+              )}
+            >
+              {/* Gradient Header — compacto para caber o card inteiro em telas pequenas */}
+              <div
+                className="relative px-4 pt-3 pb-4 rounded-t-3xl overflow-hidden shrink-0"
+                style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #f97316 40%, #ef4444 100%)' }}
+              >
+                <div className="absolute -top-8 -right-8 w-28 h-28 rounded-full bg-white/10" />
+                <div className="absolute -bottom-6 -left-6 w-20 h-20 rounded-full bg-white/5" />
+
+                <button
+                  onClick={() => setShowHighlightModal(false)}
+                  className="absolute top-2 right-2 p-1 rounded-full bg-black/20 text-white/80 hover:bg-black/30 transition-colors z-10"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+
+                <div className="relative flex flex-col items-center pt-1">
+                  <motion.div
+                    initial={{ scale: 0, rotate: -30 }}
+                    animate={{ scale: 1, rotate: 0 }}
+                    transition={{ delay: 0.2, type: 'spring', stiffness: 400, damping: 15 }}
+                  >
+                    <Crown
+                      className="w-7 h-7 text-yellow-300 mx-auto mb-0.5"
+                      style={{ filter: 'drop-shadow(0 0 8px rgba(251, 191, 36, 0.7))' }}
+                    />
+                  </motion.div>
+
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/70 mb-0">Destaque da Rodada</p>
+                  <p className="text-[10px] text-white/50 mb-2">{weekLabel}</p>
+
+                  <motion.div
+                    className="relative"
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ delay: 0.15, type: 'spring', stiffness: 300, damping: 20 }}
+                  >
+                    <div className="w-14 h-14 rounded-full overflow-hidden ring-2 ring-white/30 shadow-lg">
+                      {highlightAvatarUrl ? (
+                        <img src={highlightAvatarUrl} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full bg-white/20 flex items-center justify-center">
+                          <User className="w-6 h-6 text-white/60" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="absolute -bottom-0.5 -right-0.5 bg-yellow-400 rounded-full p-1 shadow-md">
+                      <Trophy className="w-3 h-3 text-yellow-800" />
+                    </div>
+                  </motion.div>
+
+                  <h2 className="text-base font-black text-white mt-2 text-center leading-tight px-1">{highlightPlayer.name}</h2>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="px-2 py-0 rounded-full bg-white/15 text-[10px] font-bold text-white/90">
+                      Score {highlightScore.toFixed(1)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {isHighlightCurrentUser && (
+                <div
+                  className={cn(
+                    'shrink-0 px-4 py-3 border-b text-center text-sm leading-snug',
+                    darkMode ? 'bg-orange-500/10 border-orange-500/20 text-orange-100' : 'bg-orange-50 border-orange-100 text-slate-800'
+                  )}
+                >
+                  <p>
+                    Parabéns, <span className="font-bold">{congratsName}</span>, você está construindo um currículo incrível.
+                  </p>
+                </div>
+              )}
+
+              {/* Stats: única área com scroll; cabeçalho do modal permanece fixo */}
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+                <div className="p-4 space-y-3">
+                  <h3 className={cn('text-xs font-bold uppercase tracking-wider', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                    Desempenho Geral
+                  </h3>
+
+                  <div className="space-y-2.5">
+                    {highlightStatBars.map((stat, idx) => (
+                      <div key={stat.key}>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className={cn('text-xs font-semibold', darkMode ? 'text-slate-300' : 'text-slate-700')}>
+                            {stat.label}
+                          </span>
+                          <span className={cn('text-xs font-black tabular-nums', darkMode ? 'text-white' : 'text-slate-900')}>
+                            {stat.value}
+                          </span>
+                        </div>
+                        <div className={cn('h-2 rounded-full overflow-hidden', darkMode ? 'bg-slate-800' : 'bg-slate-100')}>
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: `${stat.max > 0 ? (stat.value / stat.max) * 100 : 0}%` }}
+                            transition={{ duration: 0.7, delay: 0.3 + idx * 0.08, ease: 'easeOut' }}
+                            className="h-full rounded-full"
+                            style={{ background: stat.color }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Quick stats summary */}
+                  <div className={cn(
+                    'grid grid-cols-3 gap-2 pt-3 border-t',
+                    darkMode ? 'border-slate-800' : 'border-slate-100'
+                  )}>
+                    {[
+                      { label: 'Jogos', value: highlightPlayer.partidas ?? 0 },
+                      { label: 'Vitórias', value: highlightPlayer.wins ?? 0 },
+                      { label: 'Pontos', value: highlightPlayer.points ?? 0 },
+                    ].map((item) => (
+                      <div key={item.label} className="text-center">
+                        <p className={cn('text-lg font-black', darkMode ? 'text-white' : 'text-slate-900')}>{item.value}</p>
+                        <p className={cn('text-[10px] uppercase tracking-wider font-bold mt-0.5', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+                          {item.label}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* QR Code Modal */}
       <AnimatePresence>
