@@ -60,10 +60,12 @@ import { supabase } from './supabase';
 import { useAuth } from './contexts/AuthContext';
 import EditarPerfil from './pages/EditarPerfil';
 import GestaoAdmin from './pages/GestaoAdmin';
+import {InstallPWA} from './components/InstallPWA';
 import PerfilDetalhe from './pages/PerfilDetalhe';
 import { NotificationsPanel } from './components/NotificationsPanel';
 import { useLocationCheck } from './hooks/useLocationCheck';
 import { useNotifications } from './contexts/NotificationContext';
+import { runPwaReload } from './pwaUpdateController';
 import {
   applyPlayerPointsDelta,
   parsePartidaPlayerPoints,
@@ -2127,6 +2129,11 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   leaveGuestMode();
                   setShowNotificationsPanel(false);
                 }
+                if (actionType === 'pwa_reload') {
+                  void runPwaReload();
+                  clearNotification(id);
+                  setShowNotificationsPanel(false);
+                }
               }}
             />
           </>
@@ -2163,6 +2170,19 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
               {visibleToast.type === 'warning' && <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
               {visibleToast.type === 'info' && <Info className="w-5 h-5 flex-shrink-0" />}
               <p className="text-sm font-medium flex-1">{visibleToast.message}</p>
+              {visibleToast.action?.type === 'pwa_reload' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void runPwaReload();
+                    clearNotification(visibleToast.id);
+                    dismissToast();
+                  }}
+                  className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white"
+                >
+                  {visibleToast.action.label}
+                </button>
+              )}
               <button
                 onClick={dismissToast}
                 className="p-1 rounded hover:bg-black/10 transition-colors"
@@ -3278,6 +3298,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                     </button>
                   </div>
                 </div>
+                <div className="mt-6">
+                  <InstallPWA darkMode={darkMode} />
+                </div>
               </>
             ) : (
               <>
@@ -3348,7 +3371,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 })()}
 
                 <div className="space-y-3">
-                  <h3 className={cn('font-bold px-1', darkMode ? 'text-slate-400' : 'text-slate-600')}>Configurações</h3>
+                  <h3 className={cn('font-bold px-1', darkMode ? 'text-slate-400' : 'text-slate-600')}>Aplicativo</h3>
+                  <InstallPWA darkMode={darkMode} />
+                  <h3 className={cn('font-bold px-1 pt-2', darkMode ? 'text-slate-400' : 'text-slate-600')}>Configurações</h3>
                   <div
                     className={cn(
                       'border rounded-2xl divide-y overflow-hidden',
