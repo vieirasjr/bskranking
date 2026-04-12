@@ -15,8 +15,6 @@ import {
   AlertCircle,
   Sun,
   Moon,
-  ChevronUp,
-  ChevronDown,
   Home,
   List as ListIcon,
   Calendar,
@@ -34,10 +32,28 @@ import {
   Settings,
   UserMinus,
   RotateCcw,
+  GripVertical,
+  QrCode,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  rectSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from './supabase';
 import { useAuth } from './contexts/AuthContext';
 import EditarPerfil from './pages/EditarPerfil';
@@ -145,6 +161,7 @@ interface PlayerStats {
   clutch_points: number;
   assists: number;
   rebounds: number;
+  hot_streak_since?: string | null;
 }
 
 interface Evento {
@@ -179,7 +196,7 @@ interface AppProps {
   venueCoords?: { lat: number; lng: number; radiusMeters: number };
 }
 
-export default function App({ locationId, venueCoords, isOwner, maxPlayers }: AppProps = {}) {
+export default function App({ locationId, locationSlug, venueCoords, isOwner, maxPlayers }: AppProps = {}) {
   const { user, isGuest, signOut, leaveGuestMode } = useAuth();
   const { notifications, visibleToast, addNotification, dismissToast, clearNotification, clearAll } = useNotifications();
   const isLoggedIn = !!user;
@@ -350,6 +367,11 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
           assists: s.assists ?? 0,
         });
       } else {
+        // Manter o hot_streak_since mais recente entre linhas duplicadas
+        const latestStreak = [existing.hot_streak_since, s.hot_streak_since]
+          .filter(Boolean)
+          .sort()
+          .pop() ?? null;
         byUserId.set(s.user_id, {
           ...existing,
           partidas: (existing.partidas ?? 0) + (s.partidas ?? 0),
@@ -359,6 +381,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
           steals: (existing.steals ?? 0) + (s.steals ?? 0),
           clutch_points: (existing.clutch_points ?? 0) + (s.clutch_points ?? 0),
           assists: (existing.assists ?? 0) + (s.assists ?? 0),
+          hot_streak_since: latestStreak,
         });
       }
     }
@@ -450,9 +473,11 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     if (!locationError) shownLocationRef.current = false;
   }, [activeTab, locationError, addNotification]);
 
-  // Avatares dos usuários no ranking (basquete_users por user_id)
+  // Avatares dos usuários no ranking e jogadores em jogo/fila
   useEffect(() => {
-    const userIds = [...new Set(stats.map((s) => s.user_id).filter(Boolean))] as string[];
+    const statsIds = stats.map((s) => s.user_id).filter(Boolean) as string[];
+    const playerIds = players.map((p) => p.user_id).filter(Boolean) as string[];
+    const userIds = [...new Set([...statsIds, ...playerIds])];
     if (userIds.length === 0) {
       setUserAvatars({});
       return;
@@ -468,7 +493,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       }
       setUserAvatars(map);
     })();
-  }, [stats]);
+  }, [stats, players]);
 
   // Códigos dos jogadores na fila/times (para exibir no admin e no modal de stats)
   useEffect(() => {
@@ -942,16 +967,22 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
     }
   }, [statsModalPlayer]);
 
-  const handleMoveAttempt = async (playerId: string, direction: 'up' | 'down') => {
-    if (!isAdminMode) return;
-    const currentIndex = waitingList.findIndex((p) => p.id === playerId);
-    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= waitingList.length) return;
-    const currentPlayer = waitingList[currentIndex];
-    const targetPlayer = waitingList[targetIndex];
-    await supabase.from('players').update({ joined_at: targetPlayer.joined_at }).eq('id', currentPlayer.id);
-    await supabase.from('players').update({ joined_at: currentPlayer.joined_at }).eq('id', targetPlayer.id);
-  };
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id || !isAdminMode) return;
+    const oldIndex = waitingList.findIndex((p) => p.id === active.id);
+    const newIndex = waitingList.findIndex((p) => p.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    const draggedPlayer = waitingList[oldIndex];
+    const targetPlayer = waitingList[newIndex];
+    await supabase.from('players').update({ joined_at: targetPlayer.joined_at }).eq('id', draggedPlayer.id);
+    await supabase.from('players').update({ joined_at: draggedPlayer.joined_at }).eq('id', targetPlayer.id);
+  }, [isAdminMode, waitingList]);
+
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+  );
 
   const handleRemoveAttempt = async (playerId: string) => {
     if (!isAdminMode) return;
@@ -1072,10 +1103,21 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       // Atualizar matchPlayerStats (tracking por partida)
       const matchStatKey = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? 'points' : stat;
       const delta = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? pts : 1;
+      const prevMatchPts = matchPlayerStats[player.id]?.points ?? 0;
+      const newMatchPts = matchStatKey === 'points' ? prevMatchPts + delta : prevMatchPts;
       setMatchPlayerStats((prev) => {
         const current = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
         return { ...prev, [player.id]: { ...current, [matchStatKey]: (current[matchStatKey as keyof typeof current] ?? 0) + delta } };
       });
+
+      // Hot streak: ao atingir 6+ pontos na partida, atualizar hot_streak_since
+      if (userId && newMatchPts >= 6 && prevMatchPts < 6) {
+        const existing = stats.find((s) => s.user_id === userId);
+        if (existing) {
+          await supabase.from('stats').update({ hot_streak_since: new Date().toISOString() }).eq('id', existing.id);
+          fetchStats();
+        }
+      }
 
       // Pontos: sempre atualiza o placar da partida (visitantes só contam para o jogo)
       if ((stat === 'points_1' || stat === 'points_2' || stat === 'points_3') && (player.status === 'team1' || player.status === 'team2')) {
@@ -1290,20 +1332,30 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
 
     const { originalTeam, replacedById } = info;
 
-    // Reinserir jogador no time original
-    await supabase.from('players').update({ status: originalTeam }).eq('id', player.id);
-
-    // Mover substituto de volta para a fila de espera
+    // Mover substituto de volta para a fila PRIMEIRO (liberar a vaga)
     if (replacedById) {
       const substitute = players.find((p) => p.id === replacedById);
       if (substitute && (substitute.status === 'team1' || substitute.status === 'team2')) {
-        // Coloca no topo da fila (joined_at bem antigo)
         const earlyTime = waitingList.length > 0
           ? new Date(Math.min(...waitingList.map((p) => new Date(p.joined_at).getTime())) - 1000).toISOString()
           : new Date(Date.now() - 60000).toISOString();
         await supabase.from('players').update({ status: 'waiting', joined_at: earlyTime }).eq('id', replacedById);
       }
     }
+
+    // Verificar que o time não ficará com mais de 5 após a reinserção
+    const { data: teamNow } = await supabase.from('players').select('id').eq('status', originalTeam);
+    if ((teamNow ?? []).length >= 5) {
+      // Time lotado (substituto pode não ter saído) — mover o mais recente para a fila
+      const teamPlayers = players.filter((p) => p.status === originalTeam);
+      const last = teamPlayers[teamPlayers.length - 1];
+      if (last) {
+        await supabase.from('players').update({ status: 'waiting', joined_at: new Date().toISOString() }).eq('id', last.id);
+      }
+    }
+
+    // Agora sim reinserir o jogador suspenso
+    await supabase.from('players').update({ status: originalTeam }).eq('id', player.id);
 
     setSuspendedPlayers((prev) => {
       const next = { ...prev };
@@ -1339,51 +1391,90 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
       setMatchPlayerStats({});
 
       // ── Lidar com jogadores suspensos ──
-      const substitutesToWaiting: string[] = [];
+      // Substitutos sempre vão para o novo time (primeiro a entrar)
+      const substitutesForNewTeam: string[] = [];
+
+      // IDs de suspensos que serão reinseridos no time vencedor (protegidos do safety check)
+      const reinsertedToWinning = new Set<string>();
+
       for (const sp of suspendedList) {
         const info = suspendedPlayers[sp.id];
-        if (!info) continue;
+
+        if (!info) {
+          // Fallback: estado de suspensão perdido (ex: refresh da página).
+          // Tentar inferir: se o time vencedor tem >4 jogadores, o suspenso provavelmente era dele
+          // (o substituto está ocupando a vaga). Caso contrário, mover para fila.
+          const winCount = winners.length;
+          if (winCount >= 5) {
+            // Time vencedor está cheio (4 originais + substituto) → suspenso era deste time
+            await supabase.from('players').update({ status: winningTeamKey }).eq('id', sp.id);
+            reinsertedToWinning.add(sp.id);
+          } else {
+            await supabase.from('players').update({ status: 'waiting', joined_at: new Date().toISOString() }).eq('id', sp.id);
+          }
+          continue;
+        }
 
         if (info.originalTeam === winningTeamKey) {
-          // Time vencedor: reinserir suspenso, substituto vai para o novo time (primeiro da fila)
+          // Suspenso do time vencedor → volta ao time vencedor
           await supabase.from('players').update({ status: winningTeamKey }).eq('id', sp.id);
-          if (info.replacedById) {
-            const earlyTime = new Date(Date.now() - 999999000).toISOString();
-            await supabase.from('players').update({ status: 'waiting', joined_at: earlyTime }).eq('id', info.replacedById);
-            substitutesToWaiting.push(info.replacedById);
-          }
+          reinsertedToWinning.add(sp.id);
         } else {
-          // Time perdedor: suspenso vai para fila normal como perdedor
+          // Suspenso do time perdedor → fila de espera com os demais perdedores
           await supabase.from('players').update({ status: 'waiting', joined_at: new Date().toISOString() }).eq('id', sp.id);
+        }
+
+        // Substituto sempre vai direto para o novo time
+        if (info.replacedById) {
+          substitutesForNewTeam.push(info.replacedById);
         }
       }
       setSuspendedPlayers({});
 
-      // Re-fetch para refletir mudanças dos suspensos antes de calcular a fila
-      const { data: freshPlayers } = await supabase.from('players').select('*').order('joined_at', { ascending: true });
-      const freshWaiting = ((freshPlayers ?? []) as Player[]).filter((p) => p.status === 'waiting');
+      // Mover substitutos direto para o novo time
+      const substituteSet = new Set(substitutesForNewTeam);
+      for (const subId of substitutesForNewTeam) {
+        await supabase.from('players').update({ status: losingTeamKey }).eq('id', subId);
+      }
 
-      // Pegar até 5 da fila; se faltar, completar com perdedores (ordem: primeiros para os últimos)
-      const nextFromWaiting = freshWaiting.slice(0, 5);
-      const needFromLosers = 5 - nextFromWaiting.length;
-      const nextFromLosers = needFromLosers > 0 ? losers.slice(0, needFromLosers) : [];
-      const toWaiting = needFromLosers > 0 ? losers.slice(needFromLosers) : losers;
+      // Perdedores (exceto substitutos que já estão no novo time) → fila de espera
+      const losersToWaiting = losers.filter((p) => !substituteSet.has(p.id));
 
       const maxWaitingTime =
         waitingList.length > 5
           ? Math.max(...waitingList.slice(5).map((p) => new Date(p.joined_at).getTime()))
           : Date.now() - 10000;
 
-      for (let i = 0; i < toWaiting.length; i++) {
+      for (let i = 0; i < losersToWaiting.length; i++) {
         const joinedAt = new Date(maxWaitingTime + (i + 1) * 1000).toISOString();
-        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', toWaiting[i].id);
+        await supabase.from('players').update({ status: 'waiting', joined_at: joinedAt }).eq('id', losersToWaiting[i].id);
       }
+
+      // Re-fetch para obter estado real do banco após todas as movimentações
+      const { data: freshPlayers } = await supabase.from('players').select('*').order('joined_at', { ascending: true });
+      const allFresh = (freshPlayers ?? []) as Player[];
+      const freshWaiting = allFresh.filter((p) => p.status === 'waiting');
+
+      // ── Contagem real do banco: nunca exceder 5 por time ──
+      const alreadyOnNewTeam = allFresh.filter((p) => p.status === losingTeamKey).length;
+      const spotsNeeded = Math.max(0, 5 - alreadyOnNewTeam);
+      const nextFromWaiting = freshWaiting.slice(0, spotsNeeded);
 
       for (const p of nextFromWaiting) {
         await supabase.from('players').update({ status: losingTeamKey }).eq('id', p.id);
       }
-      for (const p of nextFromLosers) {
-        await supabase.from('players').update({ status: losingTeamKey }).eq('id', p.id);
+
+      // Safety: garantir que o time vencedor também não exceda 5
+      // Proteger jogadores reinseridos (suspensos devolvidos ao time) — remover outros primeiro
+      const onWinningTeam = allFresh.filter((p) => p.status === winningTeamKey);
+      if (onWinningTeam.length > 5) {
+        // Priorizar a remoção de quem NÃO é reinserido
+        const removable = onWinningTeam.filter((p) => !reinsertedToWinning.has(p.id));
+        const excessCount = onWinningTeam.length - 5;
+        const toRemove = removable.slice(-excessCount);
+        for (const ep of toRemove) {
+          await supabase.from('players').update({ status: 'waiting', joined_at: new Date().toISOString() }).eq('id', ep.id);
+        }
       }
       const jogadoresDaPartida = [
         ...winners.map((player) => ({ player, venceu: true })),
@@ -1671,6 +1762,16 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
         darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'
       )}
     >
+      <style>{`
+        @keyframes fire-ring-spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
+        }
+        @keyframes hot-streak-pulse {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.2); opacity: 0.85; }
+        }
+      `}</style>
       {/* Password Modal */}
       <AnimatePresence>
         {showPasswordModal && (
@@ -2159,6 +2260,7 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                   onProfileClick={(stat) => setSelectedProfileId(stat.user_id ?? stat.id)}
                   userProfile={userProfile}
                   isGuest={isGuest}
+                  locationSlug={locationSlug}
                 />
                 </motion.div>
               )}
@@ -2557,6 +2659,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                 isWinningTeam={showWinnerModal === 'team1'}
                 onStartNext={isAdminMode ? startNextMatch : undefined}
                 isStartingNext={isStartingNextMatch}
+                userAvatars={userAvatars}
+                matchPlayerStats={matchPlayerStats}
               />
 
               <TeamCard
@@ -2573,6 +2677,8 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                 isWinningTeam={showWinnerModal === 'team2'}
                 onStartNext={isAdminMode ? startNextMatch : undefined}
                 isStartingNext={isStartingNextMatch}
+                userAvatars={userAvatars}
+                matchPlayerStats={matchPlayerStats}
               />
             </div>
 
@@ -2585,89 +2691,36 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
                 </h2>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
-                <AnimatePresence mode="popLayout">
-                  {waitingList.map((player, index) => (
-                    <motion.div
-                      key={player.id}
-                      layout
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.9 }}
-                      className={cn(
-                        'border p-2 sm:p-4 rounded-xl flex items-center justify-between group transition-colors duration-300',
-                        darkMode ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
-                      )}
-                    >
+              <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={waitingList.map((p) => p.id)} strategy={rectSortingStrategy}>
+                  <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
+                    {waitingList.map((player, index) => (
+                      <SortableWaitingCard
+                        key={player.id}
+                        player={player}
+                        index={index}
+                        darkMode={darkMode}
+                        isAdminMode={isAdminMode}
+                        userAvatars={userAvatars}
+                        userCodes={userCodes}
+                        matchPlayerStats={matchPlayerStats}
+                        onPlayerClick={isAdminMode ? setStatsModalPlayer : undefined}
+                        onRemove={handleRemoveAttempt}
+                      />
+                    ))}
+                    {waitingList.length === 0 && suspendedList.length === 0 && (
                       <div
                         className={cn(
-                          'flex items-center gap-2 overflow-hidden flex-1 min-w-0 min-h-[44px] py-2 -my-2 pr-2 flex items-center',
-                          isAdminMode && 'cursor-pointer active:opacity-80'
+                          'col-span-full py-8 text-center text-xs sm:text-sm border-2 border-dashed rounded-2xl transition-colors duration-300',
+                          darkMode ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-200'
                         )}
-                        onClick={() => isAdminMode && setStatsModalPlayer(player)}
-                        style={isAdminMode ? { touchAction: 'manipulation' } : undefined}
                       >
-                        <span className={cn('text-[10px] sm:text-xs font-mono w-4 shrink-0', darkMode ? 'text-slate-500' : 'text-slate-400')}>
-                          #{index + 1}
-                        </span>
-                        <span className={cn('font-medium text-xs sm:text-base truncate', darkMode ? 'text-slate-200' : 'text-slate-800')}>
-                          {player.name}
-                        </span>
-                        {isAdminMode && player.user_id && userCodes[player.user_id] && (
-                          <span className={cn('text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0', darkMode ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-600')}>
-                            {userCodes[player.user_id]}
-                          </span>
-                        )}
+                        Ninguém na fila. Cadastre-se e entre na fila com seu perfil!
                       </div>
-                      {isAdminMode && (
-                      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                        <div className="flex flex-col">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleMoveAttempt(player.id, 'up'); }}
-                            disabled={index === 0}
-                            className={cn(
-                              'transition-colors',
-                              index === 0 ? 'opacity-0 pointer-events-none' : darkMode ? 'text-slate-600 hover:text-orange-400' : 'text-slate-300 hover:text-orange-500'
-                            )}
-                          >
-                            <ChevronUp className="w-3 h-3 sm:w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleMoveAttempt(player.id, 'down'); }}
-                            disabled={index === waitingList.length - 1}
-                            className={cn(
-                              'transition-colors',
-                              index === waitingList.length - 1 ? 'opacity-0 pointer-events-none' : darkMode ? 'text-slate-600 hover:text-orange-400' : 'text-slate-300 hover:text-orange-500'
-                            )}
-                          >
-                            <ChevronDown className="w-3 h-3 sm:w-4 h-4" />
-                          </button>
-                        </div>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleRemoveAttempt(player.id); }}
-                          className={cn(
-                            'sm:opacity-0 group-hover:opacity-100 transition-all p-1',
-                            darkMode ? 'text-slate-600 hover:text-red-400' : 'text-slate-300 hover:text-red-500'
-                          )}
-                        >
-                          <Trash2 className="w-3 h-3 sm:w-4 h-4" />
-                        </button>
-                      </div>
-                      )}
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-                {waitingList.length === 0 && suspendedList.length === 0 && (
-                  <div
-                    className={cn(
-                      'col-span-full py-8 text-center text-xs sm:text-sm border-2 border-dashed rounded-2xl transition-colors duration-300',
-                      darkMode ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-200'
                     )}
-                  >
-                    Ninguém na fila. Cadastre-se e entre na fila com seu perfil!
                   </div>
-                )}
-              </div>
+                </SortableContext>
+              </DndContext>
 
               {/* Jogadores suspensos */}
               {suspendedList.length > 0 && (
@@ -3093,6 +3146,105 @@ export default function App({ locationId, venueCoords, isOwner, maxPlayers }: Ap
   );
 }
 
+function SortableWaitingCard({ player, index, darkMode, isAdminMode, userAvatars, userCodes, matchPlayerStats, onPlayerClick, onRemove }: {
+  player: Player;
+  index: number;
+  darkMode: boolean;
+  isAdminMode: boolean;
+  userAvatars: Record<string, string>;
+  userCodes: Record<string, string>;
+  matchPlayerStats: Record<string, { points: number }>;
+  onPlayerClick?: (player: Player) => void;
+  onRemove: (id: string) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: player.id, disabled: !isAdminMode });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+    opacity: isDragging ? 0.85 : undefined,
+  };
+
+  const fireStatus = getPlayerFireStatus(matchPlayerStats[player.id]?.points ?? 0);
+  const avatarContent = player.user_id && userAvatars[player.user_id] ? (
+    <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+  ) : (
+    <div className={cn('w-full h-full flex items-center justify-center', darkMode ? 'bg-slate-700' : 'bg-slate-300')}>
+      <User className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
+    </div>
+  );
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        'border p-2 sm:p-4 rounded-xl flex items-center justify-between group transition-colors duration-300',
+        darkMode ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm',
+        isDragging && 'shadow-xl ring-2 ring-orange-500/40 scale-[1.03]'
+      )}
+    >
+      {isAdminMode && (
+        <div
+          className={cn('touch-none shrink-0 p-1 -ml-1 mr-1 cursor-grab active:cursor-grabbing', darkMode ? 'text-slate-600' : 'text-slate-300')}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="w-4 h-4" />
+        </div>
+      )}
+      <div
+        className={cn(
+          'flex items-center gap-2 overflow-hidden flex-1 min-w-0 min-h-[44px] py-2 -my-2 pr-2',
+          onPlayerClick && 'cursor-pointer active:opacity-80'
+        )}
+        onClick={() => onPlayerClick?.(player)}
+        style={onPlayerClick ? { touchAction: 'manipulation' } : undefined}
+      >
+        <span className={cn('text-[10px] sm:text-xs font-mono w-4 shrink-0', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+          #{index + 1}
+        </span>
+        {fireStatus ? (
+          <FireRing variant={fireStatus}>
+            {avatarContent}
+          </FireRing>
+        ) : (
+          <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full overflow-hidden shrink-0">
+            {avatarContent}
+          </div>
+        )}
+        <span className={cn('font-medium text-xs sm:text-base truncate', darkMode ? 'text-slate-200' : 'text-slate-800')}>
+          {player.name}
+        </span>
+        {isAdminMode && player.user_id && userCodes[player.user_id] && (
+          <span className={cn('text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0', darkMode ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-600')}>
+            {userCodes[player.user_id]}
+          </span>
+        )}
+      </div>
+      {isAdminMode && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onRemove(player.id); }}
+          className={cn(
+            'sm:opacity-0 group-hover:opacity-100 transition-all p-1 shrink-0',
+            darkMode ? 'text-slate-600 hover:text-red-400' : 'text-slate-300 hover:text-red-500'
+          )}
+        >
+          <Trash2 className="w-3 h-3 sm:w-4 h-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 interface TeamCardProps {
   title: string;
   players: Player[];
@@ -3107,13 +3259,75 @@ interface TeamCardProps {
   isWinningTeam: boolean;
   onStartNext?: () => void;
   isStartingNext?: boolean;
+  userAvatars: Record<string, string>;
+  matchPlayerStats: Record<string, { points: number }>;
+}
+
+function FireRing({ variant, children }: { variant: 'onfire' | 'jordan'; children: React.ReactNode }) {
+  const gradient = variant === 'jordan'
+    ? 'conic-gradient(from 0deg, #1e40af, #3b82f6, #60a5fa, #93c5fd, #60a5fa, #3b82f6, #1e40af)'
+    : 'conic-gradient(from 0deg, #b91c1c, #f97316, #facc15, #f97316, #ef4444, #f97316, #b91c1c)';
+  return (
+    <div className="w-6 h-6 sm:w-8 sm:h-8 rounded-full relative overflow-hidden shrink-0">
+      <div
+        className="absolute inset-0 rounded-full"
+        style={{ background: gradient, animation: 'fire-ring-spin 1.2s linear infinite' }}
+      />
+      <div className="absolute inset-[2px] rounded-full overflow-hidden">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function getPlayerFireStatus(points: number): 'jordan' | 'onfire' | null {
+  if (points >= 9) return 'jordan';
+  if (points >= 6) return 'onfire';
+  return null;
+}
+
+const HOT_STREAK_DAYS = 7;
+
+function isHotStreakActive(hotStreakSince: string | null | undefined): boolean {
+  if (!hotStreakSince) return false;
+  const diff = Date.now() - new Date(hotStreakSince).getTime();
+  return diff <= HOT_STREAK_DAYS * 24 * 60 * 60 * 1000;
+}
+
+function HotStreakBadge({ size = 16 }: { size?: number }) {
+  return (
+    <span
+      className="inline-flex items-center justify-center"
+      style={{ width: size, height: size, animation: 'hot-streak-pulse 1.4s ease-in-out infinite' }}
+      title="Hot Streak"
+    >
+      <svg viewBox="0 0 24 24" width={size} height={size} fill="none">
+        <path
+          d="M12 2C10.5 6 6 8 6 13a6 6 0 0 0 12 0c0-5-4.5-7-6-11Z"
+          fill="url(#hotGrad)"
+          stroke="url(#hotGrad)"
+          strokeWidth="0.5"
+        />
+        <path
+          d="M12 10c-1 2.5-3 3.5-3 6a3 3 0 0 0 6 0c0-2.5-2-3.5-3-6Z"
+          fill="#facc15"
+        />
+        <defs>
+          <linearGradient id="hotGrad" x1="12" y1="2" x2="12" y2="19" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#f97316" />
+            <stop offset="1" stopColor="#ef4444" />
+          </linearGradient>
+        </defs>
+      </svg>
+    </span>
+  );
 }
 
 const slideOut = { x: -200, opacity: 0 };
 const slideIn = { x: 0, opacity: 1 };
 const slideFromRight = { x: 200, opacity: 0 };
 
-function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer, onPlayerClick, isAdmin, showWinnerModal, isLosingTeam, isWinningTeam, onStartNext, isStartingNext }: TeamCardProps) {
+function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer, onPlayerClick, isAdmin, showWinnerModal, isLosingTeam, isWinningTeam, onStartNext, isStartingNext, userAvatars, matchPlayerStats }: TeamCardProps) {
   const bgColor = color === 'blue' ? (darkMode ? 'bg-blue-500/10' : 'bg-blue-50') : (darkMode ? 'bg-red-500/10' : 'bg-red-50');
   const borderColor = color === 'blue' ? (darkMode ? 'border-blue-500/20' : 'border-blue-100') : (darkMode ? 'border-red-500/20' : 'border-red-100');
   const textColor = color === 'blue' ? 'text-blue-500' : 'text-red-500';
@@ -3187,8 +3401,36 @@ function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer
                     onClick={() => onPlayerClick?.(p)}
                     style={onPlayerClick ? { touchAction: 'manipulation' } : undefined}
                   >
-                    <div className={cn('w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full shrink-0', accentColor)} />
+                    {(() => {
+                      const fireStatus = getPlayerFireStatus(matchPlayerStats[p.id]?.points ?? 0);
+                      const avatarContent = p.user_id && userAvatars[p.user_id] ? (
+                        <img src={userAvatars[p.user_id]} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className={cn('w-full h-full flex items-center justify-center', accentColor)}>
+                          <User className="w-3 h-3 sm:w-4 sm:h-4 text-white" />
+                        </div>
+                      );
+                      return fireStatus ? (
+                        <FireRing variant={fireStatus}>
+                          {avatarContent}
+                        </FireRing>
+                      ) : (
+                        <div className="w-5 h-5 sm:w-7 sm:h-7 rounded-full overflow-hidden shrink-0">
+                          {avatarContent}
+                        </div>
+                      );
+                    })()}
                     <span className={cn('font-medium text-xs sm:text-base truncate', darkMode ? 'text-slate-100' : 'text-slate-800')}>{p.name}</span>
+                    {getPlayerFireStatus(matchPlayerStats[p.id]?.points ?? 0) && (
+                      <span className={cn(
+                        'text-[9px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded-full shrink-0 uppercase tracking-wider',
+                        getPlayerFireStatus(matchPlayerStats[p.id]?.points ?? 0) === 'jordan'
+                          ? 'bg-blue-500/20 text-blue-400'
+                          : 'bg-orange-500/20 text-orange-400'
+                      )}>
+                        {getPlayerFireStatus(matchPlayerStats[p.id]?.points ?? 0) === 'jordan' ? 'Jordan State' : 'On Fire'}
+                      </span>
+                    )}
                   </div>
                   {isAdmin && (
                     <button
@@ -3318,6 +3560,7 @@ interface RankingViewProps {
   onProfileClick: (stat: PlayerStats) => void;
   userProfile: { display_name: string | null; avatar_url: string | null } | null;
   isGuest: boolean;
+  locationSlug?: string;
 }
 
 const layoutTransition = { type: 'spring' as const, stiffness: 350, damping: 30 };
@@ -3383,6 +3626,7 @@ function RankPodiumItem({
   medal,
   isTied,
   barHeightPx,
+  hotStreak,
 }: {
   rank: number;
   player: PlayerStats;
@@ -3394,6 +3638,7 @@ function RankPodiumItem({
   medal: string;
   isTied?: boolean;
   barHeightPx?: number;
+  hotStreak?: boolean;
 }) {
   const avatarPxMap = { sm: 56, md: 64, lg: 80 };
   const avatarPx = avatarPxMap[size];
@@ -3444,6 +3689,11 @@ function RankPodiumItem({
         <div className={cn('absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-white', rank === 1 ? 'bg-yellow-500 text-white -top-3 -right-3 w-8 h-8 text-xs shadow-lg' : rank === 2 ? 'bg-slate-300 text-slate-700' : 'bg-orange-400 text-white')}>
           {medal}
         </div>
+        {hotStreak && (
+          <div className="absolute -bottom-1 -left-1">
+            <HotStreakBadge size={size === 'lg' ? 22 : size === 'md' ? 18 : 16} />
+          </div>
+        )}
       </button>
       <div className="text-center">
         <p className={cn('font-bold truncate max-w-[80px] sm:max-w-[100px]', size === 'lg' ? 'text-sm sm:text-base' : 'text-xs sm:text-sm', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</p>
@@ -3472,7 +3722,9 @@ function RankPodiumItem({
   );
 }
 
-function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest }: RankingViewProps) {
+function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest, locationSlug }: RankingViewProps) {
+  const [showQrModal, setShowQrModal] = useState(false);
+  const qrUrl = locationSlug ? `${window.location.origin}/${locationSlug}` : null;
   const sortedStats = useMemo(() => {
     return [...stats].sort((a, b) => {
       const diff = (b[sortKey] ?? 0) - (a[sortKey] ?? 0);
@@ -3588,6 +3840,18 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
               </>
             )}
           </div>
+          {qrUrl && (
+            <button
+              type="button"
+              onClick={() => setShowQrModal(true)}
+              className={cn(
+                'p-2 rounded-xl transition-colors',
+                darkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500'
+              )}
+            >
+              <QrCode className="w-6 h-6" />
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
@@ -3637,6 +3901,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
                       medal={medals[sizeIdx]}
                       isTied={tiedValues.has(player[sortKey])}
                       barHeightPx={barHeights[sizeIdx]}
+                      hotStreak={isHotStreakActive(player.hot_streak_since)}
                     />
                   ) : (
                     <div key={`empty-${rank}`} className="flex flex-col items-center gap-3">
@@ -3682,30 +3947,37 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
                   )}
                 >
                   <div className="flex items-center gap-4 min-w-0 flex-1">
-                    {tiedValues.has(player[sortKey]) ? (
-                      <ShimmerRing sizePx={40} borderPx={2}>
-                        {player.user_id && userAvatars[player.user_id] ? (
-                          <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <div className={cn('w-full h-full flex items-center justify-center font-bold text-xs', darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400')}>
-                            {index + 4}
-                          </div>
-                        )}
-                      </ShimmerRing>
-                    ) : (
-                      <div
-                        className={cn(
-                          'w-10 h-10 shrink-0 rounded-full flex items-center justify-center font-bold text-xs overflow-hidden',
-                          darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400'
-                        )}
-                      >
-                        {player.user_id && userAvatars[player.user_id] ? (
-                          <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <span>{index + 4}</span>
-                        )}
-                      </div>
-                    )}
+                    <div className="relative shrink-0">
+                      {tiedValues.has(player[sortKey]) ? (
+                        <ShimmerRing sizePx={40} borderPx={2}>
+                          {player.user_id && userAvatars[player.user_id] ? (
+                            <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <div className={cn('w-full h-full flex items-center justify-center font-bold text-xs', darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400')}>
+                              {index + 4}
+                            </div>
+                          )}
+                        </ShimmerRing>
+                      ) : (
+                        <div
+                          className={cn(
+                            'w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs overflow-hidden',
+                            darkMode ? 'bg-slate-800 text-slate-500' : 'bg-slate-50 text-slate-400'
+                          )}
+                        >
+                          {player.user_id && userAvatars[player.user_id] ? (
+                            <img src={userAvatars[player.user_id]} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <span>{index + 4}</span>
+                          )}
+                        </div>
+                      )}
+                      {isHotStreakActive(player.hot_streak_since) && (
+                        <div className="absolute -bottom-1 -left-1">
+                          <HotStreakBadge size={16} />
+                        </div>
+                      )}
+                    </div>
                     <div className="min-w-0 flex-1">
                       <h3 className={cn('font-bold truncate', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
                       <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-1 items-center">
@@ -3737,6 +4009,43 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
             </AnimatePresence>
           </motion.div>
       </>
+
+      {/* QR Code Modal */}
+      <AnimatePresence>
+        {showQrModal && qrUrl && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowQrModal(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                'rounded-2xl p-6 w-full max-w-xs flex flex-col items-center gap-5 shadow-2xl',
+                darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white border border-slate-200'
+              )}
+            >
+              <div className="flex items-center justify-between w-full">
+                <h3 className={cn('text-lg font-bold', darkMode ? 'text-white' : 'text-slate-900')}>Convide jogadores</h3>
+                <button onClick={() => setShowQrModal(false)} className={cn('p-1 rounded-lg transition-colors', darkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500')}>
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="bg-white p-4 rounded-xl">
+                <QRCodeSVG value={qrUrl} size={200} level="M" />
+              </div>
+              <p className={cn('text-xs text-center', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+                Escaneie para entrar nesta quadra
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </section>
   );
 }

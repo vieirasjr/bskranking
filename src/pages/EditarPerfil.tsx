@@ -2,8 +2,8 @@
  * Tela de atualização de perfil completo de atleta de basquete
  */
 
-import React, { useState, useEffect, useRef } from 'react';
-import { motion } from 'motion/react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   User,
   ArrowLeft,
@@ -18,14 +18,61 @@ import {
   MapPin,
   Check,
   AlertCircle,
+  ZoomIn,
+  ZoomOut,
+  X,
+  Crop,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import Cropper from 'react-easy-crop';
+import type { Area } from 'react-easy-crop';
 import { supabase } from '../supabase';
 import { useAuth } from '../contexts/AuthContext';
 
 function cn(...inputs: unknown[]) {
   return twMerge(clsx(inputs));
+}
+
+const AVATAR_MAX_SIZE = 512;
+
+async function getCroppedBlob(imageSrc: string, cropArea: Area): Promise<Blob> {
+  const image = new Image();
+  image.crossOrigin = 'anonymous';
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = reject;
+    image.src = imageSrc;
+  });
+
+  // Limita a resolução final para AVATAR_MAX_SIZE px (ex: 512x512)
+  const outSize = Math.min(cropArea.width, cropArea.height, AVATAR_MAX_SIZE);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = outSize;
+  canvas.height = outSize;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(
+    image,
+    cropArea.x,
+    cropArea.y,
+    cropArea.width,
+    cropArea.height,
+    0,
+    0,
+    outSize,
+    outSize,
+  );
+
+  // WebP: ~30-50% menor que JPEG na mesma qualidade visual
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('Falha ao gerar imagem'))),
+      'image/webp',
+      0.82,
+    );
+  });
 }
 
 export interface PerfilAtleta {
@@ -91,6 +138,16 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
   });
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
+
+  // Crop state
+  const [cropImageSrc, setCropImageSrc] = useState<string | null>(null);
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<Area | null>(null);
+
+  const onCropComplete = useCallback((_: Area, areaPixels: Area) => {
+    setCroppedAreaPixels(areaPixels);
+  }, []);
 
   useEffect(() => {
     async function loadProfile() {
@@ -168,42 +225,66 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
     loadProfile();
   }, [user?.id]);
 
-  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !user?.id) return;
 
     const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
     if (!['jpeg', 'jpg', 'png', 'webp', 'gif'].includes(ext)) {
       setError('Use imagem JPEG, PNG, WebP ou GIF.');
+      e.target.value = '';
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
       setError('Imagem deve ter no máximo 5MB.');
+      e.target.value = '';
       return;
     }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setCropImageSrc(reader.result as string);
+      setCrop({ x: 0, y: 0 });
+      setZoom(1);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleCropCancel = () => {
+    setCropImageSrc(null);
+    setCroppedAreaPixels(null);
+  };
+
+  const handleCropConfirm = async () => {
+    if (!cropImageSrc || !croppedAreaPixels || !user?.id) return;
 
     setUploadingImage(true);
     setError(null);
 
     try {
-      const path = `${user.id}/avatar.${ext}`;
+      const blob = await getCroppedBlob(cropImageSrc, croppedAreaPixels);
+      const path = `${user.id}/avatar.webp`;
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(path, file, { upsert: true });
+        .upload(path, blob, { upsert: true, contentType: 'image/webp' });
 
       if (uploadError) throw uploadError;
 
       const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(path);
-      setAvatarUrl(publicUrl);
+      // Cache-bust para forçar exibição imediata
+      const freshUrl = `${publicUrl}?t=${Date.now()}`;
+      setAvatarUrl(freshUrl);
       if (profileId) {
-        await supabase.from('basquete_users').update({ avatar_url: publicUrl, updated_at: new Date().toISOString() }).eq('id', profileId);
+        await supabase.from('basquete_users').update({ avatar_url: freshUrl, updated_at: new Date().toISOString() }).eq('id', profileId);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao enviar imagem.');
     } finally {
       setUploadingImage(false);
-      e.target.value = '';
+      setCropImageSrc(null);
+      setCroppedAreaPixels(null);
     }
   };
 
@@ -625,6 +706,77 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
           )}
         </button>
       </form>
+
+      {/* Crop Modal */}
+      <AnimatePresence>
+        {cropImageSrc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex flex-col bg-black/80 backdrop-blur-sm"
+          >
+            <div className="flex items-center justify-between px-4 py-3">
+              <button
+                type="button"
+                onClick={handleCropCancel}
+                className="p-2 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+              <span className="text-white font-semibold text-sm flex items-center gap-2">
+                <Crop className="w-4 h-4" /> Recortar foto
+              </span>
+              <button
+                type="button"
+                onClick={handleCropConfirm}
+                disabled={uploadingImage}
+                className={cn(
+                  'px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2',
+                  uploadingImage
+                    ? 'bg-orange-500/50 text-white/70 cursor-wait'
+                    : 'bg-orange-500 hover:bg-orange-600 text-white'
+                )}
+              >
+                {uploadingImage ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                Salvar
+              </button>
+            </div>
+
+            <div className="relative flex-1">
+              <Cropper
+                image={cropImageSrc}
+                crop={crop}
+                zoom={zoom}
+                aspect={1}
+                cropShape="round"
+                showGrid={false}
+                onCropChange={setCrop}
+                onZoomChange={setZoom}
+                onCropComplete={onCropComplete}
+              />
+            </div>
+
+            <div className="flex items-center justify-center gap-3 px-6 py-4">
+              <ZoomOut className="w-4 h-4 text-white/60 shrink-0" />
+              <input
+                type="range"
+                min={1}
+                max={3}
+                step={0.05}
+                value={zoom}
+                onChange={(e) => setZoom(Number(e.target.value))}
+                className="w-full max-w-xs accent-orange-500"
+              />
+              <ZoomIn className="w-4 h-4 text-white/60 shrink-0" />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

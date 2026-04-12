@@ -9,6 +9,15 @@
   animation: marquee 30s linear infinite;
 }
 
+/* Esconde scrollbar mantendo funcionalidade de scroll */
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* Melhor resposta a toques em mobile - remove delay de 300ms e evita zoom duplo */
 html {
   touch-action: manipulation;
