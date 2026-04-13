@@ -51,6 +51,7 @@ interface LoginProps {
   redirectTo?: string;
   locationName?: string;
   locationId?: string;
+  allowGuest?: boolean;
 }
 
 // ─── Formulário reutilizável ──────────────────────────────────────────────────
@@ -218,7 +219,7 @@ function RankCard({ entry, rank }: { entry: RankEntry; rank: number }) {
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
-export default function Login({ redirectTo, locationName, locationId }: LoginProps) {
+export default function Login({ redirectTo, locationName, locationId, allowGuest = true }: LoginProps) {
   const { enterAsGuest } = useAuth();
   const navigate = useNavigate();
   const isPlayerMode = !!locationName;
@@ -412,7 +413,7 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
                 mode={mode}
                 setMode={setMode}
                 onSuccess={handleSuccess}
-                onGuest={() => { setFormOpen(false); setShowGuestWarning(true); }}
+                onGuest={allowGuest ? () => { setFormOpen(false); setShowGuestWarning(true); } : undefined}
                 isPlayerMode
               />
             </motion.div>

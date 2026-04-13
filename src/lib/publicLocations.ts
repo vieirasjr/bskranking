@@ -27,6 +27,7 @@ export interface PublicLocationRow {
   phone: string | null;
   whatsapp: string | null;
   opening_hours_note: string | null;
+  is_private: boolean;
   tenant?: PublicTenantBrief | null;
 }
 
@@ -35,10 +36,7 @@ export interface PublicLocationRow {
  * Apenas linhas com `tenant_id` válido; join garante dados da organização.
  */
 export async function fetchPublicLocations(): Promise<PublicLocationRow[]> {
-  const { data, error } = await supabase
-    .from('locations')
-    .select(
-      `
+  const baseSelect = `
       id,
       name,
       slug,
@@ -60,9 +58,31 @@ export async function fetchPublicLocations(): Promise<PublicLocationRow[]> {
       whatsapp,
       opening_hours_note,
       tenant:tenants ( id, name, status )
-    `
-    )
+    `;
+
+  let data: unknown[] | null = null;
+  let error: { message?: string } | null = null;
+
+  const withPrivacy = await supabase
+    .from('locations')
+    .select(`${baseSelect}, is_private`)
+    .eq('is_active', true)
     .order('name', { ascending: true });
+
+  data = withPrivacy.data as unknown[] | null;
+  error = withPrivacy.error as { message?: string } | null;
+
+  // Compatibilidade: se a migration de privacidade ainda não foi aplicada,
+  // refaz a consulta sem a coluna nova para não quebrar a vitrine.
+  if (error && (error.message ?? '').toLowerCase().includes('is_private')) {
+    const fallback = await supabase
+      .from('locations')
+      .select(baseSelect)
+      .eq('is_active', true)
+      .order('name', { ascending: true });
+    data = fallback.data as unknown[] | null;
+    error = fallback.error as { message?: string } | null;
+  }
 
   if (error) {
     console.error('fetchPublicLocations:', error);
@@ -80,6 +100,7 @@ export async function fetchPublicLocations(): Promise<PublicLocationRow[]> {
         basketball_formats: r.basketball_formats ?? [],
         hosts_tournaments: !!r.hosts_tournaments,
         hosts_championships: !!r.hosts_championships,
+        is_private: !!(r as { is_private?: boolean }).is_private,
       } as PublicLocationRow;
     })
     .filter((r) => {

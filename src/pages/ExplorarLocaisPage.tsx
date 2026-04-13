@@ -96,8 +96,6 @@ export default function ExplorarLocaisPage() {
     if (saved === 'false') return false;
     return true;
   });
-  const [rankSheetOpen, setRankSheetOpen] = useState(false);
-  const [eventsSheetOpen, setEventsSheetOpen] = useState(false);
   const [globalRank, setGlobalRank] = useState<Array<{ id: string; name: string; points: number; wins: number }>>([]);
   const [globalEvents, setGlobalEvents] = useState<Array<{ id: string; title: string; event_date: string; event_time: string | null; modality: string; type: string; status: string }>>([]);
   const [globalRankLoading, setGlobalRankLoading] = useState(false);
@@ -107,6 +105,7 @@ export default function ExplorarLocaisPage() {
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [isAppInstalled, setIsAppInstalled] = useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
+  const INSTALL_MODAL_DISMISS_KEY = 'basquete_install_modal_dismissed_at';
   const appShareLink =
     typeof window !== 'undefined' ? `${window.location.origin}/` : 'https://basquetenext.app/';
 
@@ -122,6 +121,15 @@ export default function ExplorarLocaisPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (isAppInstalled) return;
+    const lastDismiss = Number(localStorage.getItem(INSTALL_MODAL_DISMISS_KEY) ?? '0');
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    if (Date.now() - lastDismiss < oneDayMs) return;
+    const t = window.setTimeout(() => setShowInstallModal(true), 1200);
+    return () => window.clearTimeout(t);
+  }, [isAppInstalled]);
 
   useEffect(() => {
     localStorage.setItem('basquete_theme_dark', String(darkMode));
@@ -315,11 +323,18 @@ export default function ExplorarLocaisPage() {
 
   const handleInstallApp = async () => {
     if (!deferredInstallPrompt) {
+      localStorage.setItem(INSTALL_MODAL_DISMISS_KEY, String(Date.now()));
       setShowInstallModal(false);
       return;
     }
     await deferredInstallPrompt.prompt();
     setDeferredInstallPrompt(null);
+    localStorage.setItem(INSTALL_MODAL_DISMISS_KEY, String(Date.now()));
+    setShowInstallModal(false);
+  };
+
+  const dismissInstallModal = () => {
+    localStorage.setItem(INSTALL_MODAL_DISMISS_KEY, String(Date.now()));
     setShowInstallModal(false);
   };
 
@@ -344,12 +359,14 @@ export default function ExplorarLocaisPage() {
     ];
 
     const goDetail = () => {
+      if (loc.is_private) return;
       localStorage.setItem('basquete_last_location_slug', loc.slug);
       navigate(`/locais/${loc.slug}`);
     };
     const goTenantDirect = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      if (loc.is_private) return;
       localStorage.setItem('basquete_last_location_slug', loc.slug);
       navigate(`/${loc.slug}`);
     };
@@ -368,7 +385,9 @@ export default function ExplorarLocaisPage() {
             goDetail();
           }
         }}
-        className="cursor-pointer text-left rounded-[22px] border border-slate-700/70 bg-slate-900/60 hover:border-orange-500/35 hover:bg-slate-800/50 transition-all overflow-hidden shadow-xl shadow-black/30 group"
+        className={`text-left rounded-[22px] border border-slate-700/70 bg-slate-900/60 overflow-hidden shadow-xl shadow-black/30 group transition-all ${
+          loc.is_private ? 'cursor-not-allowed opacity-85' : 'cursor-pointer hover:border-orange-500/35 hover:bg-slate-800/50'
+        }`}
       >
         <div className="aspect-[16/10] w-full overflow-hidden bg-slate-800 relative">
           {loc.image_url ? (
@@ -387,6 +406,11 @@ export default function ExplorarLocaisPage() {
             <Trophy className="w-3.5 h-3.5 text-[#ff8a4c] shrink-0" />
             <span className="truncate">{primaryTag}</span>
           </span>
+          {loc.is_private && (
+            <span className="absolute top-3 left-[120px] px-2.5 py-1 rounded-full bg-red-500/20 backdrop-blur-md border border-red-400/30 text-[10px] font-bold text-red-200">
+              Restrito
+            </span>
+          )}
           <button
             type="button"
             onClick={(e) => toggleFavorite(loc.id, e)}
@@ -441,9 +465,12 @@ export default function ExplorarLocaisPage() {
             <button
               type="button"
               onClick={goTenantDirect}
-              className="w-full mt-2 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold transition-colors"
+              disabled={loc.is_private}
+              className={`w-full mt-2 py-2.5 rounded-xl text-xs font-bold transition-colors ${
+                loc.is_private ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600 text-white'
+              }`}
             >
-              Entrar no local
+              {loc.is_private ? 'Acesso restrito' : 'Entrar no local'}
             </button>
           )}
         </div>
@@ -803,7 +830,7 @@ export default function ExplorarLocaisPage() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
           >
-            <button type="button" className="absolute inset-0 bg-black/70" onClick={() => setShowInstallModal(false)} />
+            <button type="button" className="absolute inset-0 bg-black/70" onClick={dismissInstallModal} />
             <motion.div
               initial={{ y: 40, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
@@ -820,7 +847,7 @@ export default function ExplorarLocaisPage() {
               <div className="mt-4 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowInstallModal(false)}
+                  onClick={dismissInstallModal}
                   className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold"
                 >
                   Agora nao
@@ -830,9 +857,14 @@ export default function ExplorarLocaisPage() {
                   onClick={handleInstallApp}
                   className="flex-1 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold"
                 >
-                  Instalar aplicativo
+                  Instalar app
                 </button>
               </div>
+              {!deferredInstallPrompt && (
+                <p className="text-[11px] text-slate-500 mt-3">
+                  Se estiver no iPhone/iPad: Safari &gt; Compartilhar &gt; Adicionar a Tela de Inicio.
+                </p>
+              )}
             </motion.div>
           </motion.div>
         )}

@@ -27,6 +27,15 @@ function Hint({ children }: { children: React.ReactNode }) {
   return <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{children}</p>;
 }
 
+function parseAuthorizedEmails(text: string): string[] {
+  return [...new Set(
+    text
+      .split(/[\n,;]+/g)
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
+  )];
+}
+
 export default function DashboardLocais() {
   const { tenant, locations, plan, canAddLocation, refresh } = useTenant();
   const navigate = useNavigate();
@@ -51,6 +60,8 @@ export default function DashboardLocais() {
   const [phone, setPhone] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [openingHoursNote, setOpeningHoursNote] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [authorizedEmailsText, setAuthorizedEmailsText] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -75,6 +86,8 @@ export default function DashboardLocais() {
   const [editPhone, setEditPhone] = useState('');
   const [editWhatsapp, setEditWhatsapp] = useState('');
   const [editOpeningHoursNote, setEditOpeningHoursNote] = useState('');
+  const [editIsPrivate, setEditIsPrivate] = useState(false);
+  const [editAuthorizedEmailsText, setEditAuthorizedEmailsText] = useState('');
 
   const toggleFormat = (id: string, current: string[], setFn: (v: string[]) => void) => {
     if (current.includes(id)) setFn(current.filter((x) => x !== id));
@@ -119,6 +132,8 @@ export default function DashboardLocais() {
         phone: phone.trim() || null,
         whatsapp: whatsapp.trim() || null,
         opening_hours_note: openingHoursNote.trim() || null,
+        is_private: isPrivate,
+        authorized_emails: parseAuthorizedEmails(authorizedEmailsText),
       });
       if (err) {
         setError(err.message.includes('slug_unique') ? 'URL já em uso. Escolha outra.' : err.message);
@@ -128,6 +143,7 @@ export default function DashboardLocais() {
       setAddressLine(''); setCity(''); setStateUf(''); setCountry('BR');
       setFormats([]); setHostsTournaments(false); setHostsChampionships(false);
       setPhone(''); setWhatsapp(''); setOpeningHoursNote('');
+      setIsPrivate(false); setAuthorizedEmailsText('');
       setSlugManual(false);
       setShowForm(false);
       refresh();
@@ -177,6 +193,8 @@ export default function DashboardLocais() {
       phone: editPhone.trim() || null,
       whatsapp: editWhatsapp.trim() || null,
       opening_hours_note: editOpeningHoursNote.trim() || null,
+      is_private: editIsPrivate,
+      authorized_emails: parseAuthorizedEmails(editAuthorizedEmailsText),
     }).eq('id', loc.id);
     if (err) {
       setEditError(err.message.includes('slug_unique') ? 'URL já em uso. Escolha outra.' : err.message);
@@ -214,6 +232,8 @@ export default function DashboardLocais() {
     setEditPhone(loc.phone ?? '');
     setEditWhatsapp(loc.whatsapp ?? '');
     setEditOpeningHoursNote(loc.opening_hours_note ?? '');
+    setEditIsPrivate(!!loc.is_private);
+    setEditAuthorizedEmailsText((loc.authorized_emails ?? []).join('\n'));
   };
 
   const resetCreateForm = () => {
@@ -414,6 +434,27 @@ export default function DashboardLocais() {
           </div>
 
           <div className={sectionClass}>
+            <h4 className="text-xs font-black text-orange-400 uppercase tracking-widest">6.1 · Privacidade de acesso</h4>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} className="rounded border-slate-600 text-orange-500" />
+              <span className="text-sm text-slate-300">Local restrito (aparece na vitrine, mas sem acesso direto)</span>
+            </label>
+            {isPrivate && (
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">Emails autorizados (um por linha)</label>
+                <textarea
+                  value={authorizedEmailsText}
+                  onChange={(e) => setAuthorizedEmailsText(e.target.value)}
+                  rows={4}
+                  placeholder={"atleta1@email.com\natleta2@email.com"}
+                  className="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm resize-y"
+                />
+                <Hint>Apenas esses emails poderão acessar o app via link único do local.</Hint>
+              </div>
+            )}
+          </div>
+
+          <div className={sectionClass}>
             <h4 className="text-xs font-black text-orange-400 uppercase tracking-widest">7 · Coordenadas e raio (app + mapa)</h4>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -573,6 +614,23 @@ export default function DashboardLocais() {
                     <h4 className="text-xs font-black text-slate-500 uppercase">Site</h4>
                     <input value={editWebsite} onChange={(e) => setEditWebsite(e.target.value)} placeholder="https://"
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm" />
+                  </div>
+
+                  <div className={sectionClass}>
+                    <h4 className="text-xs font-black text-slate-500 uppercase">Privacidade</h4>
+                    <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                      <input type="checkbox" checked={editIsPrivate} onChange={(e) => setEditIsPrivate(e.target.checked)} className="rounded text-orange-500" />
+                      Local restrito
+                    </label>
+                    {editIsPrivate && (
+                      <textarea
+                        value={editAuthorizedEmailsText}
+                        onChange={(e) => setEditAuthorizedEmailsText(e.target.value)}
+                        rows={4}
+                        placeholder={"atleta1@email.com\natleta2@email.com"}
+                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm resize-y"
+                      />
+                    )}
                   </div>
 
                   <div className={sectionClass}>

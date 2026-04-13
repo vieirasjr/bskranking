@@ -15,6 +15,10 @@ interface TenantInfo {
   plan: { max_players: number | null } | null;
 }
 
+function normalizeEmails(list: string[] | null | undefined): string[] {
+  return (list ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean);
+}
+
 export default function LocalApp() {
   const { slug } = useParams<{ slug: string }>();
   const { session, isGuest, loading: authLoading } = useAuth();
@@ -84,8 +88,31 @@ export default function LocalApp() {
     );
   }
 
+  const isOwner = !!session?.user && session.user.id === tenant?.owner_auth_id;
+  const authorizedEmails = normalizeEmails((location as Location & { authorized_emails?: string[] | null })?.authorized_emails);
+  const currentEmail = session?.user?.email?.trim().toLowerCase() ?? null;
+  const emailAuthorized = !!currentEmail && authorizedEmails.includes(currentEmail);
+  const isPrivate = !!(location as Location & { is_private?: boolean })?.is_private;
+
+  if (isPrivate && (isGuest || (session?.user && !isOwner && !emailAuthorized))) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-white p-6 text-center">
+        <div className="w-14 h-14 bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <AlertCircle className="w-7 h-7 text-orange-400" />
+        </div>
+        <h1 className="text-2xl font-black mb-2">Acesso restrito</h1>
+        <p className="text-slate-400 max-w-sm">
+          Este local e privado. O gestor precisa autorizar seu email para voce entrar.
+        </p>
+        <button onClick={() => navigate('/locais')} className="mt-6 px-6 py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold transition-all">
+          Voltar para locais
+        </button>
+      </div>
+    );
+  }
+
   if (!session && !isGuest) {
-    return <Login redirectTo={`/${slug}`} locationName={location?.name} locationId={location?.id} />;
+    return <Login redirectTo={`/${slug}`} locationName={location?.name} locationId={location?.id} allowGuest={!isPrivate} />;
   }
 
   // Garante vínculo do usuário autenticado com este local
@@ -103,8 +130,6 @@ export default function LocalApp() {
           .then(() => {});
       });
   }
-
-  const isOwner = !!session?.user && session.user.id === tenant?.owner_auth_id;
 
   return (
     <App

@@ -45,6 +45,8 @@ export interface Location {
   phone: string | null;
   whatsapp: string | null;
   opening_hours_note: string | null;
+  is_private: boolean;
+  authorized_emails: string[];
 }
 
 interface TenantContextValue {
@@ -109,6 +111,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
           hosts_championships: (l as { hosts_championships?: boolean }).hosts_championships ?? false,
           country: (l as { country?: string | null }).country ?? 'BR',
           cover_image_url: (l as { cover_image_url?: string | null }).cover_image_url ?? null,
+          is_private: !!(l as { is_private?: boolean }).is_private,
+          authorized_emails: (l as { authorized_emails?: string[] }).authorized_emails ?? [],
         })) as Location[]
       );
     } finally {
