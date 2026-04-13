@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield } from 'lucide-react';
-import { motion } from 'motion/react';
+import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield, X, Dumbbell, UserCog } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../supabase';
 
 const PLANS = [
@@ -94,6 +94,7 @@ interface ActiveLocation {
 export default function LandingPage() {
   const navigate = useNavigate();
   const [activeLocations, setActiveLocations] = useState<ActiveLocation[]>([]);
+  const [roleModalOpen, setRoleModalOpen] = useState(false);
 
   useEffect(() => {
     supabase
@@ -119,12 +120,96 @@ export default function LandingPage() {
           <span className="font-bold text-lg">Basquete Next</span>
         </div>
         <button
-          onClick={() => navigate('/entrar')}
+          onClick={() => setRoleModalOpen(true)}
           className="px-4 py-2 rounded-xl text-sm font-semibold bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600 transition-all"
         >
           Entrar
         </button>
       </header>
+
+      <AnimatePresence>
+        {roleModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+          >
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+              aria-label="Fechar"
+              onClick={() => setRoleModalOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 12 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+              className="relative w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl overflow-hidden"
+            >
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+                <h2 className="text-lg font-black text-white">Como você quer entrar?</h2>
+                <button
+                  type="button"
+                  onClick={() => setRoleModalOpen(false)}
+                  className="p-2 rounded-xl hover:bg-slate-800 text-slate-400"
+                  aria-label="Fechar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5 space-y-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRoleModalOpen(false);
+                    navigate('/locais');
+                  }}
+                  className="w-full flex items-center gap-4 p-4 rounded-2xl border border-slate-700 bg-slate-800/50 hover:border-orange-500/50 hover:bg-orange-500/10 transition-all text-left group"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-orange-500/20 flex items-center justify-center shrink-0 group-hover:bg-orange-500/30">
+                    <Dumbbell className="w-6 h-6 text-orange-400" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-white">Sou atleta</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Ver quadras, entrar na fila e acompanhar seu ranking.</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRoleModalOpen(false);
+                    navigate('/entrar');
+                  }}
+                  className="w-full flex items-center gap-4 p-4 rounded-2xl border border-slate-700 bg-slate-800/50 hover:border-emerald-500/40 hover:bg-emerald-500/10 transition-all text-left group"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 flex items-center justify-center shrink-0 group-hover:bg-emerald-500/25">
+                    <UserCog className="w-6 h-6 text-emerald-400" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-white">Sou gestor esportivo</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Acessar painel, locais e assinatura.</p>
+                  </div>
+                </button>
+                <p className="text-center text-sm text-slate-500 pt-2">
+                  Novo gestor?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoleModalOpen(false);
+                      navigate('/cadastro');
+                    }}
+                    className="text-orange-400 font-semibold hover:underline"
+                  >
+                    Criar conta e assinar
+                  </button>
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Hero */}
       <section className="text-center px-6 pt-20 pb-24 max-w-3xl mx-auto">

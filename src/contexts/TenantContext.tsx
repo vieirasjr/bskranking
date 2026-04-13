@@ -33,7 +33,18 @@ export interface Location {
   radius_m: number;
   is_active: boolean;
   image_url: string | null;
+  cover_image_url: string | null;
   website: string | null;
+  address_line: string | null;
+  city: string | null;
+  state: string | null;
+  country: string | null;
+  basketball_formats: string[];
+  hosts_tournaments: boolean;
+  hosts_championships: boolean;
+  phone: string | null;
+  whatsapp: string | null;
+  opening_hours_note: string | null;
 }
 
 interface TenantContextValue {
@@ -90,7 +101,16 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         .eq('tenant_id', tenantData.id)
         .order('created_at');
 
-      setLocations((locs ?? []) as Location[]);
+      setLocations(
+        (locs ?? []).map((l) => ({
+          ...(l as Location),
+          basketball_formats: (l as { basketball_formats?: string[] }).basketball_formats ?? [],
+          hosts_tournaments: (l as { hosts_tournaments?: boolean }).hosts_tournaments ?? false,
+          hosts_championships: (l as { hosts_championships?: boolean }).hosts_championships ?? false,
+          country: (l as { country?: string | null }).country ?? 'BR',
+          cover_image_url: (l as { cover_image_url?: string | null }).cover_image_url ?? null,
+        })) as Location[]
+      );
     } finally {
       setLoading(false);
     }

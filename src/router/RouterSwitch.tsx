@@ -1,6 +1,8 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import LandingPage from '../pages/LandingPage';
+import ExplorarLocaisPage from '../pages/ExplorarLocaisPage';
+import LocalPublicDetailPage from '../pages/LocalPublicDetailPage';
 import Login from '../pages/Login';
 import CadastroAdmin from '../pages/CadastroAdmin';
 import LocalApp from '../pages/LocalApp';
@@ -38,6 +40,10 @@ export default function RouterSwitch() {
     <Routes future={{ v7_relativeSplatPath: true }}>
       {/* Página inicial pública */}
       <Route path="/" element={<LandingPage />} />
+
+      {/* Explorar locais (atletas) — antes de /:slug */}
+      <Route path="/locais" element={<ExplorarLocaisPage />} />
+      <Route path="/locais/:slug" element={<LocalPublicDetailPage />} />
 
       {/* Auth — redireciona para /dashboard se já autenticado */}
       <Route path="/entrar" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
