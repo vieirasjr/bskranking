@@ -33,8 +33,10 @@ import {
   UserMinus,
   RotateCcw,
   GripVertical,
+  Menu,
   QrCode,
   Crown,
+  Globe,
   Percent,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -253,11 +255,31 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const shownLocationRef = useRef(false);
   const [isMatchStarted, setIsMatchStarted] = useState(false);
   const [currentPartidaSessaoId, setCurrentPartidaSessaoId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('inicio');
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    const requestedTab = localStorage.getItem('basquete_next_initial_tab');
+    if (requestedTab === 'inicio' || requestedTab === 'lista' || requestedTab === 'eventos' || requestedTab === 'perfil') {
+      localStorage.removeItem('basquete_next_initial_tab');
+      return requestedTab as Tab;
+    }
+    return 'inicio';
+  });
   const [sortKey, setSortKey] = useState<SortKey>('efficiency');
   const [loading, setLoading] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('basquete_theme_dark');
+    if (saved === 'true') return true;
+    if (saved === 'false') return false;
+    return true;
+  });
   const [isAdminMode, setIsAdminMode] = useState(() => isOwner || localStorage.getItem(ADMIN_STORAGE_KEY) === 'true');
+  const [hasAdminAccess, setHasAdminAccess] = useState<boolean>(!!isOwner);
+  const handleGoGlobal = () => {
+    window.location.assign('/locais');
+  };
+  const handleSignOutAndGoExplore = async () => {
+    await signOut();
+    window.location.assign('/locais');
+  };
   const [team1MatchPoints, setTeam1MatchPoints] = useState(0);
   const [team2MatchPoints, setTeam2MatchPoints] = useState(0);
   const [showWinnerModal, setShowWinnerModal] = useState<'team1' | 'team2' | null>(null);
@@ -277,6 +299,8 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
   const [userCodes, setUserCodes] = useState<Record<string, string>>({});
   const [showAdminGestao, setShowAdminGestao] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [showHeaderQrModal, setShowHeaderQrModal] = useState(false);
   const adminSuggestionsRef = useRef<HTMLDivElement | null>(null);
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
     activeTab === 'lista' && !isAdminMode && !!venueCoords,
@@ -285,8 +309,24 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
   const canSeeList = isAdminMode || (isWithinRadius === true && isMatchStarted);
   const canAddToList = isAdminMode || (isWithinRadius === true && isMatchStarted);
+  const headerQrUrl = locationSlug ? `${window.location.origin}/${locationSlug}` : null;
 
   const profileComplete = !!(userProfile?.display_name?.trim() && userProfile?.avatar_url);
+
+  useEffect(() => {
+    setHasAdminAccess(!!isOwner);
+    if (!user) {
+      setIsAdminMode(false);
+      localStorage.removeItem(ADMIN_STORAGE_KEY);
+    } else if (isOwner) {
+      setIsAdminMode(true);
+      localStorage.setItem(ADMIN_STORAGE_KEY, 'true');
+    }
+  }, [user, isOwner]);
+
+  useEffect(() => {
+    localStorage.setItem('basquete_theme_dark', String(darkMode));
+  }, [darkMode]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -590,6 +630,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         .eq('email', user.email)
         .maybeSingle();
       if (!error && data?.admin === true) {
+        setHasAdminAccess(true);
         setIsAdminMode(true);
         localStorage.setItem(ADMIN_STORAGE_KEY, 'true');
       }
@@ -1082,6 +1123,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   };
 
   const handleAdminActivate = () => {
+    if (!hasAdminAccess) {
+      addNotification('Apenas administradores podem acessar os controles de configuração.', 'warning', { showToastForMs: 4500 });
+      return;
+    }
     setShowPasswordModal({ type: 'ADMIN_ACTIVATE' });
     setPasswordInput('');
     setPasswordError(false);
@@ -2387,9 +2432,17 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       >
         <div className="max-w-5xl mx-auto px-4 py-3 sm:py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-9 h-9 bg-orange-500 rounded-full flex items-center justify-center shadow-lg shadow-orange-500/20 shrink-0">
-              <Trophy className="text-white w-5 h-5" />
-            </div>
+            {userProfile?.avatar_url ? (
+              <img
+                src={userProfile.avatar_url}
+                alt={userProfile.display_name ?? 'Usuário'}
+                className="w-9 h-9 rounded-full object-cover border border-slate-600 shrink-0"
+              />
+            ) : (
+              <div className="w-9 h-9 bg-orange-500 rounded-full flex items-center justify-center shadow-lg shadow-orange-500/20 shrink-0">
+                <Trophy className="text-white w-5 h-5" />
+              </div>
+            )}
             {isGuest && (
               <span
                 className={cn(
@@ -2400,98 +2453,153 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 Visitante
               </span>
             )}
-          </div>
-          <div className="flex items-center gap-2">
-            {!isAdminMode ? (
-              <button
-                onClick={handleAdminActivate}
-                className={cn(
-                  'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all',
-                  darkMode ? 'bg-slate-700 text-slate-300 hover:bg-slate-600' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                )}
-                title="Ativar modo administrador"
-              >
-                <Shield className="w-3.5 h-3.5" />
-                Admin
-              </button>
-            ) : (
-              <>
-                {activeTab === 'lista' && isMatchStarted && (
-                  <button
-                    onClick={handleEndMatchAttempt}
-                    className={cn(
-                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all',
-                      darkMode ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20' : 'bg-red-50 text-red-600 hover:bg-red-100'
-                    )}
-                  >
-                    Encerrar Evento
-                  </button>
-                )}
-                <button
-                  onClick={resetQueue}
-                  className={cn(
-                    'transition-colors p-2 rounded-lg',
-                    darkMode ? 'text-slate-400 hover:text-red-400 hover:bg-red-400/10' : 'text-slate-500 hover:text-red-500 hover:bg-red-50'
-                  )}
-                  title="Resetar Lista"
-                >
-                  <RefreshCw className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={() => setShowAdminGestao(true)}
-                  className={cn(
-                    'transition-colors p-2 rounded-lg',
-                    darkMode ? 'text-slate-400 hover:text-orange-400 hover:bg-orange-400/10' : 'text-slate-500 hover:text-orange-600 hover:bg-orange-50'
-                  )}
-                  title="Gestão de Jogadores"
-                >
-                  <Settings className="w-5 h-5" />
-                </button>
-              </>
-            )}
-            <button
-              onClick={() => setShowNotificationsPanel(true)}
-              className={cn(
-                'relative transition-colors p-2 rounded-lg',
-                darkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-orange-400' : 'text-slate-500 hover:bg-slate-100 hover:text-orange-600'
-              )}
-              title="Notificações"
-            >
-              <Bell className="w-5 h-5" />
-              {notifications.length > 0 && (
-                <span
-                  className={cn(
-                    'absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold',
-                    darkMode ? 'bg-orange-500 text-white' : 'bg-orange-500 text-white'
-                  )}
-                >
-                  {notifications.length > 99 ? '99+' : notifications.length}
-                </span>
-              )}
-            </button>
-            <button
-              onClick={() => setDarkMode(!darkMode)}
-              className={cn(
-                'transition-colors p-2 rounded-lg',
-                darkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-yellow-400' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
-              )}
-              title={darkMode ? 'Modo Claro' : 'Modo Escuro'}
-            >
-              {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-            </button>
-            {isAdminMode && (
-              <span
-                className={cn(
-                  'text-[10px] font-bold px-2 py-1 rounded-lg',
-                  darkMode ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'
-                )}
-              >
-                Admin
+            {userProfile?.display_name && (
+              <span className={cn('text-xl font-bold truncate max-w-[180px]', darkMode ? 'text-white' : 'text-slate-900')}>
+                {userProfile.display_name}
               </span>
+            )}
+          </div>
+          <div className="relative">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className={cn(
+                  'p-2 rounded-xl transition-colors',
+                  darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'
+                )}
+                title={darkMode ? 'Modo Claro' : 'Modo Escuro'}
+              >
+                {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              </button>
+              <button
+                onClick={() => setShowNotificationsPanel(true)}
+                className={cn(
+                  'relative transition-colors p-2 rounded-xl',
+                  darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'
+                )}
+                title="Notificações"
+              >
+                <Bell className="w-5 h-5" />
+                {notifications.length > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold bg-orange-500 text-white">
+                    {notifications.length > 99 ? '99+' : notifications.length}
+                  </span>
+                )}
+              </button>
+              {headerQrUrl && (
+                <button
+                  onClick={() => setShowHeaderQrModal(true)}
+                  className={cn(
+                    'p-2 rounded-xl transition-colors',
+                    darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'
+                  )}
+                  title="QR Code"
+                >
+                  <QrCode className="w-5 h-5" />
+                </button>
+              )}
+              <button
+                onClick={() => setHeaderMenuOpen((v) => !v)}
+                className={cn(
+                  'p-2 rounded-xl transition-colors',
+                  darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'
+                )}
+                aria-label="Abrir menu"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+            </div>
+            {headerMenuOpen && (
+              <div
+                className={cn(
+                  'absolute right-0 mt-2 w-56 rounded-xl border shadow-xl p-2 z-30',
+                  darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
+                )}
+              >
+                {!isAdminMode && hasAdminAccess ? (
+                  <button
+                    onClick={() => { handleAdminActivate(); setHeaderMenuOpen(false); }}
+                    className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
+                  >
+                    Ativar admin
+                  </button>
+                ) : isAdminMode && hasAdminAccess ? (
+                  <>
+                    {activeTab === 'lista' && isMatchStarted && (
+                      <button
+                        onClick={() => { handleEndMatchAttempt(); setHeaderMenuOpen(false); }}
+                        className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-red-300' : 'hover:bg-slate-100 text-red-600')}
+                      >
+                        Encerrar evento
+                      </button>
+                    )}
+                    <button
+                      onClick={() => { resetQueue(); setHeaderMenuOpen(false); }}
+                      className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
+                    >
+                      Resetar lista
+                    </button>
+                    <button
+                      onClick={() => { setShowAdminGestao(true); setHeaderMenuOpen(false); }}
+                      className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
+                    >
+                      Gestão de jogadores
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  onClick={() => { handleGoGlobal(); setHeaderMenuOpen(false); }}
+                  className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
+                >
+                  Ir para nível global
+                </button>
+              </div>
             )}
           </div>
         </div>
       </header>
+      {headerMenuOpen && (
+        <button
+          type="button"
+          className="fixed inset-0 z-20 cursor-default"
+          aria-label="Fechar menu"
+          onClick={() => setHeaderMenuOpen(false)}
+        />
+      )}
+
+      <AnimatePresence>
+        {showHeaderQrModal && headerQrUrl && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[60]"
+            onClick={() => setShowHeaderQrModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className={cn('rounded-2xl p-6 max-w-sm w-full border', darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200')}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className={cn('text-lg font-bold mb-4 text-center', darkMode ? 'text-white' : 'text-slate-900')}>QR Code do Local</h3>
+              <div className="flex justify-center mb-4">
+                <div className="p-4 bg-white rounded-xl">
+                  <QRCodeSVG value={headerQrUrl} size={200} level="M" />
+                </div>
+              </div>
+              <p className={cn('text-xs text-center break-all mb-4', darkMode ? 'text-slate-400' : 'text-slate-600')}>{headerQrUrl}</p>
+              <button
+                onClick={() => setShowHeaderQrModal(false)}
+                className="w-full py-2.5 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white transition-colors"
+              >
+                Fechar
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <main className="max-w-5xl mx-auto px-2 sm:px-4 py-6 sm:py-10 space-y-6 sm:space-y-8 pb-40">
         {!isGuest && !profileComplete && user && activeTab === 'perfil' && (
@@ -3392,7 +3500,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                       <ArrowRight className="w-4 h-4 opacity-30" />
                     </button>
                     <button
-                      onClick={signOut}
+                      onClick={handleSignOutAndGoExplore}
                       className={cn('w-full px-5 py-4 text-left flex items-center justify-between hover:bg-red-500/5 transition-colors text-red-500')}
                     >
                       <span>Sair da Conta</span>
@@ -3415,6 +3523,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-around">
+          <NavButton active={false} onClick={handleGoGlobal} icon={<Globe className="w-5 h-5" />} label="Global" darkMode={darkMode} />
           <NavButton active={activeTab === 'inicio'} onClick={() => setActiveTab('inicio')} icon={<Home className="w-5 h-5" />} label="Início" darkMode={darkMode} />
           <NavButton active={activeTab === 'lista'} onClick={() => setActiveTab('lista')} icon={<ListIcon className="w-5 h-5" />} label="Lista" darkMode={darkMode} />
           <NavButton active={activeTab === 'eventos'} onClick={() => setActiveTab('eventos')} icon={<Calendar className="w-5 h-5" />} label="Eventos" darkMode={darkMode} />
@@ -4214,44 +4323,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
           from { width: 0%; }
         }
       `}</style>
-      <div className="flex flex-col gap-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {isGuest || !userProfile ? (
-              <>
-                <div className={cn('w-10 h-10 rounded-full flex items-center justify-center shrink-0', darkMode ? 'bg-slate-700' : 'bg-slate-200')}>
-                  <User className={cn('w-5 h-5', darkMode ? 'text-slate-400' : 'text-slate-500')} />
-                </div>
-                <span className={cn('text-xl font-bold', darkMode ? 'text-slate-300' : 'text-slate-600')}>Visitante</span>
-              </>
-            ) : (
-              <>
-                <div className="w-10 h-10 rounded-full overflow-hidden shrink-0 ring-2 ring-orange-500/40">
-                  {userProfile.avatar_url ? (
-                    <img src={userProfile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
-                  ) : (
-                    <div className={cn('w-full h-full flex items-center justify-center', darkMode ? 'bg-slate-700' : 'bg-slate-200')}>
-                      <User className={cn('w-5 h-5', darkMode ? 'text-slate-400' : 'text-slate-500')} />
-                    </div>
-                  )}
-                </div>
-                <span className={cn('text-xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>{userProfile.display_name}</span>
-              </>
-            )}
-          </div>
-          {qrUrl && (
-            <button
-              type="button"
-              onClick={() => setShowQrModal(true)}
-              className={cn(
-                'p-2 rounded-xl transition-colors',
-                darkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500'
-              )}
-            >
-              <QrCode className="w-6 h-6" />
-            </button>
-          )}
-        </div>
+      <div className="flex flex-col gap-4">
 
         <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
           {filterOptions.map((opt) => (

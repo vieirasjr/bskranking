@@ -26,7 +26,7 @@ function translateAuthError(message: string, mode: Mode): { text: string; sugges
   if (m.includes('unable to validate email') || m.includes('invalid email') || m.includes('email address is invalid'))
     return { text: 'Email inválido. Verifique o endereço digitado.' };
   if (m.includes('signup is disabled') || m.includes('signups not allowed'))
-    return { text: 'Cadastro temporariamente desativado. Contate o administrador.' };
+    return { text: 'Cadastro temporariamente desativado. Contate o gestor responsável.' };
   if (m.includes('too many requests') || m.includes('rate limit'))
     return { text: 'Muitas tentativas. Aguarde alguns minutos e tente novamente.' };
   if (m.includes('network') || m.includes('fetch'))
@@ -222,6 +222,12 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
   const { enterAsGuest } = useAuth();
   const navigate = useNavigate();
   const isPlayerMode = !!locationName;
+  const [darkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('basquete_theme_dark');
+    if (saved === 'true') return true;
+    if (saved === 'false') return false;
+    return true;
+  });
 
   const [mode, setMode] = useState<Mode>('login');
   const [formOpen, setFormOpen] = useState(false);
@@ -232,9 +238,23 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
   const [locationSearch, setLocationSearch] = useState('');
   const [locationResults, setLocationResults] = useState<LocationResult[]>([]);
   const [searchingLocations, setSearchingLocations] = useState(false);
+  const [locationHeroUrl, setLocationHeroUrl] = useState<string | null>(null);
+  const [locationLogoUrl, setLocationLogoUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isPlayerMode || !locationId) return;
+    supabase
+      .from('locations')
+      .select('cover_image_url, image_url')
+      .eq('id', locationId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!data) return;
+        const row = data as { cover_image_url?: string | null; image_url?: string | null };
+        setLocationHeroUrl(row.cover_image_url ?? row.image_url ?? null);
+        setLocationLogoUrl(row.image_url ?? row.cover_image_url ?? null);
+      });
+
     supabase
       .from('stats')
       .select('name, points, wins')
@@ -271,14 +291,14 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
   // ── Modo admin (tela clássica) ─────────────────────────────────────────────
   if (!isPlayerMode) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-orange-900/20 flex flex-col items-center justify-center p-4">
+      <div className={darkMode ? 'min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-orange-900/20 flex flex-col items-center justify-center p-4' : 'min-h-screen bg-gradient-to-br from-slate-100 via-white to-orange-100/40 flex flex-col items-center justify-center p-4'}>
         <div className="w-full max-w-sm">
           <div className="text-center mb-8">
             <div className="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-orange-500/30">
               <Trophy className="text-white w-8 h-8" />
             </div>
             <h1 className="text-2xl font-bold text-white">Basquete Next</h1>
-            <p className="text-slate-400 text-sm mt-1">Painel do administrador</p>
+            <p className="text-slate-400 text-sm mt-1">Painel do gestor</p>
           </div>
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
             className="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-xl">
@@ -290,48 +310,37 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
     );
   }
 
-  // ── Modo jogador (tela com ranking + overlay) ──────────────────────────────
-  const scrollItems = ranking.length >= 4 ? [...ranking, ...ranking] : ranking;
-  const scrollDuration = ranking.length * 4;
+  // ── Modo jogador (tela padrão do sistema com destaque do local) ────────────
+  const initials = (locationName ?? 'BN')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? '')
+    .join('');
 
   return (
-    <div className="relative min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 overflow-hidden flex flex-col">
+    <div className="relative min-h-screen overflow-hidden flex flex-col">
+      {locationHeroUrl ? (
+        <img
+          src={locationHeroUrl}
+          alt=""
+          className="absolute inset-0 w-full h-full object-cover scale-105 blur-[2px]"
+        />
+      ) : (
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950" />
+      )}
+      <div className="absolute inset-0 bg-gradient-to-b from-slate-950/70 via-slate-950/82 to-slate-950" />
 
-      {/* Header */}
-      <div className="relative z-10 flex items-center gap-3 pt-8 pb-3 px-5">
-        <div className="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center shadow-lg shadow-orange-500/40 shrink-0">
-          <Trophy className="text-white w-5 h-5" />
+      <div className="relative z-10 px-6 pt-10 pb-5 flex flex-col items-center text-center">
+        <div className="w-20 h-20 rounded-3xl bg-orange-500/20 border border-orange-500/40 flex items-center justify-center text-orange-200 font-black text-2xl shadow-xl shadow-orange-500/25 overflow-hidden">
+          {locationLogoUrl ? (
+            <img src={locationLogoUrl} alt={locationName ?? 'Local'} className="w-full h-full object-cover" />
+          ) : (
+            (initials || 'BN')
+          )}
         </div>
-        <h1 className="text-xl font-black text-white leading-tight">{locationName}</h1>
-      </div>
-
-      {/* Ranking scrolling list */}
-      <div className="relative flex-1 overflow-hidden px-5 pb-40 mask-fade-y">
-        {ranking.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 gap-2 opacity-40">
-            <Trophy className="w-8 h-8 text-slate-700" />
-            <p className="text-slate-600 text-sm">Nenhum atleta no ranking ainda</p>
-          </div>
-        ) : (
-          <motion.div
-            animate={ranking.length >= 4 ? { y: ['0%', '-50%'] } : {}}
-            transition={ranking.length >= 4 ? {
-              duration: scrollDuration,
-              repeat: Infinity,
-              ease: 'linear',
-              repeatType: 'loop',
-            } : {}}
-          >
-            {scrollItems.map((entry, i) => (
-              <RankCard key={i} entry={entry} rank={(i % ranking.length) + 1} />
-            ))}
-          </motion.div>
-        )}
-
-        {/* Fade top */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-slate-950 to-transparent" />
-        {/* Fade bottom */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-gradient-to-t from-slate-950 to-transparent" />
+        <h1 className="mt-4 text-2xl font-black text-white">{locationName}</h1>
+        <p className="text-sm text-slate-300 mt-1">Entre para jogar, entrar na fila e acompanhar seu desempenho.</p>
       </div>
 
       {/* Bottom CTA — fixo na base */}
@@ -495,7 +504,7 @@ export default function Login({ redirectTo, locationName, locationId }: LoginPro
                       <Shield className="w-6 h-6 text-emerald-400" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-bold text-white">Sou administrador</p>
+                      <p className="font-bold text-white">Sou gestor</p>
                       <p className="text-xs text-slate-400 mt-0.5">Quero criar e gerenciar quadras, eventos e campeonatos</p>
                     </div>
                     <ChevronRight className="w-5 h-5 text-slate-600 group-hover:text-emerald-400 transition-colors shrink-0" />

@@ -35,6 +35,12 @@ export default function LocalPublicDetailPage() {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [fav, setFav] = useState(false);
   const [playerCount, setPlayerCount] = useState<number | null>(null);
+  const [darkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('basquete_theme_dark');
+    if (saved === 'true') return true;
+    if (saved === 'false') return false;
+    return true;
+  });
 
   useEffect(() => {
     if (!slug) {
@@ -182,7 +188,7 @@ export default function LocalPublicDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#07090f]">
+      <div className={darkMode ? 'min-h-screen flex items-center justify-center bg-[#07090f]' : 'min-h-screen flex items-center justify-center bg-slate-50'}>
         <div className="w-10 h-10 border-2 border-[#ff8a4c] border-t-transparent rounded-full animate-spin" />
       </div>
     );
@@ -190,7 +196,7 @@ export default function LocalPublicDetailPage() {
 
   if (notFound || !loc || !extras) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-[#07090f] text-white p-6 text-center">
+      <div className={darkMode ? 'min-h-screen flex flex-col items-center justify-center bg-[#07090f] text-white p-6 text-center' : 'min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-900 p-6 text-center'}>
         <MapPin className="w-12 h-12 text-slate-600 mb-4" />
         <h1 className="text-2xl font-black mb-2">Local não encontrado</h1>
         <p className="text-slate-400 mb-6">Este local não existe ou não está disponível.</p>
@@ -228,7 +234,7 @@ export default function LocalPublicDetailPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-[#07090f] text-white pb-32">
+    <div className={darkMode ? 'min-h-screen bg-[#07090f] text-white pb-32' : 'min-h-screen bg-slate-50 text-slate-900 pb-32'}>
       <div className="relative h-[min(52vh,520px)] w-full overflow-hidden">
         {(loc.cover_image_url || loc.image_url) ? (
           <img

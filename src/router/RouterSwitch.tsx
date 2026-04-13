@@ -38,8 +38,9 @@ function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
 export default function RouterSwitch() {
   return (
     <Routes future={{ v7_relativeSplatPath: true }}>
-      {/* Página inicial pública */}
-      <Route path="/" element={<LandingPage />} />
+      {/* Página inicial pública (atletas) */}
+      <Route path="/" element={<ExplorarLocaisPage />} />
+      <Route path="/landing" element={<LandingPage />} />
 
       {/* Explorar locais (atletas) — antes de /:slug */}
       <Route path="/locais" element={<ExplorarLocaisPage />} />

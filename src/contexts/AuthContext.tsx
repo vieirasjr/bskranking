@@ -4,6 +4,17 @@ import { supabase } from '../supabase';
 
 const GUEST_KEY = 'basquete_guest_mode';
 
+function clearClientAuthCache() {
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (!key) continue;
+    if (key.startsWith('basquete_')) keysToRemove.push(key);
+  }
+  keysToRemove.push('explorar-locais-favoritos');
+  keysToRemove.forEach((key) => localStorage.removeItem(key));
+}
+
 async function ensureUserStats(userId: string, displayName: string | null) {
   const normalizedName = displayName?.trim();
   if (!normalizedName) return;
@@ -171,7 +182,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     setUser(null);
     setIsGuest(false);
-    localStorage.removeItem(GUEST_KEY);
+    clearClientAuthCache();
   };
 
   const enterAsGuest = () => {

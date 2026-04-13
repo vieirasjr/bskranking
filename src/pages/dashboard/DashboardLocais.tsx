@@ -55,7 +55,9 @@ export default function DashboardLocais() {
   const [error, setError] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [editSlug, setEditSlug] = useState('');
   const [editDesc, setEditDesc] = useState('');
   const [editLat, setEditLat] = useState('');
   const [editLng, setEditLng] = useState('');
@@ -141,8 +143,23 @@ export default function DashboardLocais() {
   };
 
   const handleEdit = async (loc: Location) => {
-    await supabase.from('locations').update({
+    setEditError(null);
+    if (!editName.trim()) {
+      setEditError('Nome obrigatório.');
+      return;
+    }
+    if (!editSlug.trim()) {
+      setEditError('URL obrigatória.');
+      return;
+    }
+    if (RESERVED_SLUGS.includes(editSlug.trim())) {
+      setEditError(`"${editSlug.trim()}" é uma URL reservada.`);
+      return;
+    }
+
+    const { error: err } = await supabase.from('locations').update({
       name: editName,
+      slug: editSlug.trim(),
       description: editDesc || null,
       lat: editLat ? parseFloat(editLat) : null,
       lng: editLng ? parseFloat(editLng) : null,
@@ -161,7 +178,12 @@ export default function DashboardLocais() {
       whatsapp: editWhatsapp.trim() || null,
       opening_hours_note: editOpeningHoursNote.trim() || null,
     }).eq('id', loc.id);
+    if (err) {
+      setEditError(err.message.includes('slug_unique') ? 'URL já em uso. Escolha outra.' : err.message);
+      return;
+    }
     setEditingId(null);
+    setEditError(null);
     refresh();
   };
 
@@ -172,7 +194,9 @@ export default function DashboardLocais() {
 
   const startEdit = (loc: Location) => {
     setEditingId(loc.id);
+    setEditError(null);
     setEditName(loc.name);
+    setEditSlug(loc.slug);
     setEditDesc(loc.description ?? '');
     setEditLat(loc.lat?.toString() ?? '');
     setEditLng(loc.lng?.toString() ?? '');
@@ -452,6 +476,20 @@ export default function DashboardLocais() {
                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50" />
                     </div>
                     <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1">URL pública (slug)</label>
+                      <div className="flex items-center">
+                        <span className="px-3 py-2 bg-slate-700/60 border border-r-0 border-slate-700 rounded-l-xl text-slate-400 text-xs whitespace-nowrap">
+                          …/locais/ e app …/
+                        </span>
+                        <input
+                          value={editSlug}
+                          onChange={(e) => setEditSlug(nameToSlug(e.target.value))}
+                          className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-r-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50"
+                        />
+                      </div>
+                      <Hint>Vitrine: basquetenext.app/locais/{editSlug || 'sua-url'} · App: basquetenext.app/{editSlug || 'sua-url'}</Hint>
+                    </div>
+                    <div>
                       <label className="block text-xs font-medium text-slate-400 mb-1">Descrição</label>
                       <textarea value={editDesc} onChange={(e) => setEditDesc(e.target.value)} rows={5}
                         className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm resize-y min-h-[100px] focus:outline-none focus:ring-2 focus:ring-orange-500/50" />
@@ -559,6 +597,11 @@ export default function DashboardLocais() {
                       <X className="w-3 h-3" /> Cancelar
                     </button>
                   </div>
+                  {editError && (
+                    <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />{editError}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center justify-between">
