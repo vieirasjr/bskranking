@@ -1,19 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../supabase';
-
-const GUEST_KEY = 'basquete_guest_mode';
-
-function clearClientAuthCache() {
-  const keysToRemove: string[] = [];
-  for (let i = 0; i < localStorage.length; i += 1) {
-    const key = localStorage.key(i);
-    if (!key) continue;
-    if (key.startsWith('basquete_')) keysToRemove.push(key);
-  }
-  keysToRemove.push('explorar-locais-favoritos');
-  keysToRemove.forEach((key) => localStorage.removeItem(key));
-}
+import { clearBraskaLocalStorage, getGuestModeStored, setGuestModeStored } from '../lib/appStorage';
 
 async function ensureUserStats(userId: string, displayName: string | null) {
   const normalizedName = displayName?.trim();
@@ -137,14 +125,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const storedGuest = localStorage.getItem(GUEST_KEY) === 'true';
+    const storedGuest = getGuestModeStored();
     setIsGuest(storedGuest);
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        localStorage.removeItem(GUEST_KEY);
+        setGuestModeStored(false);
         setIsGuest(false);
         syncUserToBasquete(session.user);
       }
@@ -157,7 +145,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session);
       setUser(session?.user ?? null);
       if (session) {
-        localStorage.removeItem(GUEST_KEY);
+        setGuestModeStored(false);
         setIsGuest(false);
         // Gravar/corrigir usuário em basquete_users ao autenticar (cadastro ou login)
         syncUserToBasquete(session.user);
@@ -182,16 +170,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     setUser(null);
     setIsGuest(false);
-    clearClientAuthCache();
+    clearBraskaLocalStorage();
   };
 
   const enterAsGuest = () => {
-    localStorage.setItem(GUEST_KEY, 'true');
+    setGuestModeStored(true);
     setIsGuest(true);
   };
 
   const leaveGuestMode = () => {
-    localStorage.removeItem(GUEST_KEY);
+    setGuestModeStored(false);
     setIsGuest(false);
   };
 

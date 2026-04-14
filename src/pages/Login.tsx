@@ -6,6 +6,7 @@ import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../supabase';
+import { getThemeDarkStored } from '../lib/appStorage';
 
 function cn(...inputs: unknown[]) {
   return twMerge(clsx(inputs));
@@ -224,7 +225,7 @@ export default function Login({ redirectTo, locationName, locationId, allowGuest
   const navigate = useNavigate();
   const isPlayerMode = !!locationName;
   const [darkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('basquete_theme_dark');
+    const saved = getThemeDarkStored();
     if (saved === 'true') return true;
     if (saved === 'false') return false;
     return true;
@@ -298,7 +299,7 @@ export default function Login({ redirectTo, locationName, locationId, allowGuest
             <div className="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-orange-500/30">
               <Trophy className="text-white w-8 h-8" />
             </div>
-            <h1 className="text-2xl font-bold text-white">Basquete Next</h1>
+            <h1 className="text-2xl font-bold text-white">Braska</h1>
             <p className="text-slate-400 text-sm mt-1">Painel do gestor</p>
           </div>
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}

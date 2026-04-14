@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Calendar,
@@ -35,6 +35,25 @@ import {
 import { fetchPublicLocations, matchesLocationSearch, type PublicLocationRow } from '../lib/publicLocations';
 import { supabase } from '../supabase';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  INSTALL_MODAL_DISMISS_KEY,
+  LAST_LOCATION_SLUG_KEY,
+  getThemeDarkStored,
+  migrateInstallModalDismissKey,
+  migrateLastLocationSlugKey,
+  setThemeDarkStored,
+} from '../lib/appStorage';
+import { appPublicOrigin } from '../lib/publicAppUrl';
+import {
+  type SortKey,
+  RANK_SORT_OPTIONS,
+  sortStatsByKey,
+  SKILL_LABELS,
+} from '../lib/rankingSort';
+import { GlobalRankCard, type GlobalRankEntry } from '../components/GlobalRankCard';
+
+/** Limite de jogadores no rank global. */
+const GLOBAL_RANK_LIMIT = 100;
 
 /** Máximo de cards nesta página (lista dos tenants na plataforma). */
 const PUBLIC_LOCAIS_DISPLAY_LIMIT = 30;
@@ -71,6 +90,7 @@ function locationSubtitle(loc: PublicLocationRow): string {
 
 export default function ExplorarLocaisPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user, signOut } = useAuth();
   const [locations, setLocations] = useState<PublicLocationRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -91,12 +111,13 @@ export default function ExplorarLocaisPage() {
   const [qrSheetOpen, setQrSheetOpen] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('basquete_theme_dark');
+    const saved = getThemeDarkStored();
     if (saved === 'true') return true;
     if (saved === 'false') return false;
     return true;
   });
-  const [globalRank, setGlobalRank] = useState<Array<{ id: string; name: string; points: number; wins: number }>>([]);
+  const [globalRank, setGlobalRank] = useState<GlobalRankEntry[]>([]);
+  const [globalRankSort, setGlobalRankSort] = useState<SortKey>('efficiency');
   const [globalEvents, setGlobalEvents] = useState<Array<{ id: string; title: string; event_date: string; event_time: string | null; modality: string; type: string; status: string }>>([]);
   const [globalRankLoading, setGlobalRankLoading] = useState(false);
   const [globalEventsLoading, setGlobalEventsLoading] = useState(false);
@@ -105,9 +126,19 @@ export default function ExplorarLocaisPage() {
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [isAppInstalled, setIsAppInstalled] = useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
-  const INSTALL_MODAL_DISMISS_KEY = 'basquete_install_modal_dismissed_at';
-  const appShareLink =
-    typeof window !== 'undefined' ? `${window.location.origin}/` : 'https://basquetenext.app/';
+  const appShareLink = `${appPublicOrigin()}/`;
+
+  useEffect(() => {
+    migrateInstallModalDismissKey();
+    migrateLastLocationSlugKey();
+  }, []);
+
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab === 'rank' || tab === 'eventos' || tab === 'perfil' || tab === 'inicio') {
+      setGlobalTab(tab);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,7 +163,7 @@ export default function ExplorarLocaisPage() {
   }, [isAppInstalled]);
 
   useEffect(() => {
-    localStorage.setItem('basquete_theme_dark', String(darkMode));
+    setThemeDarkStored(darkMode);
   }, [darkMode]);
 
   useEffect(() => {
@@ -266,15 +297,47 @@ export default function ExplorarLocaisPage() {
   const openGlobalRank = async () => {
     setGlobalTab('rank');
     setGlobalRankLoading(true);
-    const { data } = await supabase
-      .from('stats')
-      .select('id, name, points, wins')
-      .order('points', { ascending: false })
-      .order('wins', { ascending: false })
-      .limit(100);
-    setGlobalRank((data ?? []) as Array<{ id: string; name: string; points: number; wins: number }>);
-    setGlobalRankLoading(false);
+    try {
+      const { data, error } = await supabase.rpc('get_global_rank_top100');
+      if (error) throw error;
+      const rows = (data ?? []) as Array<{
+        id: string; name: string;
+        points: number; wins: number; blocks: number; steals: number;
+        clutch_points: number; assists: number; rebounds: number;
+        user_id: string | null; location_id: string | null;
+        avatar_url: string | null; player_city: string | null; country_iso: string | null;
+      }>;
+      setGlobalRank(
+        rows.map((r) => ({
+          id: r.id,
+          name: r.name ?? '',
+          points: r.points ?? 0,
+          wins: r.wins ?? 0,
+          blocks: r.blocks ?? 0,
+          steals: r.steals ?? 0,
+          clutch_points: r.clutch_points ?? 0,
+          assists: r.assists ?? 0,
+          rebounds: r.rebounds ?? 0,
+          user_id: r.user_id,
+          location_id: r.location_id,
+          hot_streak_since: null,
+          avatarUrl: r.avatar_url,
+          playerCity: r.player_city,
+          countryIso: r.country_iso ?? 'BR',
+          modalityKey: null,
+        }))
+      );
+    } catch {
+      setGlobalRank([]);
+    } finally {
+      setGlobalRankLoading(false);
+    }
   };
+
+  const sortedGlobalRank = useMemo(
+    () => sortStatsByKey(globalRank, globalRankSort),
+    [globalRank, globalRankSort]
+  );
 
   const openGlobalEvents = async () => {
     setGlobalTab('eventos');
@@ -302,7 +365,7 @@ export default function ExplorarLocaisPage() {
   const shareLink = async () => {
     try {
       if (navigator.share) {
-        await navigator.share({ title: 'Basquete Next', text: 'Quadras e locais', url: appShareLink });
+        await navigator.share({ title: 'Braska', text: 'Quadras e locais', url: appShareLink });
       } else if (navigator.clipboard) {
         await navigator.clipboard.writeText(appShareLink);
         setShareFeedback('Link copiado.');
@@ -360,14 +423,14 @@ export default function ExplorarLocaisPage() {
 
     const goDetail = () => {
       if (loc.is_private) return;
-      localStorage.setItem('basquete_last_location_slug', loc.slug);
+      localStorage.setItem(LAST_LOCATION_SLUG_KEY, loc.slug);
       navigate(`/locais/${loc.slug}`);
     };
     const goTenantDirect = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
       if (loc.is_private) return;
-      localStorage.setItem('basquete_last_location_slug', loc.slug);
+      localStorage.setItem(LAST_LOCATION_SLUG_KEY, loc.slug);
       navigate(`/${loc.slug}`);
     };
 
@@ -385,11 +448,13 @@ export default function ExplorarLocaisPage() {
             goDetail();
           }
         }}
-        className={`text-left rounded-[22px] border border-slate-700/70 bg-slate-900/60 overflow-hidden shadow-xl shadow-black/30 group transition-all ${
-          loc.is_private ? 'cursor-not-allowed opacity-85' : 'cursor-pointer hover:border-orange-500/35 hover:bg-slate-800/50'
+        className={`text-left rounded-[22px] border overflow-hidden shadow-xl group transition-all ${
+          darkMode
+            ? `border-slate-700/70 bg-slate-900/60 shadow-black/30 ${loc.is_private ? 'cursor-not-allowed opacity-85' : 'cursor-pointer hover:border-orange-500/35 hover:bg-slate-800/50'}`
+            : `border-slate-200 bg-white shadow-slate-200/60 ${loc.is_private ? 'cursor-not-allowed opacity-85' : 'cursor-pointer hover:border-orange-400/40 hover:shadow-orange-100/40'}`
         }`}
       >
-        <div className="aspect-[16/10] w-full overflow-hidden bg-slate-800 relative">
+        <div className={`aspect-[16/10] w-full overflow-hidden relative ${darkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
           {loc.image_url ? (
             <img
               src={loc.image_url}
@@ -424,18 +489,18 @@ export default function ExplorarLocaisPage() {
           </div>
         </div>
         <div className="p-4 space-y-2">
-          <div className="flex items-center gap-1.5 text-xs text-slate-400">
+          <div className={`flex items-center gap-1.5 text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
             <MapPin className="w-3.5 h-3.5 shrink-0 text-[#ff8a4c]/90" />
             <span className="truncate">{sub}</span>
           </div>
           {loc.opening_hours_note && (
-            <div className="flex items-start gap-1.5 text-xs text-slate-500">
+            <div className={`flex items-start gap-1.5 text-xs ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
               <Clock className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <span className="line-clamp-2">{loc.opening_hours_note}</span>
             </div>
           )}
           {loc.description && (
-            <p className="text-sm text-slate-400 line-clamp-2 leading-snug">{loc.description}</p>
+            <p className={`text-sm line-clamp-2 leading-snug ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>{loc.description}</p>
           )}
           {(loc.hosts_tournaments || loc.hosts_championships) && (
             <p className="text-[10px] font-bold text-amber-400/95">
@@ -451,14 +516,14 @@ export default function ExplorarLocaisPage() {
               {tintIdx.map((ti, i) => (
                 <div
                   key={i}
-                  className={`w-7 h-7 rounded-full border-2 border-slate-900 ${avatarTintClass(ti)} flex items-center justify-center text-[10px] font-bold text-white`}
+                  className={`w-7 h-7 rounded-full border-2 ${darkMode ? 'border-slate-900' : 'border-white'} ${avatarTintClass(ti)} flex items-center justify-center text-[10px] font-bold text-white`}
                 >
                   {initials[i]}
                 </div>
               ))}
             </div>
             {loc.tenant?.name && (
-              <span className="text-[11px] font-medium text-slate-500 truncate max-w-[45%]">{loc.tenant.name}</span>
+              <span className={`text-[11px] font-medium truncate max-w-[45%] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{loc.tenant.name}</span>
             )}
           </div>
           {user && (
@@ -481,7 +546,7 @@ export default function ExplorarLocaisPage() {
   return (
     <div className={`min-h-screen pb-24 ${darkMode ? 'bg-[#07090f] text-white' : 'bg-slate-50 text-slate-900'}`}>
       <header className={`sticky top-0 z-30 border-b backdrop-blur-xl ${darkMode ? 'border-slate-800/80 bg-[#07090f]/92' : 'border-slate-200 bg-white/92'}`}>
-        <div className="max-w-5xl mx-auto px-4 pt-3 pb-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+        <div className="max-w-5xl mx-auto px-4 pt-4 pb-3 sm:pt-5 sm:pb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
           <div className="flex items-center gap-2 min-w-0">
             {user && (
               <>
@@ -558,71 +623,115 @@ export default function ExplorarLocaisPage() {
           <p className="max-w-5xl mx-auto px-4 pb-2 text-xs text-orange-300">{shareFeedback}</p>
         )}
 
-        <div className="max-w-5xl mx-auto px-4 pb-3 flex gap-2">
-          <div className="relative flex-1 min-w-0">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#ff8a4c]/80 pointer-events-none" />
-            <input
-              type="search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Nome do local, cidade, bairro, UF..."
-              className={`w-full pl-12 pr-4 py-3.5 rounded-[20px] border focus:outline-none focus:ring-2 focus:ring-[#ff8a4c]/40 focus:border-[#ff8a4c]/35 text-[15px] ${
-                darkMode
-                  ? 'bg-slate-900/90 border-slate-700/80 text-white placeholder:text-slate-500'
-                  : 'bg-white border-slate-300 text-slate-900 placeholder:text-slate-400'
-              }`}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setFilterSheetOpen(true)}
-            className="shrink-0 w-14 h-[52px] rounded-[20px] bg-[#ff8a4c]/72 hover:bg-[#ff8a4c]/86 flex items-center justify-center shadow-lg shadow-[#ff8a4c]/15 transition-colors"
-            aria-label="Filtros"
-          >
-            <SlidersHorizontal className="w-6 h-6 text-white" />
-          </button>
-        </div>
-
-        <div className="max-w-5xl mx-auto px-4 pb-3">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-bold text-white">Modalidades</span>
+        {globalTab === 'inicio' && (
+          <div className="max-w-5xl mx-auto px-4 pt-1 pb-4 flex gap-3">
+            <div className="relative flex-1 min-w-0">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#ff8a4c]/80 pointer-events-none" />
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Nome do local, cidade, bairro, UF..."
+                className={`w-full pl-12 pr-4 py-3.5 rounded-[20px] border focus:outline-none focus:ring-2 focus:ring-[#ff8a4c]/40 focus:border-[#ff8a4c]/35 text-[15px] ${
+                  darkMode
+                    ? 'bg-slate-900/90 border-slate-700/80 text-white placeholder:text-slate-500'
+                    : 'bg-white border-slate-300 text-slate-900 placeholder:text-slate-400'
+                }`}
+              />
+            </div>
             <button
               type="button"
-              onClick={() => setChip('all')}
-              className="text-xs font-semibold text-[#ff8a4c] hover:underline"
+              onClick={() => setFilterSheetOpen(true)}
+              className="shrink-0 w-14 h-[52px] rounded-[20px] bg-[#ff8a4c]/72 hover:bg-[#ff8a4c]/86 flex items-center justify-center shadow-lg shadow-[#ff8a4c]/15 transition-colors"
+              aria-label="Filtros"
             >
-              Limpar filtros
+              <SlidersHorizontal className="w-6 h-6 text-white" />
             </button>
           </div>
-          <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-            {filterChips.map((c) => {
-              const active = chip === c.id;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setChip(c.id)}
-                  className={`shrink-0 px-4 py-2 rounded-full text-xs font-bold border transition-all ${
-                    active
-                      ? 'bg-[#ff8a4c]/20 border-[#ff8a4c]/50 text-[#ff8a4c]'
-                      : 'bg-slate-900/50 border-slate-700/60 text-slate-400 hover:border-slate-600'
-                  }`}
-                >
-                  {c.label}
-                </button>
-              );
-            })}
+        )}
+
+        {globalTab === 'inicio' && (
+          <div className="max-w-5xl mx-auto px-4 pb-5">
+            <div className="flex items-center justify-between mb-3.5">
+              <span className={`text-sm font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>Modalidades</span>
+              <button
+                type="button"
+                onClick={() => setChip('all')}
+                className="text-xs font-semibold text-[#ff8a4c] hover:underline"
+              >
+                Limpar filtros
+              </button>
+            </div>
+            <div className="flex gap-2.5 overflow-x-auto pb-1.5 pt-0.5 -mx-1 px-1 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+              {filterChips.map((c) => {
+                const active = chip === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setChip(c.id)}
+                    className={`shrink-0 px-4 py-2.5 rounded-full text-xs font-bold border transition-all ${
+                      active
+                        ? 'bg-[#ff8a4c]/20 border-[#ff8a4c]/50 text-[#ff8a4c]'
+                        : darkMode
+                          ? 'bg-slate-900/50 border-slate-700/60 text-slate-400 hover:border-slate-600'
+                          : 'bg-white border-slate-300 text-slate-600 hover:border-slate-400'
+                    }`}
+                  >
+                    {c.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
+
+        {globalTab === 'rank' && (
+          <div className="max-w-5xl mx-auto px-4 pb-5 pt-1">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className={`text-sm font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>Ordenar por</span>
+                <button
+                  type="button"
+                  onClick={() => setGlobalRankSort('efficiency')}
+                  className="text-xs font-semibold text-orange-500 hover:underline shrink-0"
+                >
+                  Eficiência (padrão)
+                </button>
+              </div>
+              {/* Mesmo estilo dos filtros do ranking no tenant (RankingView) */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
+                {RANK_SORT_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setGlobalRankSort(opt.key)}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border shrink-0 ${
+                      globalRankSort === opt.key
+                        ? 'bg-orange-500 text-white border-orange-500 shadow-lg shadow-orange-500/20'
+                        : darkMode
+                          ? 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700'
+                          : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {(globalTab === 'eventos' || globalTab === 'perfil') && <div className="h-3 sm:h-4" aria-hidden />}
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 pt-2 space-y-8">
+      <main className="max-w-5xl mx-auto px-4 pt-4 sm:pt-6 space-y-10">
         {globalTab === 'inicio' && (loading ? (
           <div className="flex justify-center py-24">
             <div className="w-10 h-10 border-2 border-[#ff8a4c] border-t-transparent rounded-full animate-spin" />
           </div>
         ) : displayed.length === 0 ? (
-          <div className="text-center py-16 px-4 rounded-3xl border border-dashed border-slate-700 bg-slate-900/40">
+          <div className={`text-center py-16 px-4 rounded-3xl border border-dashed ${darkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-300 bg-white'}`}>
             <Trophy className="w-12 h-12 text-slate-600 mx-auto mb-3" />
             <p className="text-slate-400 font-medium">
               {locations.length === 0
@@ -642,7 +751,7 @@ export default function ExplorarLocaisPage() {
         ) : (
           <section>
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-              <h2 className="text-lg font-black text-white">Locais</h2>
+              <h2 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Locais</h2>
               <span className="text-xs text-slate-500">
                 {displayed.length}
                 {sorted.length > PUBLIC_LOCAIS_DISPLAY_LIMIT
@@ -659,28 +768,27 @@ export default function ExplorarLocaisPage() {
         ))}
 
         {globalTab === 'rank' && (
-          <section>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-black text-white">Rank global</h2>
-              <span className="text-xs text-slate-500">Todos os tenants</span>
+          <section className="space-y-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h2 className={`text-xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Rank global</h2>
+              <span className="text-xs text-slate-500">Top {GLOBAL_RANK_LIMIT} · {SKILL_LABELS[globalRankSort]}</span>
             </div>
             {globalRankLoading ? (
-              <div className="py-10 flex justify-center"><div className="w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" /></div>
+              <div className="py-16 flex justify-center">
+                <div className="w-9 h-9 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+              </div>
             ) : globalRank.length === 0 ? (
-              <p className="text-sm text-slate-400">Sem dados de ranking global no momento.</p>
+              <p className="text-sm text-slate-400 py-6">Sem dados de ranking global no momento.</p>
             ) : (
-              <div className="space-y-2">
-                {globalRank.map((a, idx) => (
-                  <div key={a.id} className="rounded-xl border border-slate-800 bg-slate-800/40 p-3 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs text-slate-500">#{idx + 1}</p>
-                      <p className="text-sm font-semibold text-white truncate">{a.name}</p>
-                    </div>
-                    <div className="text-right text-xs">
-                      <p className="text-orange-300 font-bold">{a.points ?? 0} pts</p>
-                      <p className="text-slate-400">{a.wins ?? 0} vitórias</p>
-                    </div>
-                  </div>
+              <div className="space-y-3">
+                {sortedGlobalRank.map((a, idx) => (
+                  <GlobalRankCard
+                    key={a.id}
+                    player={a}
+                    index={idx}
+                    sortKey={globalRankSort}
+                    darkMode={darkMode}
+                  />
                 ))}
               </div>
             )}
@@ -690,7 +798,7 @@ export default function ExplorarLocaisPage() {
         {globalTab === 'eventos' && (
           <section>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-lg font-black text-white">Eventos globais</h2>
+              <h2 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Eventos globais</h2>
               <span className="text-xs text-slate-500">Todos os tenants</span>
             </div>
             {globalEventsLoading ? (
@@ -700,10 +808,10 @@ export default function ExplorarLocaisPage() {
             ) : (
               <div className="space-y-2">
                 {globalEvents.map((ev) => (
-                  <div key={ev.id} className="rounded-xl border border-slate-800 bg-slate-800/40 p-3">
-                    <p className="text-sm font-semibold text-white">{ev.title}</p>
-                    <p className="text-xs text-slate-400 mt-1">{ev.event_date}{ev.event_time ? ` · ${ev.event_time}` : ''}</p>
-                    <p className="text-xs text-orange-300 mt-1">{ev.type} · {ev.modality} · {ev.status}</p>
+                  <div key={ev.id} className={`rounded-xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-800/40' : 'border-slate-200 bg-white'}`}>
+                    <p className={`text-sm font-semibold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{ev.title}</p>
+                    <p className={`text-xs mt-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>{ev.event_date}{ev.event_time ? ` · ${ev.event_time}` : ''}</p>
+                    <p className={`text-xs mt-1 ${darkMode ? 'text-orange-300' : 'text-orange-600'}`}>{ev.type} · {ev.modality} · {ev.status}</p>
                   </div>
                 ))}
               </div>
@@ -714,23 +822,23 @@ export default function ExplorarLocaisPage() {
         {globalTab === 'perfil' && (
           <section className="max-w-md">
             {!user ? (
-              <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-5">
-                <p className="text-slate-300 text-sm">Faça login para acessar seu perfil global.</p>
+              <div className={`rounded-2xl border p-5 ${darkMode ? 'border-slate-700 bg-slate-900/70' : 'border-slate-200 bg-white'}`}>
+                <p className={`text-sm ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>Faça login para acessar seu perfil global.</p>
                 <button onClick={openLogin} className="mt-3 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold">Entrar</button>
               </div>
             ) : (
-              <div className="rounded-2xl border border-slate-700 bg-slate-900/70 p-5">
+              <div className={`rounded-2xl border p-5 ${darkMode ? 'border-slate-700 bg-slate-900/70' : 'border-slate-200 bg-white'}`}>
                 <div className="flex items-center gap-3">
                   {profileAvatarUrl ? (
-                    <img src={profileAvatarUrl} alt={profileName} className="w-12 h-12 rounded-full object-cover border border-slate-600" />
+                    <img src={profileAvatarUrl} alt={profileName} className={`w-12 h-12 rounded-full object-cover border ${darkMode ? 'border-slate-600' : 'border-slate-200'}`} />
                   ) : (
                     <div className="w-12 h-12 rounded-full bg-orange-500/20 border border-orange-500/30 flex items-center justify-center text-sm font-bold text-orange-300">
                       {(profileName?.[0] ?? 'A').toUpperCase()}
                     </div>
                   )}
                   <div>
-                    <p className="text-white font-bold">{profileName}</p>
-                    <p className="text-xs text-slate-400">Perfil global</p>
+                    <p className={`font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{profileName}</p>
+                    <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Perfil global</p>
                   </div>
                 </div>
                 <button
@@ -766,14 +874,14 @@ export default function ExplorarLocaisPage() {
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 40, opacity: 0 }}
               transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className="relative w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden"
+              className={`relative w-full max-w-md rounded-t-3xl sm:rounded-3xl border shadow-2xl overflow-hidden ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}
             >
-              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
-                <h3 className="font-black text-lg">Filtros</h3>
+              <div className={`flex items-center justify-between px-5 py-4 border-b ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
+                <h3 className={`font-black text-lg ${darkMode ? 'text-white' : 'text-slate-900'}`}>Filtros</h3>
                 <button
                   type="button"
                   onClick={() => setFilterSheetOpen(false)}
-                  className="p-2 rounded-xl hover:bg-slate-800"
+                  className={`p-2 rounded-xl ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`}
                   aria-label="Fechar"
                 >
                   <X className="w-5 h-5" />
@@ -789,8 +897,8 @@ export default function ExplorarLocaisPage() {
                     }}
                     className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl border text-left transition-colors ${
                       chip === c.id
-                        ? 'border-[#ff8a4c]/50 bg-[#ff8a4c]/10 text-white'
-                        : 'border-slate-700 bg-slate-800/40 text-slate-300 hover:border-slate-600'
+                        ? darkMode ? 'border-[#ff8a4c]/50 bg-[#ff8a4c]/10 text-white' : 'border-[#ff8a4c]/50 bg-[#ff8a4c]/10 text-orange-700'
+                        : darkMode ? 'border-slate-700 bg-slate-800/40 text-slate-300 hover:border-slate-600' : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300'
                     }`}
                   >
                     <span className="font-semibold">{c.label}</span>
@@ -798,14 +906,14 @@ export default function ExplorarLocaisPage() {
                   </button>
                 ))}
               </div>
-              <div className="p-4 border-t border-slate-800 flex gap-2">
+              <div className={`p-4 border-t flex gap-2 ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
                 <button
                   type="button"
                   onClick={() => {
                     setChip('all');
                     setFilterSheetOpen(false);
                   }}
-                  className="flex-1 py-3 rounded-2xl font-bold border border-slate-600 text-slate-300 hover:bg-slate-800"
+                  className={`flex-1 py-3 rounded-2xl font-bold border ${darkMode ? 'border-slate-600 text-slate-300 hover:bg-slate-800' : 'border-slate-300 text-slate-700 hover:bg-slate-100'}`}
                 >
                   Limpar
                 </button>
@@ -835,11 +943,11 @@ export default function ExplorarLocaisPage() {
               initial={{ y: 40, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 40, opacity: 0 }}
-              className="relative w-full max-w-md rounded-3xl border border-slate-700 bg-slate-900 p-5"
+              className={`relative w-full max-w-md rounded-3xl border p-5 ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}
             >
-              <h3 className="text-lg font-black text-white">Instalar Basquete Next</h3>
-              <p className="text-sm text-slate-300 mt-2">Aplicativo seguro, rapido e com melhor experiencia para acompanhar jogos e ranking.</p>
-              <div className="mt-3 space-y-2 text-xs text-slate-400">
+              <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Instalar Braska</h3>
+              <p className={`text-sm mt-2 ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>Aplicativo seguro, rapido e com melhor experiencia para acompanhar jogos e ranking.</p>
+              <div className={`mt-3 space-y-2 text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                 <p className="flex items-center gap-2"><Shield className="w-4 h-4 text-emerald-400" /> Seguro e confiavel</p>
                 <p className="flex items-center gap-2"><Zap className="w-4 h-4 text-orange-400" /> Carregamento mais rapido</p>
                 <p className="flex items-center gap-2"><Smartphone className="w-4 h-4 text-sky-400" /> Melhor experiencia em tela cheia</p>
@@ -848,7 +956,7 @@ export default function ExplorarLocaisPage() {
                 <button
                   type="button"
                   onClick={dismissInstallModal}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold"
+                  className={`px-4 py-2.5 rounded-xl text-sm font-semibold ${darkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-700'}`}
                 >
                   Agora nao
                 </button>
@@ -861,7 +969,7 @@ export default function ExplorarLocaisPage() {
                 </button>
               </div>
               {!deferredInstallPrompt && (
-                <p className="text-[11px] text-slate-500 mt-3">
+                <p className={`text-[11px] mt-3 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                   Se estiver no iPhone/iPad: Safari &gt; Compartilhar &gt; Adicionar a Tela de Inicio.
                 </p>
               )}
@@ -890,16 +998,16 @@ export default function ExplorarLocaisPage() {
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 40, opacity: 0 }}
               transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className="relative w-full max-w-md rounded-t-3xl sm:rounded-3xl bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden p-5"
+              className={`relative w-full max-w-md rounded-t-3xl sm:rounded-3xl border shadow-2xl overflow-hidden p-5 ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}
             >
               <div className="flex items-center justify-between mb-4">
-                <h3 className="font-black text-lg text-white">
+                <h3 className={`font-black text-lg ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                   {loginStep === 'role' ? 'Como deseja entrar?' : athleteMode === 'login' ? 'Login de atleta' : 'Cadastro de atleta'}
                 </h3>
                 <button
                   type="button"
                   onClick={() => setLoginSheetOpen(false)}
-                  className="p-2 rounded-xl hover:bg-slate-800"
+                  className={`p-2 rounded-xl ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`}
                   aria-label="Fechar"
                 >
                   <X className="w-5 h-5" />
@@ -914,10 +1022,10 @@ export default function ExplorarLocaisPage() {
                       setAthleteMode('login');
                       setLoginStep('athlete');
                     }}
-                    className="w-full text-left p-4 rounded-2xl border border-slate-700 bg-slate-800/50 hover:border-orange-500/40"
+                    className={`w-full text-left p-4 rounded-2xl border hover:border-orange-500/40 ${darkMode ? 'border-slate-700 bg-slate-800/50' : 'border-slate-200 bg-slate-50'}`}
                   >
-                    <p className="font-bold text-white">Sou atleta</p>
-                    <p className="text-xs text-slate-400 mt-1">Entrar ou criar conta de atleta.</p>
+                    <p className={`font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>Sou atleta</p>
+                    <p className={`text-xs mt-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Entrar ou criar conta de atleta.</p>
                   </button>
                   <button
                     type="button"
@@ -925,10 +1033,10 @@ export default function ExplorarLocaisPage() {
                       setLoginSheetOpen(false);
                       navigate('/landing');
                     }}
-                    className="w-full text-left p-4 rounded-2xl border border-slate-700 bg-slate-800/50 hover:border-emerald-500/40 transition-all"
+                    className={`w-full text-left p-4 rounded-2xl border hover:border-emerald-500/40 transition-all ${darkMode ? 'border-slate-700 bg-slate-800/50' : 'border-slate-200 bg-slate-50'}`}
                   >
-                    <p className="font-bold text-white">Sou gestor</p>
-                    <p className="text-xs text-slate-400 mt-1">Ir para a landing page do gestor.</p>
+                    <p className={`font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>Sou gestor</p>
+                    <p className={`text-xs mt-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Ir para a landing page do gestor.</p>
                   </button>
                 </div>
               ) : (
@@ -940,7 +1048,7 @@ export default function ExplorarLocaisPage() {
                       className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${
                         athleteMode === 'login'
                           ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/30'
-                          : 'bg-white/10 text-white/60 hover:text-white'
+                          : darkMode ? 'bg-white/10 text-white/60 hover:text-white' : 'bg-slate-100 text-slate-500 hover:text-slate-700'
                       }`}
                     >
                       Entrar
@@ -951,39 +1059,43 @@ export default function ExplorarLocaisPage() {
                       className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${
                         athleteMode === 'signup'
                           ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/30'
-                          : 'bg-white/10 text-white/60 hover:text-white'
+                          : darkMode ? 'bg-white/10 text-white/60 hover:text-white' : 'bg-slate-100 text-slate-500 hover:text-slate-700'
                       }`}
                     >
                       Cadastrar
                     </button>
                   </div>
                   <label className="block">
-                    <span className="text-xs text-slate-400">Email</span>
+                    <span className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Email</span>
                     <div className="relative mt-1">
                       <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                       <input
                         type="email"
                         value={athleteEmail}
                         onChange={(e) => setAthleteEmail(e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-orange-500/60 focus:border-orange-500/60"
+                        className={`w-full pl-10 pr-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/60 focus:border-orange-500/60 ${
+                          darkMode ? 'bg-white/10 border-white/20 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400'
+                        }`}
                         placeholder="atleta@email.com"
                       />
                     </div>
                   </label>
                   <label className="block">
-                    <span className="text-xs text-slate-400">Senha</span>
+                    <span className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Senha</span>
                     <div className="relative mt-1">
                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                       <input
                         type="password"
                         value={athletePassword}
                         onChange={(e) => setAthletePassword(e.target.value)}
-                        className="w-full pl-10 pr-4 py-3 bg-white/10 border border-white/20 rounded-xl text-white placeholder-white/30 focus:outline-none focus:ring-2 focus:ring-orange-500/60 focus:border-orange-500/60"
+                        className={`w-full pl-10 pr-4 py-3 border rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500/60 focus:border-orange-500/60 ${
+                          darkMode ? 'bg-white/10 border-white/20 text-white placeholder-white/30' : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400'
+                        }`}
                         placeholder="******"
                       />
                     </div>
                   </label>
-                  {athleteMode === 'signup' && <p className="text-xs text-white/40">Mínimo 6 caracteres</p>}
+                  {athleteMode === 'signup' && <p className={`text-xs ${darkMode ? 'text-white/40' : 'text-slate-400'}`}>Mínimo 6 caracteres</p>}
                   {athleteError && (
                     <p className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">{athleteError}</p>
                   )}
@@ -991,7 +1103,7 @@ export default function ExplorarLocaisPage() {
                     <button
                       type="button"
                       onClick={() => setLoginStep('role')}
-                      className="px-4 py-3 rounded-xl bg-white/10 text-white/70 hover:text-white hover:bg-white/15 text-sm font-semibold transition-all"
+                      className={`px-4 py-3 rounded-xl text-sm font-semibold transition-all ${darkMode ? 'bg-white/10 text-white/70 hover:text-white hover:bg-white/15' : 'bg-slate-100 text-slate-600 hover:text-slate-800 hover:bg-slate-200'}`}
                     >
                       Voltar
                     </button>
@@ -1016,18 +1128,19 @@ export default function ExplorarLocaisPage() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+            className="fixed inset-0 z-50 flex min-h-[100dvh] items-center justify-center overflow-y-auto p-4 sm:p-6"
           >
-            <button type="button" className="absolute inset-0 bg-black/70" onClick={() => setQrSheetOpen(false)} />
+            <button type="button" className="absolute inset-0 bg-black/70" onClick={() => setQrSheetOpen(false)} aria-label="Fechar" />
             <motion.div
-              initial={{ y: 40, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 40, opacity: 0 }}
-              className="relative w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-5"
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+              className={`relative z-10 my-auto w-full max-w-sm rounded-3xl border p-5 shadow-2xl flex flex-col items-center ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}
             >
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-black text-white">Compartilhar aplicativo</h3>
-                <button onClick={() => setQrSheetOpen(false)} className="p-2 rounded-xl hover:bg-slate-800">
+              <div className="flex w-full items-center justify-between mb-3 shrink-0">
+                <h3 className={`font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Compartilhar aplicativo</h3>
+                <button type="button" onClick={() => setQrSheetOpen(false)} className={`p-2 rounded-xl ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`}>
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -1039,7 +1152,7 @@ export default function ExplorarLocaisPage() {
                 />
               </div>
               <p className="text-xs text-slate-400 mt-3 text-center break-all">{appShareLink}</p>
-              <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className="mt-4 grid w-full grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => window.open('https://webqr.com/', '_blank', 'noopener,noreferrer')}
@@ -1121,7 +1234,7 @@ export default function ExplorarLocaisPage() {
       )}
 
       {!user && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 px-4 pb-[60px] pt-8 bg-gradient-to-t from-[#07090f] via-[#07090f]/95 to-transparent">
+        <div className={`fixed bottom-0 left-0 right-0 z-40 px-4 pb-[60px] pt-8 bg-gradient-to-t ${darkMode ? 'from-[#07090f] via-[#07090f]/95 to-transparent' : 'from-slate-50 via-slate-50/95 to-transparent'}`}>
           <div className="max-w-5xl mx-auto flex justify-center">
             <button
               type="button"

@@ -4,16 +4,18 @@ import { Trophy, Mail, Lock, User, Eye, EyeOff, AlertCircle, ArrowLeft, Check } 
 import { motion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../supabase';
+import { appPublicHost } from '../lib/publicAppUrl';
+import { brl } from '../lib/planAccess';
 
 const PLANS = [
-  { id: 'teste', name: 'Teste', price: 1, period: 'único', desc: '5 jogadores · 1 local · 1 evento', badge: 'R$1' },
-  { id: 'basico', name: 'Básico', price: 100, period: 'mês', desc: '30 jogadores · 1 local · 2 eventos', badge: null },
-  { id: 'profissional', name: 'Profissional', price: 150, period: 'mês', desc: '60 jogadores · 2 locais · 6 eventos', badge: 'Popular', highlight: true },
-  { id: 'enterprise', name: 'Enterprise', price: 200, period: 'mês', desc: 'Ilimitado', badge: 'Completo' },
+  { id: 'entrada', name: 'Entrada', price: 36.9, period: 'mês', desc: 'Ranking ilimitado · 20 jogadores/sessão · 1 local', badge: 'R$ 36,90' },
+  { id: 'basico', name: 'Básico', price: 100, period: 'mês', desc: 'Ranking ilimitado · 30 jogadores/sessão · 1 local', badge: null },
+  { id: 'profissional', name: 'Profissional', price: 150, period: 'mês', desc: 'Ranking ilimitado · 40 jogadores/sessão · 2 locais', badge: 'Popular', highlight: true },
+  { id: 'enterprise', name: 'Enterprise', price: 200, period: 'mês', desc: 'Tudo ilimitado · 4 locais', badge: 'Completo' },
 ];
 
 const PLAN_NAMES: Record<string, string> = {
-  teste: 'Teste — R$1',
+  entrada: 'Entrada — R$36,90/mês',
   avulso: 'Evento Avulso — R$50/evento',
   basico: 'Básico — R$100/mês',
   profissional: 'Profissional — R$150/mês',
@@ -186,7 +188,7 @@ export default function CadastroAdmin() {
                         <p className="text-xs text-slate-400 mt-0.5">{plan.desc}</p>
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="text-xl font-black text-white">R${plan.price}</p>
+                        <p className="text-xl font-black text-white">{brl(plan.price)}</p>
                         <p className="text-[10px] text-slate-500">/{plan.period}</p>
                       </div>
                     </div>
@@ -259,7 +261,7 @@ export default function CadastroAdmin() {
                   <label className="block text-xs font-medium text-slate-400 mb-1.5">URL do local</label>
                   <div className="flex items-center gap-0">
                     <span className="px-3 py-3 bg-slate-700/60 border border-r-0 border-slate-600 rounded-l-xl text-slate-400 text-xs whitespace-nowrap">
-                      basquetenext.app/
+                      {appPublicHost()}/
                     </span>
                     <input value={slug}
                       onChange={(e) => { setSlugManual(true); setSlug(nameToSlug(e.target.value)); }}

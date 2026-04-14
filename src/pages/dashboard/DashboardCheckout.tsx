@@ -19,11 +19,11 @@ declare global {
 }
 
 const PLANS: Record<string, { name: string; price: number; note?: string }> = {
-  teste:        { name: 'Plano Teste',        price: 1,   note: '5 jogadores · 1 local · 1 evento' },
-  avulso:       { name: 'Evento Avulso',      price: 50,  note: '72 horas de acesso · máx. 20 atletas' },
-  basico:       { name: 'Plano Básico',       price: 100 },
-  profissional: { name: 'Plano Profissional', price: 150 },
-  enterprise:   { name: 'Plano Enterprise',   price: 200 },
+  entrada:      { name: 'Plano Entrada',       price: 36.9, note: 'mensal · até 20 jogadores/sessão · 1 local' },
+  basico:       { name: 'Plano Básico',        price: 100,  note: 'mensal · até 30 jogadores/sessão · 1 local' },
+  profissional: { name: 'Plano Profissional',  price: 150,  note: 'mensal · até 40 jogadores/sessão · 2 locais' },
+  enterprise:   { name: 'Plano Enterprise',    price: 200,  note: 'mensal · sessão ilimitada · 4 locais' },
+  avulso:       { name: 'Evento Avulso',       price: 50,   note: '72 horas de acesso · máx. 20 atletas' },
 };
 
 type Step = 'choose' | 'pix' | 'card';
@@ -111,9 +111,9 @@ function PixView({
 
   const sendEmail = () => {
     if (!pixData?.qr_code) return;
-    const subject = encodeURIComponent('Seu código PIX — Basquete Next');
+    const subject = encodeURIComponent('Seu código PIX — Braska');
     const body = encodeURIComponent(
-      `Olá!\n\nAqui está seu código PIX para pagamento do plano:\n\n${pixData.qr_code}\n\nCopie e cole no seu banco ou app de pagamento.\n\nValor: R$${price.toFixed(2)}\n\nBasquete Next`
+      `Olá!\n\nAqui está seu código PIX para pagamento do plano:\n\n${pixData.qr_code}\n\nCopie e cole no seu banco ou app de pagamento.\n\nValor: R$${price.toFixed(2)}\n\nBraska`
     );
     window.open(`mailto:${userEmail}?subject=${subject}&body=${body}`);
     setEmailSent(true);

@@ -89,6 +89,24 @@ export default function LocalApp() {
   }
 
   const isOwner = !!session?.user && session.user.id === tenant?.owner_auth_id;
+
+  // Plano Entrada não tem link público — bloqueia acesso para não-owners
+  if (tenant && tenant.plan_id === 'entrada' && !isOwner) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-white p-6 text-center">
+        <div className="w-14 h-14 bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <AlertCircle className="w-7 h-7 text-orange-400" />
+        </div>
+        <h1 className="text-2xl font-black mb-2">Acesso não disponível</h1>
+        <p className="text-slate-400 max-w-sm">
+          Este local ainda não possui link público habilitado. O gestor precisa atualizar o plano para liberar o acesso.
+        </p>
+        <button onClick={() => navigate('/locais')} className="mt-6 px-6 py-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold transition-all">
+          Explorar locais
+        </button>
+      </div>
+    );
+  }
   const authorizedEmails = normalizeEmails((location as Location & { authorized_emails?: string[] | null })?.authorized_emails);
   const currentEmail = session?.user?.email?.trim().toLowerCase() ?? null;
   const emailAuthorized = !!currentEmail && authorizedEmails.includes(currentEmail);

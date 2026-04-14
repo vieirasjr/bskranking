@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabase';
 import { useAuth } from './AuthContext';
+import { isTimeLimitedPlan } from '../lib/planAccess';
 
 export interface Plan {
   id: string;
@@ -148,8 +149,8 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   const isSubscriptionActive = (() => {
     if (!tenant) return false;
     if (tenant.status !== 'active') return false;
-    // Planos com expiração por tempo (avulso)
-    if (tenant.plan_id === 'avulso' && tenant.current_period_ends_at) {
+    // Planos com expiração por tempo (avulso, experiência 7 dias)
+    if (isTimeLimitedPlan(tenant.plan_id) && tenant.current_period_ends_at) {
       return new Date() < new Date(tenant.current_period_ends_at);
     }
     return true;

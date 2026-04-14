@@ -3,37 +3,41 @@ import { useNavigate } from 'react-router-dom';
 import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '../supabase';
+import { getThemeDarkStored } from '../lib/appStorage';
+import { brl } from '../lib/planAccess';
 
 const PLANS = [
   {
-    id: 'teste',
-    name: 'Teste',
-    price: 1,
-    period: 'único',
-    players: 5,
+    id: 'entrada',
+    name: 'Entrada',
+    price: 36.9,
+    period: 'mês',
+    sessionPlayers: 20,
     locations: 1,
     features: [
-      '5 jogadores no ranking',
+      'Jogadores ilimitados no ranking',
+      'Até 20 jogadores por sessão (times + espera)',
       '1 local de partidas',
-      '1 evento',
-      'Testar o fluxo completo de pagamento',
+      '1 evento (torneio, campeonato, festival)',
+      'Fila e times automáticos',
     ],
     highlight: false,
-    badge: 'R$1 para testar',
+    badge: 'Entrada',
   },
   {
     id: 'basico',
     name: 'Básico',
     price: 100,
     period: 'mês',
-    players: 30,
+    sessionPlayers: 30,
     locations: 1,
     features: [
-      '30 jogadores no ranking',
+      'Jogadores ilimitados no ranking',
+      'Até 30 jogadores por sessão (times + espera)',
       '1 local de partidas',
       'Até 2 eventos (torneios, campeonatos, festivais)',
       'Link público exclusivo',
-      'Fila automática (10 jogadores)',
+      'Fila automática',
       'Placar ao vivo',
       'Ranking com filtros',
     ],
@@ -45,14 +49,15 @@ const PLANS = [
     name: 'Profissional',
     price: 150,
     period: 'mês',
-    players: 60,
+    sessionPlayers: 40,
     locations: 2,
     features: [
-      '60 jogadores no ranking',
+      'Jogadores ilimitados no ranking',
+      'Até 40 jogadores por sessão (times + espera)',
       '2 locais de partidas',
       'Até 6 eventos (torneios, campeonatos, festivais)',
       'Links públicos por local',
-      'Fila automática (10 jogadores)',
+      'Fila automática',
       'Placar ao vivo',
       'Ranking com filtros por local',
       'Ranking consolidado',
@@ -65,18 +70,19 @@ const PLANS = [
     name: 'Enterprise',
     price: 200,
     period: 'mês',
-    players: null,
-    locations: null,
+    sessionPlayers: null,
+    locations: 4,
     features: [
-      'Jogadores ilimitados',
-      'Locais ilimitados',
+      'Jogadores ilimitados no ranking',
+      'Jogadores ilimitados por sessão',
+      'Até 4 locais de partidas',
       'Eventos ilimitados (torneios, campeonatos, festivais)',
+      'Fila de espera ilimitada',
       'Links públicos por local',
-      'Fila automática (10 jogadores)',
+      'Fila automática',
       'Placar ao vivo',
       'Ranking completo por local',
       'Ranking consolidado',
-      'Gestão avançada de jogadores',
     ],
     highlight: false,
     badge: 'Completo',
@@ -95,7 +101,7 @@ export default function LandingPage() {
   const navigate = useNavigate();
   const [activeLocations, setActiveLocations] = useState<ActiveLocation[]>([]);
   const [darkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('basquete_theme_dark');
+    const saved = getThemeDarkStored();
     if (saved === 'true') return true;
     if (saved === 'false') return false;
     return true;
@@ -122,7 +128,7 @@ export default function LandingPage() {
           <div className="w-9 h-9 bg-orange-500 rounded-xl flex items-center justify-center shadow-lg shadow-orange-500/30">
             <Trophy className="w-5 h-5 text-white" />
           </div>
-          <span className="font-bold text-lg">Basquete Next</span>
+          <span className="font-bold text-lg">Braska</span>
         </div>
         <button
           onClick={() => navigate('/entrar')}
@@ -194,7 +200,7 @@ export default function LandingPage() {
               Quadras ativas agora
             </div>
             <h2 className="text-2xl sm:text-3xl font-black mb-2">
-              Quem já joga com o <span className="text-orange-500">Basquete Next</span>
+              Quem já joga com o <span className="text-orange-500">Braska</span>
             </h2>
             <p className="text-slate-300 text-sm">
               {activeLocations.length} {activeLocations.length === 1 ? 'local já usa' : 'locais já usam'} o sistema para organizar seus jogos.
@@ -276,13 +282,14 @@ export default function LandingPage() {
                   <p className={`text-sm font-semibold mb-1 ${plan.highlight ? 'text-orange-400' : 'text-slate-300'}`}>
                     {plan.name}
                   </p>
-                  <div className="flex items-end gap-1">
-                    <span className="text-4xl font-black text-white">R${plan.price}</span>
+                  <div className="flex items-end gap-1 flex-wrap">
+                    <span className="text-4xl font-black text-white">{brl(plan.price)}</span>
                     <span className="text-slate-300 text-sm mb-1">/{plan.period}</span>
                   </div>
                   <p className="text-slate-400 text-xs mt-1.5">
-                    {plan.players ? `${plan.players} jogadores` : 'Jogadores ilimitados'} ·{' '}
-                    {plan.locations ? `${plan.locations} ${plan.locations === 1 ? 'local' : 'locais'}` : 'Locais ilimitados'}
+                    Ranking ilimitado ·{' '}
+                    {plan.sessionPlayers ? `${plan.sessionPlayers} jogadores/sessão` : 'Sessão ilimitada'} ·{' '}
+                    {plan.locations} {plan.locations === 1 ? 'local' : 'locais'}
                   </p>
                 </div>
 
@@ -322,7 +329,7 @@ export default function LandingPage() {
           <Shield className="w-4 h-4" />
           <span>Pagamentos processados com segurança via Mercado Pago</span>
         </div>
-        <p>© {new Date().getFullYear()} Basquete Next · Todos os direitos reservados</p>
+        <p>© {new Date().getFullYear()} Braska · Todos os direitos reservados</p>
       </footer>
     </div>
   );

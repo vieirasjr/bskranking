@@ -74,6 +74,14 @@ import {
   partidaPlayerPointsToJson,
   totalsFromPlayerPoints,
 } from './lib/partidaPlayerPoints';
+import {
+  consumeInitialTab,
+  getAdminModeStored,
+  getThemeDarkStored,
+  setAdminModeStored,
+  setThemeDarkStored,
+} from './lib/appStorage';
+import { BASKETBALL_FORMAT_LABELS } from './lib/basketballExplore';
 
 /** Pontos da cesta que levam o time a ≥12 (vitória): somam em clutch_points (1/2/3 por unidade). */
 function decisiveBasketPoints(
@@ -227,7 +235,6 @@ type Tab = 'inicio' | 'lista' | 'eventos' | 'perfil';
 type SortKey = 'efficiency' | 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assists' | 'rebounds';
 
 const ADMIN_PASSWORD = '1710';
-const ADMIN_STORAGE_KEY = 'basquete_admin';
 
 interface AppProps {
   locationId?: string;
@@ -256,9 +263,8 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [isMatchStarted, setIsMatchStarted] = useState(false);
   const [currentPartidaSessaoId, setCurrentPartidaSessaoId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>(() => {
-    const requestedTab = localStorage.getItem('basquete_next_initial_tab');
+    const requestedTab = consumeInitialTab();
     if (requestedTab === 'inicio' || requestedTab === 'lista' || requestedTab === 'eventos' || requestedTab === 'perfil') {
-      localStorage.removeItem('basquete_next_initial_tab');
       return requestedTab as Tab;
     }
     return 'inicio';
@@ -266,12 +272,12 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [sortKey, setSortKey] = useState<SortKey>('efficiency');
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('basquete_theme_dark');
+    const saved = getThemeDarkStored();
     if (saved === 'true') return true;
     if (saved === 'false') return false;
     return true;
   });
-  const [isAdminMode, setIsAdminMode] = useState(() => isOwner || localStorage.getItem(ADMIN_STORAGE_KEY) === 'true');
+  const [isAdminMode, setIsAdminMode] = useState(!!isOwner);
   const [hasAdminAccess, setHasAdminAccess] = useState<boolean>(!!isOwner);
   const handleGoGlobal = () => {
     window.location.assign('/locais');
@@ -300,6 +306,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [userCodes, setUserCodes] = useState<Record<string, string>>({});
   const [showAdminGestao, setShowAdminGestao] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  /** Confirmação antes do modal de senha ao iniciar sessão (mostra modalidade do local). */
+  const [showStartSessionConfirm, setShowStartSessionConfirm] = useState(false);
+  const [venueModalityLabel, setVenueModalityLabel] = useState('Basquete 5x5');
   const [showHeaderQrModal, setShowHeaderQrModal] = useState(false);
   const adminSuggestionsRef = useRef<HTMLDivElement | null>(null);
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
@@ -317,15 +326,15 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     setHasAdminAccess(!!isOwner);
     if (!user) {
       setIsAdminMode(false);
-      localStorage.removeItem(ADMIN_STORAGE_KEY);
+      setAdminModeStored(false);
     } else if (isOwner) {
       setIsAdminMode(true);
-      localStorage.setItem(ADMIN_STORAGE_KEY, 'true');
+      setAdminModeStored(true);
     }
   }, [user, isOwner]);
 
   useEffect(() => {
-    localStorage.setItem('basquete_theme_dark', String(darkMode));
+    setThemeDarkStored(darkMode);
   }, [darkMode]);
 
   useEffect(() => {
@@ -493,6 +502,27 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     }
   }, [locationId]);
 
+  useEffect(() => {
+    if (!locationId) {
+      setVenueModalityLabel('Basquete 5x5');
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from('locations')
+      .select('basketball_formats')
+      .eq('id', locationId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const raw = (data?.basketball_formats as string[] | null)?.[0];
+        setVenueModalityLabel(raw ? (BASKETBALL_FORMAT_LABELS[raw] ?? raw) : 'Basquete 5x5');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [locationId]);
+
   const fetchPartidaSessao = useCallback(async (partidaSessaoId: string | null) => {
     if (!partidaSessaoId) {
       setTeam1MatchPoints(0);
@@ -620,9 +650,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     fetchPartidaSessao(currentPartidaSessaoId);
   }, [currentPartidaSessaoId, players, fetchPartidaSessao]);
 
-  // Admin por email no banco (basquete_users.admin): se usuário logado for admin, ativa modo admin
+  // Admin por email no banco (basquete_users.admin): só ativa se for owner deste local
   useEffect(() => {
-    if (!user?.email) return;
+    if (!user?.email || !isOwner) return;
     const checkAdmin = async () => {
       const { data, error } = await supabase
         .from('basquete_users')
@@ -632,11 +662,11 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       if (!error && data?.admin === true) {
         setHasAdminAccess(true);
         setIsAdminMode(true);
-        localStorage.setItem(ADMIN_STORAGE_KEY, 'true');
+        setAdminModeStored(true);
       }
     };
     checkAdmin();
-  }, [user?.email]);
+  }, [user?.email, isOwner]);
 
   // Polling do placar: atualização em tempo real para todos (logados ou não)
   const shouldPollPlacar = activeTab === 'lista' && !!currentPartidaSessaoId;
@@ -851,7 +881,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     if (!canAddToList || !userProfile?.display_name?.trim() || isGuest) return;
 
     if (maxPlayers != null && players.length >= maxPlayers) {
-      addNotification(`Limite de ${maxPlayers} atletas atingido para este evento.`, 'warning', { showToastForMs: 5000 });
+      addNotification(`Limite de ${maxPlayers} jogadores por sessão atingido.`, 'warning', { showToastForMs: 5000 });
       return;
     }
     const canAdd = isMatchStarted || waitingList.length < 10;
@@ -905,7 +935,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     if (!name) return;
 
     if (maxPlayers != null && players.length >= maxPlayers) {
-      addNotification(`Limite de ${maxPlayers} atletas atingido para este evento.`, 'warning', { showToastForMs: 5000 });
+      addNotification(`Limite de ${maxPlayers} jogadores por sessão atingido.`, 'warning', { showToastForMs: 5000 });
       return;
     }
     const canAdd = isMatchStarted || waitingList.length < 10;
@@ -966,7 +996,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     if (toAdd.length === 0) return;
 
     if (maxPlayers != null && players.length + toAdd.length > maxPlayers) {
-      addNotification(`Limite de ${maxPlayers} atletas atingido para este evento.`, 'warning', { showToastForMs: 5000 });
+      addNotification(`Limite de ${maxPlayers} jogadores por sessão atingido.`, 'warning', { showToastForMs: 5000 });
       return;
     }
 
@@ -1108,11 +1138,16 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     }
   };
 
-  const handleStartMatchAttempt = () => {
+  const openStartMatchPasswordModal = () => {
     if (!isAdminMode) return;
     setShowPasswordModal({ type: 'START_MATCH' });
     setPasswordInput('');
     setPasswordError(false);
+  };
+
+  const handleStartMatchAttempt = () => {
+    if (!isAdminMode) return;
+    setShowStartSessionConfirm(true);
   };
 
   const handleEndMatchAttempt = () => {
@@ -1208,6 +1243,16 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           if (insErr) throw insErr;
         }
         fetchStats();
+
+        // Log para destaque semanal
+        const logType = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? 'points' : stat;
+        const logValue = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? pts : 1;
+        supabase.from('stat_logs').insert({
+          stat_type: logType,
+          value: logValue,
+          user_id: userId,
+          location_id: locationId ?? null,
+        }).then(() => {});
       }
 
       // Atualizar matchPlayerStats (tracking por partida)
@@ -1477,6 +1522,13 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
             .eq('id', existing.id);
           fetchStats();
         }
+        // Log semanal
+        if (delta !== 0) {
+          supabase.from('stat_logs').insert({ stat_type: 'points', value: delta, user_id: userId, location_id: locationId ?? null }).then(() => {});
+        }
+        if (clutchDelta !== 0) {
+          supabase.from('stat_logs').insert({ stat_type: 'clutch_points', value: clutchDelta, user_id: userId, location_id: locationId ?? null }).then(() => {});
+        }
       }
 
       setMatchPlayerStats((prev) => {
@@ -1506,6 +1558,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         const newVal = Math.max((existing[statKey] ?? 0) + delta, 0);
         await supabase.from('stats').update({ [statKey]: newVal }).eq('id', existing.id);
         fetchStats();
+      }
+      // Log semanal
+      if (delta !== 0) {
+        supabase.from('stat_logs').insert({ stat_type: statKey, value: delta, user_id: userId, location_id: locationId ?? null }).then(() => {});
       }
     }
   };
@@ -1753,6 +1809,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
             ...(locationId ? { location_id: locationId } : {}),
           });
         }
+        // Log vitória para destaque semanal
+        if (venceu) {
+          supabase.from('stat_logs').insert({ stat_type: 'wins', value: 1, user_id: userId, location_id: locationId ?? null }).then(() => {});
+        }
       }
       await fetchPlayers();
       fetchStats();
@@ -1785,7 +1845,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
     if (showPasswordModal.type === 'ADMIN_ACTIVATE') {
       setIsAdminMode(true);
-      localStorage.setItem(ADMIN_STORAGE_KEY, 'true');
+      setAdminModeStored(true);
       setShowPasswordModal(null);
       setPasswordInput('');
       return;
@@ -2069,6 +2129,63 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           50% { transform: scale(1.2); opacity: 0.85; }
         }
       `}</style>
+      <AnimatePresence>
+        {showStartSessionConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[55] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowStartSessionConfirm(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 12 }}
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                'border p-6 sm:p-8 rounded-3xl shadow-2xl max-w-sm w-full space-y-5 transition-colors duration-300',
+                darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+              )}
+            >
+              <div className="text-center space-y-2">
+                <div className="w-12 h-12 bg-orange-500/20 rounded-full flex items-center justify-center mx-auto">
+                  <Trophy className="text-orange-500 w-6 h-6" />
+                </div>
+                <h3 className={cn('text-xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>Iniciar sessão?</h3>
+                <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                  Deseja iniciar uma sessão de partidas neste local?
+                </p>
+                <p className={cn('text-sm font-semibold', darkMode ? 'text-orange-300' : 'text-orange-700')}>
+                  Modalidade: {venueModalityLabel}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowStartSessionConfirm(false)}
+                  className={cn(
+                    'flex-1 py-3 rounded-xl font-semibold transition-colors',
+                    darkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'
+                  )}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStartSessionConfirm(false);
+                    openStartMatchPasswordModal();
+                  }}
+                  className="flex-1 py-3 rounded-xl font-semibold bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20 transition-all active:scale-95"
+                >
+                  Continuar
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* Password Modal */}
       <AnimatePresence>
         {showPasswordModal && (
@@ -2426,7 +2543,8 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       {/* Header */}
       <header
         className={cn(
-          'border-b backdrop-blur-md sticky top-0 z-10 transition-colors duration-300',
+          'border-b backdrop-blur-md sticky top-0 transition-colors duration-300',
+          headerMenuOpen ? 'z-[45]' : 'z-10',
           darkMode ? 'bg-slate-900/50 border-slate-800' : 'bg-white/80 border-slate-200'
         )}
       >
@@ -2518,6 +2636,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
               >
                 {!isAdminMode && hasAdminAccess ? (
                   <button
+                    type="button"
                     onClick={() => { handleAdminActivate(); setHeaderMenuOpen(false); }}
                     className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
                   >
@@ -2527,6 +2646,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   <>
                     {activeTab === 'lista' && isMatchStarted && (
                       <button
+                        type="button"
                         onClick={() => { handleEndMatchAttempt(); setHeaderMenuOpen(false); }}
                         className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-red-300' : 'hover:bg-slate-100 text-red-600')}
                       >
@@ -2534,12 +2654,14 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                       </button>
                     )}
                     <button
+                      type="button"
                       onClick={() => { resetQueue(); setHeaderMenuOpen(false); }}
                       className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
                     >
                       Resetar lista
                     </button>
                     <button
+                      type="button"
                       onClick={() => { setShowAdminGestao(true); setHeaderMenuOpen(false); }}
                       className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
                     >
@@ -2548,10 +2670,24 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   </>
                 ) : null}
                 <button
-                  onClick={() => { handleGoGlobal(); setHeaderMenuOpen(false); }}
+                  type="button"
+                  onClick={() => {
+                    window.location.assign('/locais');
+                    setHeaderMenuOpen(false);
+                  }}
                   className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
                 >
                   Ir para nível global
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.location.assign('/locais?tab=rank');
+                    setHeaderMenuOpen(false);
+                  }}
+                  className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
+                >
+                  Ver ranking global
                 </button>
               </div>
             )}
@@ -2561,7 +2697,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       {headerMenuOpen && (
         <button
           type="button"
-          className="fixed inset-0 z-20 cursor-default"
+          className="fixed inset-0 z-[25] cursor-default"
           aria-label="Fechar menu"
           onClick={() => setHeaderMenuOpen(false)}
         />
@@ -2573,24 +2709,34 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[60]"
-            onClick={() => setShowHeaderQrModal(false)}
+            className="fixed inset-0 z-[60] flex min-h-[100dvh] items-center justify-center overflow-y-auto p-4 sm:p-6"
           >
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/70"
+              aria-label="Fechar"
+              onClick={() => setShowHeaderQrModal(false)}
+            />
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
+              initial={{ scale: 0.94, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className={cn('rounded-2xl p-6 max-w-sm w-full border', darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200')}
+              exit={{ scale: 0.94, opacity: 0 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+              className={cn(
+                'relative z-10 my-auto w-full max-w-sm rounded-2xl p-6 border shadow-2xl flex flex-col items-center',
+                darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
+              )}
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className={cn('text-lg font-bold mb-4 text-center', darkMode ? 'text-white' : 'text-slate-900')}>QR Code do Local</h3>
-              <div className="flex justify-center mb-4">
-                <div className="p-4 bg-white rounded-xl">
+              <div className="flex justify-center mb-4 w-full">
+                <div className="p-4 bg-white rounded-xl inline-flex">
                   <QRCodeSVG value={headerQrUrl} size={200} level="M" />
                 </div>
               </div>
-              <p className={cn('text-xs text-center break-all mb-4', darkMode ? 'text-slate-400' : 'text-slate-600')}>{headerQrUrl}</p>
+              <p className={cn('text-xs text-center break-all mb-4 w-full', darkMode ? 'text-slate-400' : 'text-slate-600')}>{headerQrUrl}</p>
               <button
+                type="button"
                 onClick={() => setShowHeaderQrModal(false)}
                 className="w-full py-2.5 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white transition-colors"
               >
@@ -2655,6 +2801,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   userProfile={userProfile}
                   isGuest={isGuest}
                   locationSlug={locationSlug}
+                  locationId={locationId}
                 />
                 </motion.div>
               )}
@@ -3532,7 +3679,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       </nav>
 
       <footer className={cn('max-w-5xl mx-auto px-4 py-12 text-center text-sm transition-colors duration-300', darkMode ? 'text-slate-600' : 'text-slate-400')}>
-        <p>Basquete Next &bull; Sistema de Fila em Tempo Real</p>
+        <p>Braska &bull; Sistema de Fila em Tempo Real</p>
       </footer>
 
       {/* Gestão Admin - tela full-screen sobreposta */}
@@ -3991,6 +4138,22 @@ function formatStatValue(player: PlayerStats, key: SortKey): string {
   return String((player[key] as number) ?? 0);
 }
 
+interface WeeklyHighlight {
+  user_id: string;
+  name: string;
+  avatar_url: string | null;
+  points: number;
+  assists: number;
+  rebounds: number;
+  blocks: number;
+  steals: number;
+  clutch_points: number;
+  wins: number;
+  efficiency: number;
+  week_start: string;
+  week_end: string;
+}
+
 interface RankingViewProps {
   stats: PlayerStats[];
   darkMode: boolean;
@@ -4001,6 +4164,7 @@ interface RankingViewProps {
   userProfile: { id: string; display_name: string | null; avatar_url: string | null } | null;
   isGuest: boolean;
   locationSlug?: string;
+  locationId?: string;
 }
 
 const layoutTransition = { type: 'spring' as const, stiffness: 350, damping: 30 };
@@ -4163,27 +4327,54 @@ function RankPodiumItem({
   );
 }
 
-function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest, locationSlug }: RankingViewProps) {
+function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest, locationSlug, locationId }: RankingViewProps) {
   const [showQrModal, setShowQrModal] = useState(false);
   const [showHighlightModal, setShowHighlightModal] = useState(false);
+  const [weeklyHighlight, setWeeklyHighlight] = useState<WeeklyHighlight | null>(null);
 
-  const highlightPlayer = useMemo(() => {
-    if (stats.length === 0) return null;
-    let best: PlayerStats | null = null;
-    let bestScore = -1;
-    for (const p of stats) {
-      const score = calculateHighlightScore(p);
-      if (score > bestScore) {
-        bestScore = score;
-        best = p;
-      }
-    }
-    return best && bestScore > 0 ? best : null;
-  }, [stats]);
+  // Busca destaque da semana anterior via RPC (seg-dom)
+  useEffect(() => {
+    if (!locationId) return;
+    let cancelled = false;
+    supabase.rpc('get_weekly_highlight', { p_location_id: locationId }).then(({ data }) => {
+      if (cancelled) return;
+      const rows = data as WeeklyHighlight[] | null;
+      setWeeklyHighlight(rows && rows.length > 0 ? rows[0] : null);
+    });
+    return () => { cancelled = true; };
+  }, [locationId]);
 
-  const highlightScore = highlightPlayer ? calculateHighlightScore(highlightPlayer) : 0;
-  const highlightAvatarUrl = highlightPlayer?.user_id ? userAvatars[highlightPlayer.user_id] : undefined;
-  const weekLabel = getWeekRangeLabel();
+  // Constrói um PlayerStats a partir do destaque semanal para reaproveitar o card
+  const highlightPlayer = useMemo<PlayerStats | null>(() => {
+    if (!weeklyHighlight) return null;
+    // Encontra o stat acumulado para pegar o id correto
+    const stat = stats.find((s) => s.user_id === weeklyHighlight.user_id);
+    return {
+      id: stat?.id ?? weeklyHighlight.user_id,
+      name: weeklyHighlight.name,
+      points: weeklyHighlight.points,
+      wins: weeklyHighlight.wins,
+      blocks: weeklyHighlight.blocks,
+      steals: weeklyHighlight.steals,
+      clutch_points: weeklyHighlight.clutch_points,
+      assists: weeklyHighlight.assists,
+      rebounds: weeklyHighlight.rebounds,
+      user_id: weeklyHighlight.user_id,
+      partidas: stat?.partidas ?? 0,
+    };
+  }, [weeklyHighlight, stats]);
+
+  const highlightScore = weeklyHighlight?.efficiency ?? 0;
+  const highlightAvatarUrl = weeklyHighlight?.avatar_url ?? (highlightPlayer?.user_id ? userAvatars[highlightPlayer.user_id] : undefined);
+  const weekLabel = weeklyHighlight
+    ? (() => {
+        const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+        const ws = new Date(weeklyHighlight.week_start + 'T00:00:00');
+        const we = new Date(weeklyHighlight.week_end + 'T00:00:00');
+        const fmt = (d: Date) => `${d.getDate().toString().padStart(2, '0')} ${months[d.getMonth()]}`;
+        return `${fmt(ws)} - ${fmt(we)} ${we.getFullYear()}`;
+      })()
+    : getWeekRangeLabel();
   const isHighlightCurrentUser =
     !isGuest &&
     !!userProfile?.id &&
@@ -4685,26 +4876,32 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm"
-            onClick={() => setShowQrModal(false)}
+            className="fixed inset-0 z-50 flex min-h-[100dvh] items-center justify-center overflow-y-auto p-4 sm:p-6"
           >
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              aria-label="Fechar"
+              onClick={() => setShowQrModal(false)}
+            />
             <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
               onClick={(e) => e.stopPropagation()}
               className={cn(
-                'rounded-2xl p-6 w-full max-w-xs flex flex-col items-center gap-5 shadow-2xl',
+                'relative z-10 my-auto w-full max-w-xs flex flex-col items-center gap-5 rounded-2xl p-6 shadow-2xl',
                 darkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white border border-slate-200'
               )}
             >
               <div className="flex items-center justify-between w-full">
                 <h3 className={cn('text-lg font-bold', darkMode ? 'text-white' : 'text-slate-900')}>Convide jogadores</h3>
-                <button onClick={() => setShowQrModal(false)} className={cn('p-1 rounded-lg transition-colors', darkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500')}>
+                <button type="button" onClick={() => setShowQrModal(false)} className={cn('p-1 rounded-lg transition-colors', darkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500')}>
                   <X className="w-5 h-5" />
                 </button>
               </div>
-              <div className="bg-white p-4 rounded-xl">
+              <div className="bg-white p-4 rounded-xl inline-flex mx-auto">
                 <QRCodeSVG value={qrUrl} size={200} level="M" />
               </div>
               <p className={cn('text-xs text-center', darkMode ? 'text-slate-500' : 'text-slate-400')}>

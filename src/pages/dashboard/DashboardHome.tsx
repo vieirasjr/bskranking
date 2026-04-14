@@ -1,21 +1,47 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Users, Trophy, ArrowRight, AlertCircle } from 'lucide-react';
+import { MapPin, Users, Trophy, ArrowRight, AlertCircle, Clock } from 'lucide-react';
 import { useTenant } from '../../contexts/TenantContext';
+import { appPublicHost } from '../../lib/publicAppUrl';
+import { formatAccessTimeRemaining, isTimeLimitedPlan } from '../../lib/planAccess';
 
 export default function DashboardHome() {
   const { tenant, locations, plan, isSubscriptionActive } = useTenant();
   const navigate = useNavigate();
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const trialDaysLeft = tenant?.trial_ends_at
     ? Math.max(0, Math.ceil((new Date(tenant.trial_ends_at).getTime() - Date.now()) / 86400000))
     : null;
 
+  const periodRemaining =
+    tenant?.status === 'active' && isTimeLimitedPlan(tenant.plan_id) && tenant.current_period_ends_at
+      ? formatAccessTimeRemaining(tenant.current_period_ends_at)
+      : null;
+
   return (
     <div className="p-8 max-w-4xl">
       <div className="mb-8">
         <h1 className="text-2xl font-black text-white">Painel</h1>
-        <p className="text-slate-400 mt-1">Bem-vindo ao {tenant?.name ?? 'Basquete Next'}</p>
+        <p className="text-slate-400 mt-1">Bem-vindo ao {tenant?.name ?? 'Braska'}</p>
       </div>
+
+      {/* Plano temporário (Avulso): tempo restante */}
+      {tenant?.status === 'active' && periodRemaining && tenant.plan_id === 'avulso' && (
+        <div className="flex items-start gap-3 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-200 mb-6">
+          <Clock className="w-5 h-5 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold text-sm text-white">Evento avulso</p>
+            <p className="text-xs mt-0.5">
+              Tempo restante: <strong>{periodRemaining}</strong>
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Alerts */}
       {tenant?.status === 'trial' && trialDaysLeft !== null && (
@@ -69,7 +95,7 @@ export default function DashboardHome() {
           </div>
           <p className="text-3xl font-black text-white">{plan?.name ?? '—'}</p>
           <p className="text-xs text-slate-500 mt-1">
-            {plan?.max_players == null ? 'Jogadores ilimitados' : `Até ${plan.max_players} jogadores`}
+            {plan?.max_players == null ? 'Sessão ilimitada' : `Até ${plan.max_players} jogadores/sessão`}
           </p>
         </div>
         <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900">
@@ -111,7 +137,11 @@ export default function DashboardHome() {
               <div key={loc.id} className="flex items-center justify-between p-4 rounded-2xl border border-slate-800 bg-slate-900">
                 <div>
                   <p className="font-semibold text-white text-sm">{loc.name}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">basquetenext.app/{loc.slug}</p>
+                  {tenant?.plan_id !== 'entrada' && (
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {appPublicHost()}/{loc.slug}
+                    </p>
+                  )}
                 </div>
                 <button onClick={() => navigate(`/${loc.slug}`)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all">

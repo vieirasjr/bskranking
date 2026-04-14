@@ -22,6 +22,7 @@ import {
   whatsappHref,
   type PublicLocationRow,
 } from '../lib/publicLocations';
+import { getThemeDarkStored } from '../lib/appStorage';
 import { formatLabelsList, avatarTintIndicesForId, avatarTintClass } from '../lib/basketballExplore';
 
 type LocRow = PublicLocationRow & { cover_image_url?: string | null };
@@ -36,7 +37,7 @@ export default function LocalPublicDetailPage() {
   const [fav, setFav] = useState(false);
   const [playerCount, setPlayerCount] = useState<number | null>(null);
   const [darkMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem('basquete_theme_dark');
+    const saved = getThemeDarkStored();
     if (saved === 'true') return true;
     if (saved === 'false') return false;
     return true;
@@ -247,7 +248,7 @@ export default function LocalPublicDetailPage() {
             <Trophy className="w-24 h-24 text-[#ff8a4c]/30" />
           </div>
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#07090f] via-[#07090f]/35 to-black/30" />
+        <div className={`absolute inset-0 bg-gradient-to-t ${darkMode ? 'from-[#07090f] via-[#07090f]/35 to-black/30' : 'from-slate-50 via-slate-50/35 to-black/20'}`} />
 
         <div className="absolute top-0 left-0 right-0 p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-start justify-between gap-2">
           <button
@@ -284,8 +285,8 @@ export default function LocalPublicDetailPage() {
         animate={{ opacity: 1, y: 0 }}
         className="max-w-lg mx-auto px-4 -mt-14 relative z-10"
       >
-        <div className="rounded-t-[28px] rounded-b-3xl border border-slate-700/80 bg-slate-900/95 backdrop-blur-xl shadow-2xl overflow-hidden">
-          <div className="h-1.5 w-12 rounded-full bg-slate-700 mx-auto mt-3 mb-1 opacity-60" aria-hidden />
+        <div className={`rounded-t-[28px] rounded-b-3xl border backdrop-blur-xl shadow-2xl overflow-hidden ${darkMode ? 'border-slate-700/80 bg-slate-900/95' : 'border-slate-200 bg-white/95'}`}>
+          <div className={`h-1.5 w-12 rounded-full mx-auto mt-3 mb-1 opacity-60 ${darkMode ? 'bg-slate-700' : 'bg-slate-300'}`} aria-hidden />
 
           <div className="px-5 pt-4 pb-5">
             {extras.formats.length > 0 && (
@@ -300,15 +301,15 @@ export default function LocalPublicDetailPage() {
                     : 'Campeonatos'}
               </p>
             )}
-            <h1 className="text-2xl sm:text-3xl font-black leading-tight text-white">{loc.name}</h1>
+            <h1 className={`text-2xl sm:text-3xl font-black leading-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>{loc.name}</h1>
 
-            <div className="mt-4 space-y-2 text-sm text-slate-400">
+            <div className={`mt-4 space-y-2 text-sm ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
               <div className="flex items-start gap-2">
                 <MapPin className="w-4 h-4 text-[#ff8a4c] shrink-0 mt-0.5" />
                 <span className="leading-snug">{locationLine}</span>
               </div>
               {addressText && (
-                <p className="text-slate-500 text-xs pl-6">{addressText}</p>
+                <p className={`text-xs pl-6 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{addressText}</p>
               )}
               {loc.opening_hours_note && (
                 <div className="flex items-start gap-2">
@@ -323,14 +324,14 @@ export default function LocalPublicDetailPage() {
                 {tintIdx.map((ti, i) => (
                   <div
                     key={i}
-                    className={`w-9 h-9 rounded-full border-2 border-slate-900 flex items-center justify-center text-[11px] font-bold text-white ${avatarTintClass(ti)}`}
+                    className={`w-9 h-9 rounded-full border-2 flex items-center justify-center text-[11px] font-bold text-white ${darkMode ? 'border-slate-900' : 'border-white'} ${avatarTintClass(ti)}`}
                   >
                     {letters[i]}
                   </div>
                 ))}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-bold text-white leading-tight">
+                <p className={`text-sm font-bold leading-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                   {playerCount != null ? (
                     <>
                       {playerCount.toLocaleString('pt-BR')} jogador{playerCount === 1 ? '' : 'es'} na lista
@@ -339,7 +340,7 @@ export default function LocalPublicDetailPage() {
                     'Carregando lista…'
                   )}
                 </p>
-                <p className="text-[11px] text-slate-500">Contagem em tempo real neste local</p>
+                <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Contagem em tempo real neste local</p>
               </div>
               <button
                 type="button"
@@ -351,8 +352,8 @@ export default function LocalPublicDetailPage() {
             </div>
           </div>
 
-          <div className="border-t border-slate-800 px-5 py-5">
-            <h2 className="text-sm font-black text-white mb-2 flex items-center justify-between">
+          <div className={`border-t px-5 py-5 ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
+            <h2 className={`text-sm font-black mb-2 flex items-center justify-between ${darkMode ? 'text-white' : 'text-slate-900'}`}>
               Sobre o local
               {showReadMore && (
                 <button
@@ -372,20 +373,20 @@ export default function LocalPublicDetailPage() {
                 </button>
               )}
             </h2>
-            <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">
+            <p className={`text-sm leading-relaxed whitespace-pre-wrap ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>
               {aboutOpen || !showReadMore ? aboutText : aboutShort}
             </p>
           </div>
 
-          <div className="border-t border-slate-800 px-5 py-5 bg-slate-900/50">
-            <h2 className="text-sm font-black text-white mb-3">Organização</h2>
+          <div className={`border-t px-5 py-5 ${darkMode ? 'border-slate-800 bg-slate-900/50' : 'border-slate-200 bg-slate-50/50'}`}>
+            <h2 className={`text-sm font-black mb-3 ${darkMode ? 'text-white' : 'text-slate-900'}`}>Organização</h2>
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-[#ff8a4c]/20 flex items-center justify-center text-[#ff8a4c] font-black text-lg shrink-0">
                 {(loc.tenant?.name ?? loc.name).slice(0, 1).toUpperCase()}
               </div>
               <div className="min-w-0 flex-1">
-                <p className="font-bold text-white truncate">{loc.tenant?.name ?? loc.name}</p>
-                <p className="text-xs text-slate-500">Organização (tenant)</p>
+                <p className={`font-bold truncate ${darkMode ? 'text-white' : 'text-slate-900'}`}>{loc.tenant?.name ?? loc.name}</p>
+                <p className={`text-xs ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Organização (tenant)</p>
               </div>
               <div className="flex gap-2 shrink-0">
                 {tel && (
@@ -411,20 +412,20 @@ export default function LocalPublicDetailPage() {
               </div>
             </div>
             {!tel && !wa && (
-              <p className="text-[11px] text-slate-600 mt-2">Telefone e WhatsApp podem ser cadastrados no painel do gestor.</p>
+              <p className={`text-[11px] mt-2 ${darkMode ? 'text-slate-600' : 'text-slate-400'}`}>Telefone e WhatsApp podem ser cadastrados no painel do gestor.</p>
             )}
           </div>
 
-          <div className="border-t border-slate-800 px-5 py-5">
+          <div className={`border-t px-5 py-5 ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-black text-white">Endereço</h2>
+              <h2 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Endereço</h2>
               {(hasCoords || addressText) && (
                 <button type="button" onClick={openMaps} className="text-xs font-bold text-[#ff8a4c] hover:underline">
                   Ver no mapa
                 </button>
               )}
             </div>
-            <p className="text-sm text-slate-400 flex items-start gap-2">
+            <p className={`text-sm flex items-start gap-2 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
               <MapPin className="w-4 h-4 text-[#ff8a4c] shrink-0 mt-0.5" />
               <span>{addressText ?? locationLine}</span>
             </p>
@@ -432,7 +433,7 @@ export default function LocalPublicDetailPage() {
               <button
                 type="button"
                 onClick={openMaps}
-                className="mt-3 w-full flex items-center justify-center gap-2 py-3 rounded-2xl border border-slate-600 bg-slate-800/50 hover:bg-slate-800 text-sm font-semibold transition-colors"
+                className={`mt-3 w-full flex items-center justify-center gap-2 py-3 rounded-2xl border text-sm font-semibold transition-colors ${darkMode ? 'border-slate-600 bg-slate-800/50 hover:bg-slate-800 text-white' : 'border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700'}`}
               >
                 <ExternalLink className="w-4 h-4" />
                 {hasCoords ? 'Abrir no Google Maps (coordenadas)' : 'Abrir no Google Maps (endereço)'}
@@ -452,11 +453,11 @@ export default function LocalPublicDetailPage() {
         </div>
       </motion.div>
 
-      <div className="fixed bottom-0 left-0 right-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] bg-gradient-to-t from-[#07090f] via-[#07090f] to-transparent z-20 pointer-events-none">
+      <div className={`fixed bottom-0 left-0 right-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] bg-gradient-to-t z-20 pointer-events-none ${darkMode ? 'from-[#07090f] via-[#07090f] to-transparent' : 'from-slate-50 via-slate-50 to-transparent'}`}>
         <div className="max-w-lg mx-auto pointer-events-auto flex items-center gap-3">
           <div className="flex-1 min-w-0">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-bold">Lista do local</p>
-            <p className="text-sm font-bold text-white truncate">Entrar na fila Basquete Next</p>
+            <p className={`text-[10px] uppercase tracking-wider font-bold ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Lista do local</p>
+            <p className={`text-sm font-bold truncate ${darkMode ? 'text-white' : 'text-slate-900'}`}>Entrar na fila Braska</p>
           </div>
           <button
             type="button"

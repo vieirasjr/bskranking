@@ -29,6 +29,8 @@ import Cropper from 'react-easy-crop';
 import type { Area } from 'react-easy-crop';
 import { supabase } from '../supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { COUNTRIES_PT_SORTED } from '../data/countriesPt';
+import { CountryFlagSvg } from '../components/CountryFlagSvg';
 
 function cn(...inputs: unknown[]) {
   return twMerge(clsx(inputs));
@@ -92,6 +94,8 @@ export interface PerfilAtleta {
   phone: string | null;
   city: string | null;
   state: string | null;
+  /** ISO 3166-1 alpha-2 — origem do atleta (bandeira no rank global). */
+  country_iso: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -135,6 +139,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
     bio: '',
     city: '',
     state: '',
+    country_iso: 'BR',
   });
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
@@ -182,6 +187,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
             bio: profile.bio ?? '',
             city: profile.city ?? '',
             state: profile.state ?? '',
+            country_iso: profile.country_iso ?? 'BR',
           });
           setAvatarUrl(profile.avatar_url);
         } else {
@@ -317,6 +323,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
         bio: form.bio.trim() || null,
         city: form.city.trim() || null,
         state: form.state || null,
+        country_iso: form.country_iso.trim() || 'BR',
         avatar_url: avatarUrl,
         updated_at: new Date().toISOString(),
       };
@@ -614,6 +621,36 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
                 darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
               )}
             />
+          </div>
+        </div>
+
+        {/* País de origem */}
+        <div className="space-y-2">
+          <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+            País de origem
+          </label>
+          <div className="flex items-center gap-3">
+            <CountryFlagSvg
+              code={form.country_iso}
+              className={cn(
+                'w-9 h-6 rounded-md shadow-sm shrink-0 overflow-hidden border',
+                darkMode ? 'border-slate-600' : 'border-slate-200'
+              )}
+            />
+            <select
+              value={form.country_iso}
+              onChange={(e) => setForm((f) => ({ ...f, country_iso: e.target.value }))}
+              className={cn(
+                'flex-1 min-w-0 px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50',
+                darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+              )}
+            >
+              {COUNTRIES_PT_SORTED.map(({ code, name }) => (
+                <option key={code} value={code}>
+                  {name}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 

@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
-import { MapPin, Plus, Trash2, ExternalLink, AlertCircle, Check, Pencil, X, Image as ImageIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { MapPin, Plus, Trash2, ExternalLink, AlertCircle, Check, Pencil, X, Image as ImageIcon, Search, Loader2 } from 'lucide-react';
 import { useTenant, Location } from '../../contexts/TenantContext';
 import { supabase } from '../../supabase';
 import { useNavigate } from 'react-router-dom';
 import { BASKETBALL_FORMAT_OPTIONS } from '../../lib/basketballExplore';
+import { appPublicHost } from '../../lib/publicAppUrl';
+import { searchAddress, parseNominatimResult, type NominatimResult } from '../../lib/nominatimSearch';
 
 const RESERVED_SLUGS = ['entrar', 'dashboard', 'api', 'admin', 'login', 'cadastro', 'planos', 'locais'];
 
@@ -62,6 +64,19 @@ export default function DashboardLocais() {
   const [openingHoursNote, setOpeningHoursNote] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [authorizedEmailsText, setAuthorizedEmailsText] = useState('');
+  const [addressQuery, setAddressQuery] = useState('');
+  const [addressResults, setAddressResults] = useState<NominatimResult[]>([]);
+  const [addressSearching, setAddressSearching] = useState(false);
+  const [showAddressSuggestions, setShowAddressSuggestions] = useState(false);
+  const addressRef = useRef<HTMLDivElement>(null);
+
+  // Busca de endereço para edição
+  const [editAddressQuery, setEditAddressQuery] = useState('');
+  const [editAddressResults, setEditAddressResults] = useState<NominatimResult[]>([]);
+  const [editAddressSearching, setEditAddressSearching] = useState(false);
+  const [showEditAddressSuggestions, setShowEditAddressSuggestions] = useState(false);
+  const editAddressRef = useRef<HTMLDivElement>(null);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -99,6 +114,75 @@ export default function DashboardLocais() {
     if (Number.isNaN(n) || n < 10) return fallback;
     return Math.min(n, 5000);
   };
+
+  // Debounce para busca de endereço (criação)
+  const addressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleAddressSearch = useCallback((q: string) => {
+    setAddressQuery(q);
+    if (addressTimerRef.current) clearTimeout(addressTimerRef.current);
+    if (q.trim().length < 3) { setAddressResults([]); return; }
+    setAddressSearching(true);
+    addressTimerRef.current = setTimeout(async () => {
+      const results = await searchAddress(q);
+      setAddressResults(results);
+      setAddressSearching(false);
+      setShowAddressSuggestions(results.length > 0);
+    }, 400);
+  }, []);
+
+  const selectAddress = (r: NominatimResult) => {
+    const p = parseNominatimResult(r);
+    setLat(String(p.lat));
+    setLng(String(p.lng));
+    setAddressLine(p.addressLine);
+    setCity(p.city);
+    // Tenta mapear state name para UF
+    const ufMatch = BR_UF.find((uf) => p.state.toUpperCase().includes(uf)) ?? '';
+    setStateUf(ufMatch);
+    setCountry(p.country);
+    setAddressQuery(p.displayName);
+    setShowAddressSuggestions(false);
+    setAddressResults([]);
+  };
+
+  // Debounce para busca de endereço (edição)
+  const editAddressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleEditAddressSearch = useCallback((q: string) => {
+    setEditAddressQuery(q);
+    if (editAddressTimerRef.current) clearTimeout(editAddressTimerRef.current);
+    if (q.trim().length < 3) { setEditAddressResults([]); return; }
+    setEditAddressSearching(true);
+    editAddressTimerRef.current = setTimeout(async () => {
+      const results = await searchAddress(q);
+      setEditAddressResults(results);
+      setEditAddressSearching(false);
+      setShowEditAddressSuggestions(results.length > 0);
+    }, 400);
+  }, []);
+
+  const selectEditAddress = (r: NominatimResult) => {
+    const p = parseNominatimResult(r);
+    setEditLat(String(p.lat));
+    setEditLng(String(p.lng));
+    setEditAddressLine(p.addressLine);
+    setEditCity(p.city);
+    const ufMatch = BR_UF.find((uf) => p.state.toUpperCase().includes(uf)) ?? '';
+    setEditStateUf(ufMatch);
+    setEditCountry(p.country);
+    setEditAddressQuery(p.displayName);
+    setShowEditAddressSuggestions(false);
+    setEditAddressResults([]);
+  };
+
+  // Fechar dropdown ao clicar fora
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (addressRef.current && !addressRef.current.contains(e.target as Node)) setShowAddressSuggestions(false);
+      if (editAddressRef.current && !editAddressRef.current.contains(e.target as Node)) setShowEditAddressSuggestions(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -299,7 +383,10 @@ export default function DashboardLocais() {
                   placeholder="arena-centro"
                   className="flex-1 px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-r-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm" />
               </div>
-              <Hint>Vitrine: basquetenext.app/locais/<strong>{slug || 'sua-url'}</strong> · App do tenant: basquetenext.app/<strong>{slug || 'sua-url'}</strong></Hint>
+              <Hint>
+                Vitrine: {appPublicHost()}/locais/<strong>{slug || 'sua-url'}</strong> · App do tenant: {appPublicHost()}/
+                <strong>{slug || 'sua-url'}</strong>
+              </Hint>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Descrição completa</label>
@@ -335,6 +422,36 @@ export default function DashboardLocais() {
 
           <div className={sectionClass}>
             <h4 className="text-xs font-black text-orange-400 uppercase tracking-widest">3 · Endereço (vitrine e mapas)</h4>
+            <div ref={addressRef} className="relative">
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">Buscar endereço</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+                <input
+                  value={addressQuery}
+                  onChange={(e) => handleAddressSearch(e.target.value)}
+                  onFocus={() => addressResults.length > 0 && setShowAddressSuggestions(true)}
+                  placeholder="Praça, clube, quadra, endereço..."
+                  className="w-full pl-10 pr-10 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm"
+                />
+                {addressSearching && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-orange-400 animate-spin" />}
+              </div>
+              <Hint>Pesquise pelo nome do local, praça, rua ou endereço. Os campos abaixo serão preenchidos automaticamente.</Hint>
+              {showAddressSuggestions && addressResults.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-xl">
+                  {addressResults.map((r) => (
+                    <button
+                      key={r.place_id}
+                      type="button"
+                      onClick={() => selectAddress(r)}
+                      className="w-full text-left px-4 py-3 hover:bg-slate-800 border-b border-slate-800 last:border-b-0 transition-colors"
+                    >
+                      <p className="text-sm text-white truncate">{r.display_name.split(',')[0]}</p>
+                      <p className="text-xs text-slate-400 truncate mt-0.5">{r.display_name}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Logradouro e número</label>
               <input value={addressLine} onChange={(e) => setAddressLine(e.target.value)}
@@ -365,6 +482,12 @@ export default function DashboardLocais() {
                 placeholder="BR"
                 className="w-full max-w-xs px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm" />
             </div>
+            {lat && lng && (
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <MapPin className="w-3.5 h-3.5 text-orange-400" />
+                <span>Coordenadas: {parseFloat(lat).toFixed(5)}, {parseFloat(lng).toFixed(5)}</span>
+              </div>
+            )}
           </div>
 
           <div className={sectionClass}>
@@ -455,21 +578,7 @@ export default function DashboardLocais() {
           </div>
 
           <div className={sectionClass}>
-            <h4 className="text-xs font-black text-orange-400 uppercase tracking-widest">7 · Coordenadas e raio (app + mapa)</h4>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">Latitude</label>
-                <input type="number" step="any" value={lat} onChange={(e) => setLat(e.target.value)}
-                  placeholder="-23.5678"
-                  className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">Longitude</label>
-                <input type="number" step="any" value={lng} onChange={(e) => setLng(e.target.value)}
-                  placeholder="-46.6543"
-                  className="w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm" />
-              </div>
-            </div>
+            <h4 className="text-xs font-black text-orange-400 uppercase tracking-widest">7 · Raio de geofence (app)</h4>
             <div>
               <label className="block text-xs font-medium text-slate-400 mb-1.5">Raio do local (metros)</label>
               <input type="number" min={10} max={5000} value={radiusM} onChange={(e) => setRadiusM(e.target.value)}
@@ -528,7 +637,9 @@ export default function DashboardLocais() {
                           className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-r-xl text-white text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50"
                         />
                       </div>
-                      <Hint>Vitrine: basquetenext.app/locais/{editSlug || 'sua-url'} · App: basquetenext.app/{editSlug || 'sua-url'}</Hint>
+                      <Hint>
+                        Vitrine: {appPublicHost()}/locais/{editSlug || 'sua-url'} · App: {appPublicHost()}/{editSlug || 'sua-url'}
+                      </Hint>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-slate-400 mb-1">Descrição</label>
@@ -554,6 +665,35 @@ export default function DashboardLocais() {
 
                   <div className={sectionClass}>
                     <h4 className="text-xs font-black text-slate-500 uppercase">Endereço</h4>
+                    <div ref={editAddressRef} className="relative">
+                      <label className="block text-xs font-medium text-slate-400 mb-1">Buscar endereço</label>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+                        <input
+                          value={editAddressQuery}
+                          onChange={(e) => handleEditAddressSearch(e.target.value)}
+                          onFocus={() => editAddressResults.length > 0 && setShowEditAddressSuggestions(true)}
+                          placeholder="Praça, clube, quadra, endereço..."
+                          className="w-full pl-10 pr-10 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm"
+                        />
+                        {editAddressSearching && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-orange-400 animate-spin" />}
+                      </div>
+                      {showEditAddressSuggestions && editAddressResults.length > 0 && (
+                        <div className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 shadow-xl">
+                          {editAddressResults.map((r) => (
+                            <button
+                              key={r.place_id}
+                              type="button"
+                              onClick={() => selectEditAddress(r)}
+                              className="w-full text-left px-4 py-3 hover:bg-slate-800 border-b border-slate-800 last:border-b-0 transition-colors"
+                            >
+                              <p className="text-sm text-white truncate">{r.display_name.split(',')[0]}</p>
+                              <p className="text-xs text-slate-400 truncate mt-0.5">{r.display_name}</p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <input value={editAddressLine} onChange={(e) => setEditAddressLine(e.target.value)} placeholder="Logradouro"
                       className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm" />
                     <div className="grid grid-cols-2 gap-2">
@@ -569,6 +709,12 @@ export default function DashboardLocais() {
                     </div>
                     <input value={editCountry} onChange={(e) => setEditCountry(e.target.value)} placeholder="País"
                       className="w-full max-w-[100px] px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm" />
+                    {editLat && editLng && (
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <MapPin className="w-3.5 h-3.5 text-orange-400" />
+                        <span>Coordenadas: {parseFloat(editLat).toFixed(5)}, {parseFloat(editLng).toFixed(5)}</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className={sectionClass}>
@@ -634,15 +780,10 @@ export default function DashboardLocais() {
                   </div>
 
                   <div className={sectionClass}>
-                    <h4 className="text-xs font-black text-slate-500 uppercase">Coordenadas e raio</h4>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input type="number" step="any" value={editLat} onChange={(e) => setEditLat(e.target.value)} placeholder="Latitude"
-                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm" />
-                      <input type="number" step="any" value={editLng} onChange={(e) => setEditLng(e.target.value)} placeholder="Longitude"
-                        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm" />
-                    </div>
+                    <h4 className="text-xs font-black text-slate-500 uppercase">Raio de geofence</h4>
                     <input type="number" min={10} max={5000} value={editRadiusM} onChange={(e) => setEditRadiusM(e.target.value)} placeholder="Raio (m)"
                       className="w-full max-w-xs px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm" />
+                    <Hint>Usado para check-in / geofence (padrão 50 m).</Hint>
                   </div>
 
                   <div className="flex gap-2">
@@ -665,7 +806,16 @@ export default function DashboardLocais() {
                 <div className="flex items-center justify-between">
                   <div className="min-w-0">
                     <p className="font-semibold text-white truncate">{loc.name}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">basquetenext.app/{loc.slug}</p>
+                    {plan?.id !== 'entrada' && (
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {appPublicHost()}/{loc.slug}
+                      </p>
+                    )}
+                    {plan?.id === 'entrada' && (
+                      <p className="text-xs text-orange-400/70 mt-0.5">
+                        Link público indisponível no plano Entrada
+                      </p>
+                    )}
                     {(loc.city || loc.state) && (
                       <p className="text-xs text-slate-500 mt-0.5">{[loc.city, loc.state].filter(Boolean).join(', ')}</p>
                     )}

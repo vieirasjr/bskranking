@@ -31,18 +31,18 @@ const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN ?? "";
 const MP_API = "https://api.mercadopago.com";
 
 const PLAN_NAMES: Record<string, string> = {
-  basico:       "Basquete Next - Plano Básico",
-  profissional: "Basquete Next - Plano Profissional",
-  enterprise:   "Basquete Next - Plano Enterprise",
-  avulso:       "Basquete Next - Evento Avulso",
-  teste:        "Basquete Next - Teste",
+  entrada:      "Braska - Plano Entrada",
+  basico:       "Braska - Plano Básico",
+  profissional: "Braska - Plano Profissional",
+  enterprise:   "Braska - Plano Enterprise",
+  avulso:       "Braska - Evento Avulso",
 };
 const PLAN_PRICES: Record<string, number> = {
+  entrada: 36.9,
   basico: 100,
   profissional: 150,
   enterprise: 200,
   avulso: 50,
-  teste: 1,
 };
 // Planos com expiração por tempo (horas) em vez de ciclo mensal
 const PLAN_EXPIRY_HOURS: Record<string, number> = {
@@ -132,7 +132,7 @@ async function startServer() {
       ...(isPublicUrl && { auto_return: "approved" }),
       external_reference: `${tenant.id}|${planId}`,
       notification_url: `${baseUrl}/api/webhook/mercadopago?source_news=webhooks`,
-      statement_descriptor: "BASQUETE NEXT",
+      statement_descriptor: "Braska",
       payment_methods: {
         installments: 1,
       },
@@ -194,9 +194,9 @@ async function startServer() {
     const payload = {
       ...formData,
       transaction_amount: PLAN_PRICES[planId],
-      description: `Basquete Next - ${PLAN_NAMES[planId]}`,
+      description: `Braska - ${PLAN_NAMES[planId]}`,
       external_reference: `${tenant.id}|${planId}`,
-      statement_descriptor: "BASQUETE NEXT",
+      statement_descriptor: "Braska",
       installments: 1,
     };
 
@@ -275,8 +275,8 @@ async function startServer() {
     const rawEmail = payerEmail ?? userRow?.user?.email ?? "";
     // Emails @testuser.com são contas de vendedor no MP — usar fallback como payer
     const email = rawEmail.endsWith("@testuser.com")
-      ? "comprador@basquetenext.com"
-      : (rawEmail || "comprador@basquetenext.com");
+      ? "comprador@braska.app"
+      : (rawEmail || "comprador@braska.app");
 
     const mpRes = await mpFetch("/v1/payments", {
       method: "POST",

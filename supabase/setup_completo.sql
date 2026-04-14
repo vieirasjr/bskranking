@@ -1,5 +1,5 @@
 -- ============================================
--- SETUP COMPLETO - Basquete Next
+-- SETUP COMPLETO - Braska
 -- Execute este script no SQL Editor do seu projeto Supabase
 -- Dashboard > SQL Editor > New query > Cole o conteúdo > Run
 -- ============================================

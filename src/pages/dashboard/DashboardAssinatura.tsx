@@ -3,13 +3,13 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { CreditCard, CheckCircle, AlertCircle, ExternalLink, RefreshCw, Loader2 } from 'lucide-react';
 import { useTenant } from '../../contexts/TenantContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { brl, isTimeLimitedPlan } from '../../lib/planAccess';
 
 const PLANS = [
-  { id: 'teste',        name: 'Teste',          price: 1,   players: 5,    locations: 1,    note: 'único · para teste' },
-  { id: 'avulso',       name: 'Evento Avulso', price: 50,  players: 20,   locations: 1,    note: '72h · evento único' },
-  { id: 'basico',       name: 'Básico',         price: 100, players: 30,   locations: 1,    note: 'mensal' },
-  { id: 'profissional', name: 'Profissional',   price: 150, players: 60,   locations: 2,    note: 'mensal' },
-  { id: 'enterprise',   name: 'Enterprise',     price: 200, players: null, locations: null, note: 'mensal' },
+  { id: 'entrada',      name: 'Entrada',        price: 36.9, sessionPlayers: 20,   locations: 1,  note: 'mensal · 20 jogadores/sessão' },
+  { id: 'basico',       name: 'Básico',         price: 100,  sessionPlayers: 30,   locations: 1,  note: 'mensal · 30 jogadores/sessão' },
+  { id: 'profissional', name: 'Profissional',   price: 150,  sessionPlayers: 40,   locations: 2,  note: 'mensal · 40 jogadores/sessão' },
+  { id: 'enterprise',   name: 'Enterprise',     price: 200,  sessionPlayers: null, locations: 4,  note: 'mensal · sessão ilimitada' },
 ];
 
 const STATUS_INFO: Record<string, { label: string; color: string; bg: string }> = {
@@ -97,7 +97,9 @@ export default function DashboardAssinatura() {
             <p className={`font-semibold text-sm ${statusInfo.color}`}>{statusInfo.label}</p>
             {tenant?.current_period_ends_at && (
               <p className="text-xs text-slate-400 mt-0.5">
-                Próxima cobrança: {new Date(tenant.current_period_ends_at).toLocaleDateString('pt-BR')}
+                {isTimeLimitedPlan(tenant.plan_id)
+                  ? <>Acesso válido até {new Date(tenant.current_period_ends_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}</>
+                  : <>Próxima cobrança: {new Date(tenant.current_period_ends_at).toLocaleDateString('pt-BR')}</>}
               </p>
             )}
           </div>
@@ -139,9 +141,8 @@ export default function DashboardAssinatura() {
                   )}
                 </div>
                 <p className="text-sm text-slate-400 mt-0.5">
-                  R${p.price}/{p.note} ·{' '}
-                  {p.players ? `${p.players} jogadores` : 'Ilimitado'} ·{' '}
-                  {p.locations ? `${p.locations} ${p.locations === 1 ? 'local' : 'locais'}` : 'Locais ilimitados'}
+                  {brl(p.price)} · {p.note} ·{' '}
+                  {p.locations} {p.locations === 1 ? 'local' : 'locais'}
                 </p>
               </div>
               {!isCurrent && (

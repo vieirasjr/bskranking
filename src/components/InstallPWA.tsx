@@ -81,7 +81,7 @@ export function InstallPWA({darkMode}: {darkMode: boolean}) {
         <Download className="w-5 h-5 shrink-0 mt-0.5 text-orange-500" />
         <p className="text-sm leading-snug">
           No iPhone/iPad: toque em <span className="font-semibold">Compartilhar</span> e depois em{' '}
-          <span className="font-semibold">Adicionar à Tela de Início</span> para instalar o Basquete Next.
+          <span className="font-semibold">Adicionar à Tela de Início</span> para instalar o Braska.
         </p>
       </div>
     );

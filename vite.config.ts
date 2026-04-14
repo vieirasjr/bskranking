@@ -14,8 +14,8 @@ export default defineConfig(({mode}) => {
         registerType: 'prompt',
         includeAssets: ['pwa-192.png', 'pwa-512.png'],
         manifest: {
-          name: 'Basquete Next',
-          short_name: 'Basquete',
+          name: 'Braska',
+          short_name: 'Braska',
           description: 'Sistema de fila e ranking para basquete em tempo real.',
           theme_color: '#0f172a',
           background_color: '#0f172a',

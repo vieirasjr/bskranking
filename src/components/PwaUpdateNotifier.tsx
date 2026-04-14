@@ -2,8 +2,7 @@ import {useEffect} from 'react';
 import {useRegisterSW} from 'virtual:pwa-register/react';
 import {useNotifications} from '../contexts/NotificationContext';
 import {setPwaReloadHandler} from '../pwaUpdateController';
-
-const PWA_PROMPT_KEY = 'basquete-pwa-update-prompt';
+import {migratePwaSessionStorageOnce, PWA_UPDATE_SESSION_KEY} from '../lib/appStorage';
 
 /**
  * Registra o service worker e, quando há build novo no servidor, adiciona
@@ -20,14 +19,15 @@ export function PwaUpdateNotifier() {
   }, [updateServiceWorker]);
 
   useEffect(() => {
+    migratePwaSessionStorageOnce();
     if (!needRefreshFlag) {
-      sessionStorage.removeItem(PWA_PROMPT_KEY);
+      sessionStorage.removeItem(PWA_UPDATE_SESSION_KEY);
       return;
     }
-    if (sessionStorage.getItem(PWA_PROMPT_KEY)) return;
-    sessionStorage.setItem(PWA_PROMPT_KEY, '1');
+    if (sessionStorage.getItem(PWA_UPDATE_SESSION_KEY)) return;
+    sessionStorage.setItem(PWA_UPDATE_SESSION_KEY, '1');
     addNotification(
-      'Nova versão do Basquete Next está disponível. Toque em Atualizar agora para carregar as melhorias.',
+      'Nova versão do Braska está disponível. Toque em Atualizar agora para carregar as melhorias.',
       'info',
       {
         showToastForMs: 12_000,

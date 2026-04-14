@@ -194,7 +194,7 @@ function PlansTab({ token }: { token: string }) {
               </div>
               <div className="flex items-center gap-4 text-xs text-slate-400 mt-1">
                 <span>R${(plan.price_brl / 100).toFixed(2)}</span>
-                <span>{plan.max_players ?? '∞'} jogadores</span>
+                <span>{plan.max_players ?? '∞'} jogadores/sessão</span>
                 <span>{plan.max_locations ?? '∞'} locais</span>
                 <span>{plan.max_events ?? '∞'} eventos</span>
               </div>
@@ -443,7 +443,7 @@ function EventsTab({ token }: { token: string }) {
 
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">Título</label>
-            <input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} placeholder="Ex: Copa Basquete Next" className={inputCls} />
+            <input value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} placeholder="Ex: Copa Braska" className={inputCls} />
           </div>
 
           <div>
@@ -642,7 +642,7 @@ export default function SuperAdmin() {
           </div>
           <div>
             <p className="font-bold text-white text-sm">Super Admin</p>
-            <p className="text-[10px] text-slate-500">Basquete Next</p>
+            <p className="text-[10px] text-slate-500">Braska</p>
           </div>
         </div>
 

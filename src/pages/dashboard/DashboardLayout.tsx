@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Trophy, MapPin, CreditCard, LogOut, ExternalLink, AlertCircle, Menu, X, ChevronLeft, ChevronRight, LayoutDashboard, Calendar, Shield } from 'lucide-react';
+import { Trophy, MapPin, CreditCard, LogOut, ExternalLink, AlertCircle, Menu, X, ChevronLeft, ChevronRight, LayoutDashboard, Calendar, Shield, Clock } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
 import { supabase } from '../../supabase';
+import { formatAccessTimeRemaining, isTimeLimitedPlan } from '../../lib/planAccess';
 
 const STATUS_COLOR: Record<string, string> = {
   active:    'bg-green-500',
@@ -27,11 +28,17 @@ const NAV_ITEMS = [
 
 export default function DashboardLayout() {
   const { signOut, user } = useAuth();
-  const { tenant, locations, loading } = useTenant();
+  const { tenant, locations, loading, plan } = useTenant();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -42,6 +49,11 @@ export default function DashboardLayout() {
       .maybeSingle()
       .then(({ data }) => setIsAdmin(data?.issuperusuario === true));
   }, [user?.id]);
+
+  const accessCountdown =
+    tenant?.status === 'active' && isTimeLimitedPlan(tenant.plan_id) && tenant.current_period_ends_at
+      ? formatAccessTimeRemaining(tenant.current_period_ends_at)
+      : null;
 
   if (!loading && !tenant) {
     return (
@@ -78,11 +90,24 @@ export default function DashboardLayout() {
         </div>
         {(!collapsed || isMobile) && (
           <div className="min-w-0">
-            <p className="font-bold text-white text-sm truncate">{tenant?.name ?? 'Basquete Next'}</p>
+            <p className="font-bold text-white text-sm truncate">{tenant?.name ?? 'Braska'}</p>
             {tenant && (
               <div className="flex items-center gap-1.5 mt-0.5">
                 <div className={`w-1.5 h-1.5 rounded-full ${STATUS_COLOR[tenant.status] ?? 'bg-slate-500'}`} />
                 <span className="text-[10px] text-slate-400">{STATUS_LABEL[tenant.status] ?? tenant.status}</span>
+              </div>
+            )}
+            {tenant?.status === 'active' && accessCountdown && (!collapsed || isMobile) && (
+              <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-orange-500/10 border border-orange-500/20 px-2 py-1.5">
+                <Clock className="w-3.5 h-3.5 text-orange-400 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-[9px] font-semibold uppercase tracking-wide text-orange-300/90 truncate">
+                    Acesso temporário
+                  </p>
+                  <p className="text-[10px] text-orange-100/95 leading-tight">
+                    Falta: <span className="font-bold text-white">{accessCountdown}</span>
+                  </p>
+                </div>
               </div>
             )}
           </div>
@@ -160,7 +185,7 @@ export default function DashboardLayout() {
           <div className="w-7 h-7 bg-orange-500 rounded-lg flex items-center justify-center">
             <Trophy className="w-3.5 h-3.5 text-white" />
           </div>
-          <span className="font-bold text-white text-sm truncate max-w-[160px]">{tenant?.name ?? 'Basquete Next'}</span>
+          <span className="font-bold text-white text-sm truncate max-w-[160px]">{tenant?.name ?? 'Braska'}</span>
         </div>
         {tenant && (
           <div className={`w-2 h-2 rounded-full ${STATUS_COLOR[tenant.status] ?? 'bg-slate-500'}`} />
