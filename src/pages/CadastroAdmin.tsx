@@ -1,28 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Trophy, Mail, Lock, User, Eye, EyeOff, AlertCircle, ArrowLeft, Check } from 'lucide-react';
+import { Trophy, Mail, Lock, User, Eye, EyeOff, AlertCircle, ArrowLeft, Check, Loader2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../supabase';
 import { appPublicHost } from '../lib/publicAppUrl';
 import { brl } from '../lib/planAccess';
 
-const PLANS = [
-  { id: 'teste', name: 'Experiência 7 dias', price: 1, period: '7 dias', desc: '5 jogadores/sessão · 1 local', badge: 'R$ 1,00' },
-  { id: 'entrada', name: 'Entrada', price: 36.9, period: 'mês', desc: 'Ranking ilimitado · 20 jogadores/sessão · 1 local', badge: 'R$ 36,90' },
-  { id: 'basico', name: 'Básico', price: 100, period: 'mês', desc: 'Ranking ilimitado · 30 jogadores/sessão · 1 local', badge: null },
-  { id: 'profissional', name: 'Profissional', price: 150, period: 'mês', desc: 'Ranking ilimitado · 40 jogadores/sessão · 2 locais', badge: 'Popular', highlight: true },
-  { id: 'enterprise', name: 'Enterprise', price: 200, period: 'mês', desc: 'Tudo ilimitado · 4 locais', badge: 'Completo' },
-];
+interface DbPlan {
+  id: string;
+  name: string;
+  price_brl: number;
+  max_players: number | null;
+  max_locations: number | null;
+  max_events: number | null;
+  is_active: boolean;
+}
 
-const PLAN_NAMES: Record<string, string> = {
-  teste: 'Experiência 7 dias — R$1,00',
-  entrada: 'Entrada — R$36,90/mês',
-  avulso: 'Evento Avulso — R$50/evento',
-  basico: 'Básico — R$100/mês',
-  profissional: 'Profissional — R$150/mês',
-  enterprise: 'Enterprise — R$200/mês',
-};
+const TIME_LIMITED_IDS = new Set(['avulso', 'teste']);
 
 function nameToSlug(name: string): string {
   return name
@@ -46,6 +41,16 @@ export default function CadastroAdmin() {
   const [selectedPlan, setSelectedPlan] = useState(preselectedPlan ?? '');
   // Se já tem plano pré-selecionado E sessão, pula para step 3; se tem plano e sem sessão, step 2; senão step 1
   const [step, setStep] = useState<1 | 2 | 3>(preselectedPlan ? (session ? 3 : 2) : 1);
+  const [dbPlans, setDbPlans] = useState<DbPlan[]>([]);
+
+  useEffect(() => {
+    supabase
+      .from('plans')
+      .select('*')
+      .eq('is_active', true)
+      .order('price_brl')
+      .then(({ data }) => { if (data) setDbPlans(data); });
+  }, []);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
@@ -145,7 +150,7 @@ export default function CadastroAdmin() {
           <h1 className="text-2xl font-bold text-white">Criar conta</h1>
           {selectedPlan && step > 1 && (
             <p className="text-slate-400 text-sm mt-1">
-              Plano: <span className="text-orange-400 font-semibold">{PLAN_NAMES[selectedPlan] ?? selectedPlan}</span>
+              Plano: <span className="text-orange-400 font-semibold">{dbPlans.find((p) => p.id === selectedPlan)?.name ?? selectedPlan}</span>
             </p>
           )}
         </div>
@@ -167,35 +172,39 @@ export default function CadastroAdmin() {
             <>
               <h2 className="font-bold text-white mb-4 text-center">Escolha seu plano</h2>
               <div className="space-y-3">
-                {PLANS.map((plan) => (
+                {dbPlans.length === 0 && (
+                  <div className="flex items-center justify-center py-6 gap-2 text-slate-400">
+                    <Loader2 className="w-4 h-4 animate-spin" /> <span className="text-sm">Carregando planos...</span>
+                  </div>
+                )}
+                {dbPlans.map((plan) => {
+                  const price = plan.price_brl / 100;
+                  const isHighlight = price > 120 && price <= 170;
+                  const period = TIME_LIMITED_IDS.has(plan.id) ? (plan.id === 'teste' ? '7 dias' : '72h') : 'mês';
+                  const desc = `${plan.max_players ? `${plan.max_players} jogadores/sessão` : 'Sessão ilimitada'} · ${plan.max_locations ?? '∞'} ${(plan.max_locations ?? 2) === 1 ? 'local' : 'locais'}`;
+                  return (
                   <button
                     key={plan.id}
                     onClick={() => { setSelectedPlan(plan.id); setError(null); setStep(session ? 3 : 2); }}
                     className={`w-full p-4 rounded-2xl border text-left transition-all group ${
-                      plan.highlight
+                      isHighlight
                         ? 'border-orange-500/50 bg-orange-500/5 hover:border-orange-500 hover:bg-orange-500/10'
                         : 'border-slate-700 bg-slate-800/60 hover:border-orange-500/40 hover:bg-slate-800'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="font-bold text-white">{plan.name}</p>
-                          {plan.badge && (
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                              plan.highlight ? 'bg-orange-500 text-white' : 'bg-slate-600 text-slate-200'
-                            }`}>{plan.badge}</span>
-                          )}
-                        </div>
-                        <p className="text-xs text-slate-400 mt-0.5">{plan.desc}</p>
+                        <p className="font-bold text-white">{plan.name}</p>
+                        <p className="text-xs text-slate-400 mt-0.5">{desc}</p>
                       </div>
                       <div className="text-right shrink-0">
-                        <p className="text-xl font-black text-white">{brl(plan.price)}</p>
-                        <p className="text-[10px] text-slate-500">/{plan.period}</p>
+                        <p className="text-xl font-black text-white">{brl(price)}</p>
+                        <p className="text-[10px] text-slate-500">/{period}</p>
                       </div>
                     </div>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </>
           ) : step === 2 ? (

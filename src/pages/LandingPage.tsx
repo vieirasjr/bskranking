@@ -1,110 +1,45 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield } from 'lucide-react';
+import { Trophy, MapPin, Users, BarChart3, Check, Zap, Shield, Loader2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '../supabase';
 import { getThemeDarkStored } from '../lib/appStorage';
 import { brl } from '../lib/planAccess';
 
-const PLANS = [
-  {
-    id: 'teste',
-    name: 'Experiência 7 dias',
-    price: 1,
-    period: '7 dias',
-    sessionPlayers: 5,
-    locations: 1,
-    features: [
-      'Acesso completo por 7 dias',
-      'Até 5 jogadores por sessão',
-      '1 local de partidas',
-      '1 evento',
-      'Fila e times automáticos',
-    ],
-    highlight: false,
-    badge: 'Teste',
-  },
-  {
-    id: 'entrada',
-    name: 'Entrada',
-    price: 36.9,
-    period: 'mês',
-    sessionPlayers: 20,
-    locations: 1,
-    features: [
-      'Jogadores ilimitados no ranking',
-      'Até 20 jogadores por sessão (times + espera)',
-      '1 local de partidas',
-      '1 evento (torneio, campeonato, festival)',
-      'Fila e times automáticos',
-    ],
-    highlight: false,
-    badge: 'Entrada',
-  },
-  {
-    id: 'basico',
-    name: 'Básico',
-    price: 100,
-    period: 'mês',
-    sessionPlayers: 30,
-    locations: 1,
-    features: [
-      'Jogadores ilimitados no ranking',
-      'Até 30 jogadores por sessão (times + espera)',
-      '1 local de partidas',
-      'Até 2 eventos (torneios, campeonatos, festivais)',
-      'Link público exclusivo',
-      'Fila automática',
-      'Placar ao vivo',
-      'Ranking com filtros',
-    ],
-    highlight: false,
-    badge: null,
-  },
-  {
-    id: 'profissional',
-    name: 'Profissional',
-    price: 150,
-    period: 'mês',
-    sessionPlayers: 40,
-    locations: 2,
-    features: [
-      'Jogadores ilimitados no ranking',
-      'Até 40 jogadores por sessão (times + espera)',
-      '2 locais de partidas',
-      'Até 6 eventos (torneios, campeonatos, festivais)',
-      'Links públicos por local',
-      'Fila automática',
-      'Placar ao vivo',
-      'Ranking com filtros por local',
-      'Ranking consolidado',
-    ],
-    highlight: true,
-    badge: 'Mais popular',
-  },
-  {
-    id: 'enterprise',
-    name: 'Enterprise',
-    price: 200,
-    period: 'mês',
-    sessionPlayers: null,
-    locations: 4,
-    features: [
-      'Jogadores ilimitados no ranking',
-      'Jogadores ilimitados por sessão',
-      'Até 4 locais de partidas',
-      'Eventos ilimitados (torneios, campeonatos, festivais)',
-      'Fila de espera ilimitada',
-      'Links públicos por local',
-      'Fila automática',
-      'Placar ao vivo',
-      'Ranking completo por local',
-      'Ranking consolidado',
-    ],
-    highlight: false,
-    badge: 'Completo',
-  },
-];
+interface DbPlan {
+  id: string;
+  name: string;
+  price_brl: number;
+  max_players: number | null;
+  max_locations: number | null;
+  max_events: number | null;
+  is_active: boolean;
+}
+
+// Planos que expiram por tempo (não mensais)
+const TIME_LIMITED_IDS = new Set(['avulso', 'teste']);
+
+// Gera a lista de features a partir dos atributos do plano
+function buildFeatures(p: DbPlan): string[] {
+  const f: string[] = [];
+  f.push('Jogadores ilimitados no ranking');
+  f.push(p.max_players ? `Até ${p.max_players} jogadores por sessão` : 'Jogadores ilimitados por sessão');
+  f.push(p.max_locations ? `${p.max_locations} ${p.max_locations === 1 ? 'local' : 'locais'} de partidas` : 'Locais ilimitados');
+  f.push(p.max_events ? `${p.max_events === 1 ? '1 evento' : `Até ${p.max_events} eventos`}` : 'Eventos ilimitados');
+  f.push('Fila e times automáticos');
+  if ((p.max_locations ?? 0) > 1) f.push('Ranking consolidado');
+  return f;
+}
+
+// Determina badge e highlight com base no preço
+function getPlanMeta(p: DbPlan): { badge: string | null; highlight: boolean; period: string } {
+  if (TIME_LIMITED_IDS.has(p.id)) return { badge: p.id === 'teste' ? 'Teste' : 'Avulso', highlight: false, period: p.id === 'teste' ? '7 dias' : '72h' };
+  const price = p.price_brl / 100;
+  if (price <= 50) return { badge: 'Entrada', highlight: false, period: 'mês' };
+  if (price <= 120) return { badge: null, highlight: false, period: 'mês' };
+  if (price <= 170) return { badge: 'Mais popular', highlight: true, period: 'mês' };
+  return { badge: 'Completo', highlight: false, period: 'mês' };
+}
 
 interface ActiveLocation {
   name: string;
@@ -117,6 +52,7 @@ interface ActiveLocation {
 export default function LandingPage() {
   const navigate = useNavigate();
   const [activeLocations, setActiveLocations] = useState<ActiveLocation[]>([]);
+  const [plans, setPlans] = useState<DbPlan[]>([]);
   const [darkMode] = useState<boolean>(() => {
     const saved = getThemeDarkStored();
     if (saved === 'true') return true;
@@ -134,6 +70,16 @@ export default function LandingPage() {
         if (error) { console.error('Locations fetch error:', error); return; }
         if (!data || data.length === 0) return;
         setActiveLocations(data.map((d: any) => ({ name: d.name, slug: d.slug, description: d.description ?? null, image_url: d.image_url ?? null, website: d.website ?? null })));
+      });
+
+    supabase
+      .from('plans')
+      .select('*')
+      .eq('is_active', true)
+      .order('price_brl')
+      .then(({ data, error }) => {
+        if (error) { console.error('Plans fetch error:', error); return; }
+        if (data) setPlans(data);
       });
   }, []);
 
@@ -270,51 +216,64 @@ export default function LandingPage() {
           <div className="pointer-events-none absolute right-0 top-0 bottom-5 w-20 z-10
             bg-gradient-to-l from-[#07090f] via-[#07090f]/70 to-transparent lg:hidden" />
 
+          {plans.length === 0 ? (
+            <div className="flex items-center justify-center py-12 gap-3 text-slate-400">
+              <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
+              <span className="text-sm">Carregando planos...</span>
+            </div>
+          ) : (
           <div
-            className="flex gap-4 overflow-x-auto scroll-smooth snap-x snap-mandatory pb-5 px-6 [&::-webkit-scrollbar]:hidden lg:overflow-visible lg:grid lg:grid-cols-5 lg:gap-5 lg:snap-none"
+            className={`flex gap-4 overflow-x-auto scroll-smooth snap-x snap-mandatory pb-5 px-6 [&::-webkit-scrollbar]:hidden lg:overflow-visible lg:grid lg:gap-5 lg:snap-none ${
+              plans.length <= 3 ? 'lg:grid-cols-3' : plans.length === 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-5'
+            }`}
             style={{ scrollbarWidth: 'none' }}
           >
 
-            {PLANS.map((plan) => (
+            {plans.map((dbPlan) => {
+              const meta = getPlanMeta(dbPlan);
+              const price = dbPlan.price_brl / 100;
+              const features = buildFeatures(dbPlan);
+
+              return (
               <div
-                key={plan.id}
+                key={dbPlan.id}
                 className={`relative flex flex-col shrink-0 snap-start rounded-2xl border p-6 w-72 lg:w-auto
-                  ${plan.highlight
+                  ${meta.highlight
                     ? 'border-orange-500 bg-orange-500/5 shadow-xl shadow-orange-500/10'
                     : 'border-slate-700/50 bg-slate-800/40'
                   }`}
               >
                 {/* Badge */}
                 <div className="h-6 mb-3 flex items-center">
-                  {plan.badge ? (
+                  {meta.badge ? (
                     <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap
-                      ${plan.highlight ? 'bg-orange-500 text-white' : 'bg-slate-600 text-slate-200'}`}>
-                      {plan.badge}
+                      ${meta.highlight ? 'bg-orange-500 text-white' : 'bg-slate-600 text-slate-200'}`}>
+                      {meta.badge}
                     </span>
                   ) : null}
                 </div>
 
                 {/* Nome e preço */}
                 <div className="mb-4">
-                  <p className={`text-sm font-semibold mb-1 ${plan.highlight ? 'text-orange-400' : 'text-slate-300'}`}>
-                    {plan.name}
+                  <p className={`text-sm font-semibold mb-1 ${meta.highlight ? 'text-orange-400' : 'text-slate-300'}`}>
+                    {dbPlan.name}
                   </p>
                   <div className="flex items-end gap-1 flex-wrap">
-                    <span className="text-4xl font-black text-white">{brl(plan.price)}</span>
-                    <span className="text-slate-300 text-sm mb-1">/{plan.period}</span>
+                    <span className="text-4xl font-black text-white">{brl(price)}</span>
+                    <span className="text-slate-300 text-sm mb-1">/{meta.period}</span>
                   </div>
                   <p className="text-slate-400 text-xs mt-1.5">
                     Ranking ilimitado ·{' '}
-                    {plan.sessionPlayers ? `${plan.sessionPlayers} jogadores/sessão` : 'Sessão ilimitada'} ·{' '}
-                    {plan.locations} {plan.locations === 1 ? 'local' : 'locais'}
+                    {dbPlan.max_players ? `${dbPlan.max_players} jogadores/sessão` : 'Sessão ilimitada'} ·{' '}
+                    {dbPlan.max_locations ?? '∞'} {(dbPlan.max_locations ?? 2) === 1 ? 'local' : 'locais'}
                   </p>
                 </div>
 
                 {/* Features */}
                 <ul className="space-y-2 flex-1 mb-6">
-                  {plan.features.map((f) => (
+                  {features.map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm">
-                      <Check className={`w-4 h-4 shrink-0 mt-0.5 ${plan.highlight ? 'text-orange-500' : 'text-slate-400'}`} />
+                      <Check className={`w-4 h-4 shrink-0 mt-0.5 ${meta.highlight ? 'text-orange-500' : 'text-slate-400'}`} />
                       <span className="text-slate-200">{f}</span>
                     </li>
                   ))}
@@ -322,9 +281,9 @@ export default function LandingPage() {
 
                 {/* CTA */}
                 <button
-                  onClick={() => navigate(`/cadastro?plano=${plan.id}`)}
+                  onClick={() => navigate(`/cadastro?plano=${dbPlan.id}`)}
                   className={`w-full py-3 rounded-xl font-bold transition-all text-sm
-                    ${plan.highlight
+                    ${meta.highlight
                       ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20'
                       : 'bg-slate-700 hover:bg-slate-600 text-white border border-slate-600'
                     }`}
@@ -332,11 +291,13 @@ export default function LandingPage() {
                   Assinar agora
                 </button>
               </div>
-            ))}
+              );
+            })}
 
             {/* Espaço no final para continuidade (só mobile) */}
             <div className="shrink-0 w-2 lg:hidden" />
           </div>
+          )}
         </div>
       </section>
 

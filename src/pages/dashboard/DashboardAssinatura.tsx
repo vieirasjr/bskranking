@@ -1,17 +1,20 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { CreditCard, CheckCircle, AlertCircle, ExternalLink, RefreshCw, Loader2 } from 'lucide-react';
 import { useTenant } from '../../contexts/TenantContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { brl, isTimeLimitedPlan } from '../../lib/planAccess';
+import { supabase } from '../../supabase';
 
-const PLANS = [
-  { id: 'teste',        name: 'Experiência 7 dias', price: 1,    sessionPlayers: 5,    locations: 1,  note: '7 dias · 5 jogadores/sessão' },
-  { id: 'entrada',      name: 'Entrada',        price: 36.9, sessionPlayers: 20,   locations: 1,  note: 'mensal · 20 jogadores/sessão' },
-  { id: 'basico',       name: 'Básico',         price: 100,  sessionPlayers: 30,   locations: 1,  note: 'mensal · 30 jogadores/sessão' },
-  { id: 'profissional', name: 'Profissional',   price: 150,  sessionPlayers: 40,   locations: 2,  note: 'mensal · 40 jogadores/sessão' },
-  { id: 'enterprise',   name: 'Enterprise',     price: 200,  sessionPlayers: null, locations: 4,  note: 'mensal · sessão ilimitada' },
-];
+interface DbPlan {
+  id: string;
+  name: string;
+  price_brl: number;
+  max_players: number | null;
+  max_locations: number | null;
+  max_events: number | null;
+  is_active: boolean;
+}
 
 const STATUS_INFO: Record<string, { label: string; color: string; bg: string }> = {
   active:    { label: 'Assinatura ativa',       color: 'text-green-400',  bg: 'bg-green-500/10 border-green-500/20' },
@@ -27,6 +30,16 @@ export default function DashboardAssinatura() {
   const mpResult = searchParams.get('mp');
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dbPlans, setDbPlans] = useState<DbPlan[]>([]);
+
+  useEffect(() => {
+    supabase
+      .from('plans')
+      .select('*')
+      .eq('is_active', true)
+      .order('price_brl')
+      .then(({ data }) => { if (data) setDbPlans(data); });
+  }, []);
 
   const handleSubscribe = (planId: string) => {
     setLoading(planId);
@@ -124,8 +137,16 @@ export default function DashboardAssinatura() {
         {tenant?.status === 'active' ? 'Trocar de plano' : 'Escolha um plano'}
       </h2>
       <div className="space-y-3">
-        {PLANS.map((p) => {
+        {dbPlans.length === 0 && (
+          <div className="flex items-center justify-center py-8 gap-2 text-slate-400">
+            <Loader2 className="w-4 h-4 animate-spin" /> <span className="text-sm">Carregando planos...</span>
+          </div>
+        )}
+        {dbPlans.map((p) => {
           const isCurrent = plan?.id === p.id && tenant?.status === 'active';
+          const price = p.price_brl / 100;
+          const locs = p.max_locations ?? '∞';
+          const players = p.max_players ? `${p.max_players} jogadores/sessão` : 'sessão ilimitada';
           return (
             <div key={p.id} className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
               isCurrent
@@ -142,8 +163,7 @@ export default function DashboardAssinatura() {
                   )}
                 </div>
                 <p className="text-sm text-slate-400 mt-0.5">
-                  {brl(p.price)} · {p.note} ·{' '}
-                  {p.locations} {p.locations === 1 ? 'local' : 'locais'}
+                  {brl(price)} · {players} · {locs} {(p.max_locations ?? 2) === 1 ? 'local' : 'locais'}
                 </p>
               </div>
               {!isCurrent && (
