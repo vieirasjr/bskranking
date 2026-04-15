@@ -179,8 +179,17 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
         }
 
         if (profile) {
+          let resolvedAdminPin: string | null = profile.admin_pin ?? null;
+          if (hasAdminAccess && !resolvedAdminPin) {
+            const newPin = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+            const { error: pinError } = await supabase
+              .from('basquete_users')
+              .update({ admin_pin: newPin })
+              .eq('id', profile.id);
+            if (!pinError) resolvedAdminPin = newPin;
+          }
           setProfileId(profile.id);
-          setAdminPin(profile.admin_pin ?? null);
+          setAdminPin(resolvedAdminPin);
           setForm({
             display_name: profile.display_name ?? '',
             full_name: profile.full_name ?? '',
@@ -235,7 +244,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
     }
 
     loadProfile();
-  }, [user?.id]);
+  }, [user?.id, hasAdminAccess]);
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -735,7 +744,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
           </div>
         </div>
 
-        {hasAdminAccess && adminPin && (
+        {hasAdminAccess && (
           <div className="space-y-2">
             <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
               PIN de Administrador
@@ -745,7 +754,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
                 'flex-1 px-4 py-3 rounded-xl border text-center text-2xl font-black tracking-[0.3em]',
                 darkMode ? 'bg-slate-800/50 border-slate-700 text-orange-400' : 'bg-slate-50 border-slate-200 text-orange-600'
               )}>
-                {adminPin}
+                {adminPin ?? '----'}
               </div>
               <button
                 type="button"
@@ -755,11 +764,13 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
                   darkMode ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
                 )}
               >
-                Gerar novo
+                {adminPin ? 'Gerar novo' : 'Gerar PIN'}
               </button>
             </div>
             <p className={cn('text-xs', darkMode ? 'text-slate-500' : 'text-slate-400')}>
-              Use este PIN para confirmar ações administrativas. Visível apenas para você.
+              {adminPin
+                ? 'Use este PIN para confirmar ações administrativas. Visível apenas para você.'
+                : 'Você ainda não tem PIN salvo. Toque em "Gerar PIN" para criar agora.'}
             </p>
           </div>
         )}

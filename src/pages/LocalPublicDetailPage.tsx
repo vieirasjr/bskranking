@@ -346,14 +346,7 @@ export default function LocalPublicDetailPage() {
 
       <div className={`fixed bottom-0 left-0 right-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] bg-gradient-to-t z-20 ${darkMode ? 'from-[#07090f] via-[#07090f] to-transparent' : 'from-slate-100 via-slate-100 to-transparent'}`}>
         <div className="w-full max-w-xl mx-auto">
-          <button
-            type="button"
-            onClick={goToTenantLogin}
-            className="w-full py-3.5 rounded-2xl font-black text-sm bg-[#1d1f26] hover:bg-[#11131a] text-white shadow-xl flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
-          >
-            <Users className="w-5 h-5" />
-            Entrar na lista
-          </button>
+         
         </div>
       </div>
     </div>

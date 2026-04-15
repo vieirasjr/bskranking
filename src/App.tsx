@@ -275,7 +275,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     if (saved === 'false') return false;
     return true;
   });
-  const [isAdminMode, setIsAdminMode] = useState(!!isOwner);
+  const [isAdminMode, setIsAdminMode] = useState(false);
   const [hasAdminAccess, setHasAdminAccess] = useState<boolean>(!!isOwner);
   const handleGoGlobal = () => {
     window.location.assign('/locais');
@@ -312,16 +312,18 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [showControlRequestModal, setShowControlRequestModal] = useState(false);
   const isSessionController = !!user && sessionControlledBy === user.id;
   const hasActiveController = !!sessionControlledBy;
+  const canManageSessionPlayers = isAdminMode && (!isMatchStarted || !hasActiveController || isSessionController);
   const [venueModalityLabel, setVenueModalityLabel] = useState('Basquete 5x5');
   const [showHeaderQrModal, setShowHeaderQrModal] = useState(false);
   const adminSuggestionsRef = useRef<HTMLDivElement | null>(null);
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
-    activeTab === 'lista' && !isAdminMode && !!venueCoords,
+    activeTab === 'lista' && !isAdminMode && !hasAdminAccess && !!venueCoords,
     venueCoords
   );
 
   const canSeeList = isAdminMode || (isWithinRadius === true && isMatchStarted);
   const canAddToList = isAdminMode || (isWithinRadius === true && isMatchStarted);
+  const canUseQueueInput = !isAdminMode || canManageSessionPlayers;
   const headerQrUrl = locationSlug ? `${window.location.origin}/${locationSlug}` : null;
 
   const profileComplete = !!(userProfile?.display_name?.trim() && userProfile?.avatar_url);
@@ -332,8 +334,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       setIsAdminMode(false);
       setAdminModeStored(false);
     } else if (isOwner) {
-      setIsAdminMode(true);
-      setAdminModeStored(true);
+      // Owner mantém acesso administrativo e preserva o modo admin previamente validado por PIN.
+      const storedAdminMode = getAdminModeStored();
+      setIsAdminMode(storedAdminMode);
     }
   }, [user, isOwner]);
 
@@ -662,9 +665,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     fetchPartidaSessao(currentPartidaSessaoId);
   }, [currentPartidaSessaoId, players, fetchPartidaSessao]);
 
-  // Admin por email no banco (basquete_users.admin): só ativa se for owner deste local
+  // Admin por email no banco (basquete_users.admin): concede acesso mesmo sem ser owner.
   useEffect(() => {
-    if (!user?.email || !isOwner) return;
+    if (!user?.email) return;
     const checkAdmin = async () => {
       const { data, error } = await supabase
         .from('basquete_users')
@@ -673,12 +676,13 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         .maybeSingle();
       if (!error && data?.admin === true) {
         setHasAdminAccess(true);
-        setIsAdminMode(true);
-        setAdminModeStored(true);
+        // Usuário com acesso admin só entra em modo admin após validação de PIN.
+        setIsAdminMode(false);
+        setAdminModeStored(false);
       }
     };
     checkAdmin();
-  }, [user?.email, isOwner]);
+  }, [user?.email]);
 
   // Polling do placar: atualização em tempo real para todos (logados ou não)
   const shouldPollPlacar = activeTab === 'lista' && !!currentPartidaSessaoId;
@@ -769,7 +773,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         // code generation failed silently — will retry next login
       }
     }
-    if (data && !data.admin_pin && isOwner) {
+    if (data && !data.admin_pin && hasAdminAccess) {
       try {
         const newPin = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
         await supabase.from('basquete_users').update({ admin_pin: newPin }).eq('id', data.id);
@@ -779,7 +783,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       }
     }
     setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url, player_code: data.player_code ?? null, admin_pin: data.admin_pin ?? null } : null);
-  }, [user?.id, user?.email, user?.user_metadata, isOwner]);
+  }, [user?.id, user?.email, user?.user_metadata, hasAdminAccess]);
 
   useEffect(() => {
     fetchUserProfile();
@@ -798,6 +802,24 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       supabase.removeChannel(channel);
     };
   }, [fetchSession]);
+
+  // Fallback de sincronização entre navegadores/abas quando a sessão está iniciada.
+  // Evita atraso visual de controle após transferência.
+  useEffect(() => {
+    if (!isMatchStarted) return;
+    const interval = setInterval(() => {
+      fetchSession();
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [isMatchStarted, fetchSession]);
+
+  // Se o usuário recebeu o controle e tem acesso admin, ativa modo admin automaticamente
+  // para exibir imediatamente os controles de gestão.
+  useEffect(() => {
+    if (!hasAdminAccess || !isMatchStarted || !isSessionController || isAdminMode) return;
+    setIsAdminMode(true);
+    setAdminModeStored(true);
+  }, [hasAdminAccess, isMatchStarted, isSessionController, isAdminMode]);
 
   // Realtime: placar - atualização instantânea para todos os usuários (logados ou não)
   useEffect(() => {
@@ -899,6 +921,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const PLAYERS_PER_TEAM = 5;
 
   const addPlayerAsRegistered = async () => {
+    if (isAdminMode && !canManageSessionPlayers) {
+      addNotification('Solicite o controle da sessao para adicionar jogadores.', 'warning', { showToastForMs: 3500 });
+      return;
+    }
     if (!canAddToList || !userProfile?.display_name?.trim() || isGuest) return;
 
     if (maxPlayers != null && players.length >= maxPlayers) {
@@ -951,6 +977,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   };
 
   const addPlayerByNameUnregistered = async () => {
+    if (isAdminMode && !canManageSessionPlayers) {
+      addNotification('Solicite o controle da sessao para adicionar jogadores.', 'warning', { showToastForMs: 3500 });
+      return;
+    }
     if (!canAddToList) return;
     const name = unregisteredAddName.trim();
     if (!name) return;
@@ -1003,7 +1033,12 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   };
 
   const addPlayerByNameForAdmin = async () => {
-    if (!isAdminMode || !canAddToList) return;
+    if (!isAdminMode || !canAddToList || !canManageSessionPlayers) {
+      if (isAdminMode && isMatchStarted && !isSessionController) {
+        addNotification('Solicite o controle da sessao para adicionar jogadores como gestor.', 'warning', { showToastForMs: 3500 });
+      }
+      return;
+    }
 
     // Build the list of players to add: selected tags first, then any typed name
     const toAdd: { name: string; userId: string | null }[] = [];
@@ -1105,6 +1140,13 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
+  // Fechar modal de stats se o admin perder o controle da sessão
+  useEffect(() => {
+    if (!canManageSessionPlayers && statsModalPlayer) {
+      setStatsModalPlayer(null);
+    }
+  }, [canManageSessionPlayers, statsModalPlayer]);
+
   // Bloquear scroll do body em mobile quando modal de stats aberto (evita que toque scrolle em vez de registrar)
   useEffect(() => {
     if (statsModalPlayer) {
@@ -1126,7 +1168,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active, over } = event;
-    if (!over || active.id === over.id || !isAdminMode) return;
+    if (!over || active.id === over.id || !canManageSessionPlayers) return;
     const oldIndex = waitingList.findIndex((p) => p.id === active.id);
     const newIndex = waitingList.findIndex((p) => p.id === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
@@ -1134,7 +1176,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     const targetPlayer = waitingList[newIndex];
     await supabase.from('players').update({ joined_at: targetPlayer.joined_at }).eq('id', draggedPlayer.id);
     await supabase.from('players').update({ joined_at: draggedPlayer.joined_at }).eq('id', targetPlayer.id);
-  }, [isAdminMode, waitingList]);
+  }, [canManageSessionPlayers, waitingList]);
 
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -1142,7 +1184,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   );
 
   const handleRemoveAttempt = async (playerId: string) => {
-    if (!isAdminMode) return;
+    if (!canManageSessionPlayers) {
+      addNotification('Apenas o gestor com controle da sessao pode remover jogadores.', 'warning', { showToastForMs: 3500 });
+      return;
+    }
     const playerToRemove = players.find((p) => p.id === playerId);
     if (!playerToRemove) return;
     if (!window.confirm(`Remover ${playerToRemove.name} da lista?`)) return;
@@ -1173,7 +1218,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
   const handleEndMatchAttempt = () => {
     if (!isAdminMode) return;
-    if (hasActiveController && !isSessionController) {
+    if (isMatchStarted && !isSessionController) {
       addNotification('Apenas o gestor que iniciou a sessão pode encerrá-la.', 'warning', { showToastForMs: 4000 });
       return;
     }
@@ -1184,7 +1229,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
   // ── Controle de gestão da sessão ─────────────────────────
   const requestSessionControl = async () => {
-    if (!user || !isAdminMode || !isMatchStarted) return;
+    if (!user || !hasAdminAccess || !isMatchStarted) return;
     if (isSessionController) return;
     const displayName = userProfile?.display_name?.trim() || user.email?.split('@')[0] || 'Admin';
     await supabase.from('session').update({
@@ -1196,7 +1241,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   };
 
   const acceptControlRequest = async () => {
-    if (!controlRequestedBy) return;
+    if (!controlRequestedBy || !isSessionController) return;
     await supabase.from('session').update({
       controlled_by: controlRequestedBy,
       control_requested_by: null,
@@ -1247,7 +1292,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
       return;
     }
     if (isRegisteringStatRef.current) return;
-    if (isMatchStarted && hasActiveController && !isSessionController) {
+    if (!canManageSessionPlayers) {
       addNotification('Apenas o gestor que iniciou a sessão pode registrar estatísticas.', 'warning', { showToastForMs: 4000 });
       return;
     }
@@ -1434,6 +1479,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
   const removePlayerStat = async (player: Player, stat: 'points_1' | 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists' | 'rebounds') => {
     if (!isAdminMode) return;
+    if (!canManageSessionPlayers) {
+      addNotification('Apenas o gestor com controle da sessao pode ajustar estatísticas.', 'warning', { showToastForMs: 4000 });
+      return;
+    }
     if (isRegisteringStatRef.current) return;
     isRegisteringStatRef.current = true;
     const statLabels: Record<typeof stat, string> = {
@@ -1537,7 +1586,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   // Ajusta stat inline no resumo da partida — sem spinner, sem fechar modal
   const adjustStatFromSummary = async (player: Player, statKey: 'points' | 'blocks' | 'steals' | 'assists' | 'rebounds', delta: number) => {
     if (!isAdminMode && delta < 0) return;
-    if (isMatchStarted && hasActiveController && !isSessionController) {
+    if (!canManageSessionPlayers) {
       addNotification('Apenas o gestor da sessão pode ajustar estatísticas.', 'warning', { showToastForMs: 4000 });
       return;
     }
@@ -1666,7 +1715,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   };
 
   const reinsertPlayer = async (player: Player) => {
-    if (!isAdminMode) return;
+    if (!canManageSessionPlayers) return;
     const info = suspendedPlayers[player.id];
     if (!info) return;
 
@@ -1710,7 +1759,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     if (!showWinnerModal) return;
     if (team1MatchPoints < 12 && team2MatchPoints < 12) return;
     if (isStartingNextMatch) return;
-    if (hasActiveController && !isSessionController) return;
+    if (isMatchStarted && !isSessionController) return;
 
     const winningTeamKey = team1MatchPoints >= 12 ? 'team1' : 'team2';
     const losingTeamKey = winningTeamKey === 'team1' ? 'team2' : 'team1';
@@ -2761,13 +2810,24 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 )}
               >
                 {!isAdminMode && hasAdminAccess ? (
-                  <button
-                    type="button"
-                    onClick={() => { handleAdminActivate(); setHeaderMenuOpen(false); }}
-                    className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
-                  >
-                    Ativar admin
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => { handleAdminActivate(); setHeaderMenuOpen(false); }}
+                      className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
+                    >
+                      Ativar admin
+                    </button>
+                    {isMatchStarted && hasActiveController && !isSessionController && (
+                      <button
+                        type="button"
+                        onClick={() => { requestSessionControl(); setHeaderMenuOpen(false); }}
+                        className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-orange-300' : 'hover:bg-slate-100 text-orange-600')}
+                      >
+                        Solicitar controle da sessão
+                      </button>
+                    )}
+                  </>
                 ) : isAdminMode && hasAdminAccess ? (
                   <>
                     {activeTab === 'lista' && isMatchStarted && isSessionController && (
@@ -2947,7 +3007,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
         {activeTab === 'lista' && (
           <div className="relative">
-            {!isAdminMode && locationLoading && (
+            {!isAdminMode && !hasAdminAccess && locationLoading && (
               <div
                 className={cn(
                   'mb-4 p-4 rounded-2xl border flex items-center gap-3',
@@ -2963,7 +3023,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 </div>
               </div>
             )}
-            {!isAdminMode && !locationLoading && locationError && (
+            {!isAdminMode && !hasAdminAccess && !locationLoading && locationError && (
               <div
                 className={cn(
                   'mb-4 p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center gap-3',
@@ -3032,14 +3092,21 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 !isMatchStarted && waitingList.length >= 10 && 'pointer-events-none select-none opacity-70'
               )}
             >
-            {/* Banner: outro admin controla a sessão */}
+            {/* Solicitar controle da sessão (admin sem controle) */}
             {isAdminMode && isMatchStarted && hasActiveController && !isSessionController && (
-              <div className={cn(
-                'flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs',
-                darkMode ? 'bg-amber-500/10 border-amber-500/20 text-amber-300' : 'bg-amber-50 border-amber-200 text-amber-700'
-              )}>
-                <Shield className="w-4 h-4 shrink-0" />
-                <span>Outro gestor controla esta sessão. Solicite o controle pelo menu para pontuar ou encerrar.</span>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={requestSessionControl}
+                  className={cn(
+                    'px-4 py-2 rounded-xl font-bold text-sm transition-all active:scale-95 border',
+                    darkMode
+                      ? 'bg-amber-500/10 border-amber-400/30 text-amber-300 hover:bg-amber-500/20'
+                      : 'bg-amber-100 border-amber-300 text-amber-800 hover:bg-amber-200'
+                  )}
+                >
+                  Solicitar controle
+                </button>
               </div>
             )}
 
@@ -3070,8 +3137,8 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
               </motion.div>
             )}
 
-            {/* Encerrar sessão (admin, sessão iniciada) */}
-            {isAdminMode && isMatchStarted && (
+            {/* Encerrar sessão (apenas controlador) */}
+            {isAdminMode && isMatchStarted && (isSessionController || !hasActiveController) && (
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -3088,29 +3155,31 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                     Finaliza a sessão atual e fecha o evento em andamento.
                   </p>
                 </div>
-                {isSessionController || !hasActiveController ? (
-                  <button
-                    type="button"
-                    onClick={handleEndMatchAttempt}
-                    className="shrink-0 px-4 py-2 rounded-xl font-bold text-sm bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20 transition-all active:scale-95"
-                  >
-                    Encerrar
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={requestSessionControl}
-                    className={cn(
-                      'shrink-0 px-4 py-2 rounded-xl font-bold text-sm transition-all active:scale-95 border',
-                      darkMode
-                        ? 'bg-amber-500/10 border-amber-400/30 text-amber-300 hover:bg-amber-500/20'
-                        : 'bg-amber-100 border-amber-300 text-amber-800 hover:bg-amber-200'
-                    )}
-                  >
-                    Solicitar controle
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleEndMatchAttempt}
+                  className="shrink-0 px-4 py-2 rounded-xl font-bold text-sm bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20 transition-all active:scale-95"
+                >
+                  Encerrar
+                </button>
               </motion.div>
+            )}
+
+            {hasAdminAccess && !isAdminMode && isMatchStarted && hasActiveController && !isSessionController && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={requestSessionControl}
+                  className={cn(
+                    'px-4 py-2 rounded-xl font-bold text-sm transition-all active:scale-95 border',
+                    darkMode
+                      ? 'bg-amber-500/10 border-amber-400/30 text-amber-300 hover:bg-amber-500/20'
+                      : 'bg-amber-100 border-amber-300 text-amber-800 hover:bg-amber-200'
+                  )}
+                >
+                  Solicitar controle
+                </button>
+              </div>
             )}
 
             {/* 1. Entrar na Fila - apenas usuários cadastrados */}
@@ -3136,7 +3205,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                       value={unregisteredAddName}
                       onChange={(e) => setUnregisteredAddName(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && addPlayerByNameUnregistered()}
-                      disabled={!canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
+                      disabled={!canUseQueueInput || !canAddToList || (waitingList.length >= 10 && !isMatchStarted)}
                       maxLength={50}
                       className={cn(
                         'flex-1 px-3 py-2 rounded-lg text-sm border outline-none focus:ring-2 focus:ring-orange-500/50',
@@ -3147,12 +3216,14 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                       type="button"
                       onClick={addPlayerByNameUnregistered}
                       disabled={
+                        !canUseQueueInput ||
                         !canAddToList ||
                         !unregisteredAddName.trim() ||
                         (waitingList.length >= 10 && !isMatchStarted)
                       }
                       className={cn(
                         'px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all',
+                        canUseQueueInput &&
                         canAddToList &&
                         unregisteredAddName.trim() &&
                         !(waitingList.length >= 10 && !isMatchStarted)
@@ -3169,6 +3240,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   type="button"
                   onClick={addPlayerAsRegistered}
                   disabled={
+                    !canUseQueueInput ||
                     !canAddToList ||
                     (waitingList.length >= 10 && !isMatchStarted) ||
                     players.some(
@@ -3177,6 +3249,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   }
                   className={cn(
                     'w-full py-3 px-4 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all',
+                    canUseQueueInput &&
                     canAddToList &&
                     !(waitingList.length >= 10 && !isMatchStarted) &&
                     !players.some(
@@ -3194,7 +3267,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   Complete seu perfil (nome e foto) na aba Perfil para entrar na fila.
                 </p>
               )}
-              {isAdminMode && (
+              {isAdminMode && canManageSessionPlayers && (
                 <>
                 <div className={cn('flex gap-2 mt-3', darkMode ? 'text-slate-300' : 'text-slate-600')}>
                   <div ref={adminSuggestionsRef} className="relative flex-1">
@@ -3376,8 +3449,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 darkMode={darkMode}
                 matchPoints={team1MatchPoints}
                 onRemovePlayer={handleRemoveAttempt}
-                onPlayerClick={isAdminMode ? setStatsModalPlayer : undefined}
+                onPlayerClick={canManageSessionPlayers ? setStatsModalPlayer : undefined}
                 isAdmin={isAdminMode}
+                canManagePlayers={canManageSessionPlayers}
                 showWinnerModal={showWinnerModal}
                 isLosingTeam={showWinnerModal === 'team2'}
                 isWinningTeam={showWinnerModal === 'team1'}
@@ -3394,8 +3468,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 darkMode={darkMode}
                 matchPoints={team2MatchPoints}
                 onRemovePlayer={handleRemoveAttempt}
-                onPlayerClick={isAdminMode ? setStatsModalPlayer : undefined}
+                onPlayerClick={canManageSessionPlayers ? setStatsModalPlayer : undefined}
                 isAdmin={isAdminMode}
+                canManagePlayers={canManageSessionPlayers}
                 showWinnerModal={showWinnerModal}
                 isLosingTeam={showWinnerModal === 'team1'}
                 isWinningTeam={showWinnerModal === 'team2'}
@@ -3425,10 +3500,11 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                         index={index}
                         darkMode={darkMode}
                         isAdminMode={isAdminMode}
+                        canManagePlayers={canManageSessionPlayers}
                         userAvatars={userAvatars}
                         userCodes={userCodes}
                         matchPlayerStats={matchPlayerStats}
-                        onPlayerClick={isAdminMode ? setStatsModalPlayer : undefined}
+                        onPlayerClick={canManageSessionPlayers ? setStatsModalPlayer : undefined}
                         onRemove={handleRemoveAttempt}
                       />
                     ))}
@@ -3889,11 +3965,12 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   );
 }
 
-function SortableWaitingCard({ player, index, darkMode, isAdminMode, userAvatars, userCodes, matchPlayerStats, onPlayerClick, onRemove }: {
+function SortableWaitingCard({ player, index, darkMode, isAdminMode, canManagePlayers, userAvatars, userCodes, matchPlayerStats, onPlayerClick, onRemove }: {
   player: Player;
   index: number;
   darkMode: boolean;
   isAdminMode: boolean;
+  canManagePlayers: boolean;
   userAvatars: Record<string, string>;
   userCodes: Record<string, string>;
   matchPlayerStats: Record<string, { points: number }>;
@@ -3907,7 +3984,7 @@ function SortableWaitingCard({ player, index, darkMode, isAdminMode, userAvatars
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: player.id, disabled: !isAdminMode });
+  } = useSortable({ id: player.id, disabled: !canManagePlayers });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -3935,7 +4012,7 @@ function SortableWaitingCard({ player, index, darkMode, isAdminMode, userAvatars
         isDragging && 'shadow-xl ring-2 ring-orange-500/40 scale-[1.03]'
       )}
     >
-      {isAdminMode && (
+      {canManagePlayers && (
         <div
           className={cn('touch-none shrink-0 p-1 -ml-1 mr-1 cursor-grab active:cursor-grabbing', darkMode ? 'text-slate-600' : 'text-slate-300')}
           {...attributes}
@@ -3973,7 +4050,7 @@ function SortableWaitingCard({ player, index, darkMode, isAdminMode, userAvatars
           </span>
         )}
       </div>
-      {isAdminMode && (
+      {canManagePlayers && (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(player.id); }}
           className={cn(
@@ -3997,6 +4074,7 @@ interface TeamCardProps {
   onRemovePlayer: (id: string) => void;
   onPlayerClick?: (player: Player) => void;
   isAdmin: boolean;
+  canManagePlayers: boolean;
   showWinnerModal: 'team1' | 'team2' | null;
   isLosingTeam: boolean;
   isWinningTeam: boolean;
@@ -4070,7 +4148,7 @@ const slideOut = { x: -200, opacity: 0 };
 const slideIn = { x: 0, opacity: 1 };
 const slideFromRight = { x: 200, opacity: 0 };
 
-function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer, onPlayerClick, isAdmin, showWinnerModal, isLosingTeam, isWinningTeam, onStartNext, isStartingNext, userAvatars, matchPlayerStats }: TeamCardProps) {
+function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer, onPlayerClick, isAdmin, canManagePlayers, showWinnerModal, isLosingTeam, isWinningTeam, onStartNext, isStartingNext, userAvatars, matchPlayerStats }: TeamCardProps) {
   const bgColor = color === 'blue' ? (darkMode ? 'bg-blue-500/10' : 'bg-blue-50') : (darkMode ? 'bg-red-500/10' : 'bg-red-50');
   const borderColor = color === 'blue' ? (darkMode ? 'border-blue-500/20' : 'border-blue-100') : (darkMode ? 'border-red-500/20' : 'border-red-100');
   const textColor = color === 'blue' ? 'text-blue-500' : 'text-red-500';
@@ -4175,7 +4253,7 @@ function TeamCard({ title, players, color, darkMode, matchPoints, onRemovePlayer
                       </span>
                     )}
                   </div>
-                  {isAdmin && (
+                  {canManagePlayers && (
                     <button
                       onClick={() => onRemovePlayer(p.id)}
                       className={cn(
