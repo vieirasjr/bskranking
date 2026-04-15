@@ -19,6 +19,7 @@ declare global {
 }
 
 const PLANS: Record<string, { name: string; price: number; note?: string }> = {
+  teste:        { name: 'Experiência 7 dias',  price: 1,    note: '7 dias de acesso · até 5 jogadores/sessão · 1 local' },
   entrada:      { name: 'Plano Entrada',       price: 36.9, note: 'mensal · até 20 jogadores/sessão · 1 local' },
   basico:       { name: 'Plano Básico',        price: 100,  note: 'mensal · até 30 jogadores/sessão · 1 local' },
   profissional: { name: 'Plano Profissional',  price: 150,  note: 'mensal · até 40 jogadores/sessão · 2 locais' },

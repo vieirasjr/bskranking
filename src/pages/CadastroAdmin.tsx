@@ -8,6 +8,7 @@ import { appPublicHost } from '../lib/publicAppUrl';
 import { brl } from '../lib/planAccess';
 
 const PLANS = [
+  { id: 'teste', name: 'Experiência 7 dias', price: 1, period: '7 dias', desc: '5 jogadores/sessão · 1 local', badge: 'R$ 1,00' },
   { id: 'entrada', name: 'Entrada', price: 36.9, period: 'mês', desc: 'Ranking ilimitado · 20 jogadores/sessão · 1 local', badge: 'R$ 36,90' },
   { id: 'basico', name: 'Básico', price: 100, period: 'mês', desc: 'Ranking ilimitado · 30 jogadores/sessão · 1 local', badge: null },
   { id: 'profissional', name: 'Profissional', price: 150, period: 'mês', desc: 'Ranking ilimitado · 40 jogadores/sessão · 2 locais', badge: 'Popular', highlight: true },
@@ -15,6 +16,7 @@ const PLANS = [
 ];
 
 const PLAN_NAMES: Record<string, string> = {
+  teste: 'Experiência 7 dias — R$1,00',
   entrada: 'Entrada — R$36,90/mês',
   avulso: 'Evento Avulso — R$50/evento',
   basico: 'Básico — R$100/mês',

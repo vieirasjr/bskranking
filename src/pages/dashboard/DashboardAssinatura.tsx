@@ -6,6 +6,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { brl, isTimeLimitedPlan } from '../../lib/planAccess';
 
 const PLANS = [
+  { id: 'teste',        name: 'Experiência 7 dias', price: 1,    sessionPlayers: 5,    locations: 1,  note: '7 dias · 5 jogadores/sessão' },
   { id: 'entrada',      name: 'Entrada',        price: 36.9, sessionPlayers: 20,   locations: 1,  note: 'mensal · 20 jogadores/sessão' },
   { id: 'basico',       name: 'Básico',         price: 100,  sessionPlayers: 30,   locations: 1,  note: 'mensal · 30 jogadores/sessão' },
   { id: 'profissional', name: 'Profissional',   price: 150,  sessionPlayers: 40,   locations: 2,  note: 'mensal · 40 jogadores/sessão' },

@@ -36,6 +36,7 @@ const mpPreference = new Preference(mpClient);
 const mpRefund = new PaymentRefund(mpClient);
 
 const PLAN_NAMES: Record<string, string> = {
+  teste:        "Braska - Experiência 7 dias",
   entrada:      "Braska - Plano Entrada",
   basico:       "Braska - Plano Básico",
   profissional: "Braska - Plano Profissional",
@@ -43,6 +44,7 @@ const PLAN_NAMES: Record<string, string> = {
   avulso:       "Braska - Evento Avulso",
 };
 const PLAN_DESCRIPTIONS: Record<string, string> = {
+  teste:        "Braska Experiência 7 dias - até 5 jogadores/sessão, 1 local",
   entrada:      "Assinatura mensal Braska Plano Entrada - até 20 jogadores/sessão, 1 local",
   basico:       "Assinatura mensal Braska Plano Básico - até 30 jogadores/sessão, 1 local",
   profissional: "Assinatura mensal Braska Plano Profissional - até 40 jogadores/sessão, 2 locais",
@@ -50,6 +52,7 @@ const PLAN_DESCRIPTIONS: Record<string, string> = {
   avulso:       "Acesso avulso Braska - 72 horas de acesso, máx. 20 atletas",
 };
 const PLAN_PRICES: Record<string, number> = {
+  teste: 1,
   entrada: 36.9,
   basico: 100,
   profissional: 150,
@@ -58,6 +61,7 @@ const PLAN_PRICES: Record<string, number> = {
 };
 // Planos com expiração por tempo (horas) em vez de ciclo mensal
 const PLAN_EXPIRY_HOURS: Record<string, number> = {
+  teste: 168, // 7 dias
   avulso: 72,
 };
 

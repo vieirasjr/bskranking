@@ -8,6 +8,23 @@ import { brl } from '../lib/planAccess';
 
 const PLANS = [
   {
+    id: 'teste',
+    name: 'Experiência 7 dias',
+    price: 1,
+    period: '7 dias',
+    sessionPlayers: 5,
+    locations: 1,
+    features: [
+      'Acesso completo por 7 dias',
+      'Até 5 jogadores por sessão',
+      '1 local de partidas',
+      '1 evento',
+      'Fila e times automáticos',
+    ],
+    highlight: false,
+    badge: 'Teste',
+  },
+  {
     id: 'entrada',
     name: 'Entrada',
     price: 36.9,
@@ -254,7 +271,7 @@ export default function LandingPage() {
             bg-gradient-to-l from-[#07090f] via-[#07090f]/70 to-transparent lg:hidden" />
 
           <div
-            className="flex gap-4 overflow-x-auto scroll-smooth snap-x snap-mandatory pb-5 px-6 [&::-webkit-scrollbar]:hidden lg:overflow-visible lg:grid lg:grid-cols-4 lg:gap-5 lg:snap-none"
+            className="flex gap-4 overflow-x-auto scroll-smooth snap-x snap-mandatory pb-5 px-6 [&::-webkit-scrollbar]:hidden lg:overflow-visible lg:grid lg:grid-cols-5 lg:gap-5 lg:snap-none"
             style={{ scrollbarWidth: 'none' }}
           >
 

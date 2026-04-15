@@ -1,5 +1,5 @@
 /** Planos com fim de acesso em `current_period_ends_at` (não são mensalidade). */
-export const TIME_LIMITED_PLAN_IDS = ['avulso'] as const;
+export const TIME_LIMITED_PLAN_IDS = ['avulso', 'teste'] as const;
 
 export type TimeLimitedPlanId = (typeof TIME_LIMITED_PLAN_IDS)[number];
 
