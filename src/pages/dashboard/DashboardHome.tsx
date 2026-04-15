@@ -1,14 +1,96 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Users, Trophy, ArrowRight, AlertCircle, Clock } from 'lucide-react';
+import { MapPin, Users, Trophy, ArrowRight, AlertCircle, Clock, UserPlus, Trash2, Shield } from 'lucide-react';
 import { useTenant } from '../../contexts/TenantContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { appPublicHost } from '../../lib/publicAppUrl';
 import { formatAccessTimeRemaining, isTimeLimitedPlan } from '../../lib/planAccess';
+import { supabase } from '../../supabase';
+
+interface TenantAdmin {
+  id: string;
+  auth_id: string;
+  email: string;
+  name: string | null;
+}
+
+const MAX_CO_ADMINS = 2;
 
 export default function DashboardHome() {
   const { tenant, locations, plan, isSubscriptionActive } = useTenant();
+  const { session } = useAuth();
   const navigate = useNavigate();
   const [, setTick] = useState(0);
+
+  // Co-admins
+  const [coAdmins, setCoAdmins] = useState<TenantAdmin[]>([]);
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [newAdminName, setNewAdminName] = useState('');
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!tenant?.id) return;
+    supabase
+      .from('tenant_admins')
+      .select('id, auth_id, email, name')
+      .eq('tenant_id', tenant.id)
+      .then(({ data }) => setCoAdmins((data ?? []) as TenantAdmin[]));
+  }, [tenant?.id]);
+
+  const addCoAdmin = async () => {
+    if (!tenant?.id || !newAdminEmail.trim()) return;
+    if (coAdmins.length >= MAX_CO_ADMINS) {
+      setAdminError(`Máximo de ${MAX_CO_ADMINS} co-administradores.`);
+      return;
+    }
+    setAdminLoading(true);
+    setAdminError(null);
+    try {
+      // Buscar auth_id pelo email
+      const { data: userRow } = await supabase
+        .from('basquete_users')
+        .select('auth_id')
+        .eq('email', newAdminEmail.trim().toLowerCase())
+        .maybeSingle();
+      if (!userRow?.auth_id) {
+        setAdminError('Usuário não encontrado. O email precisa estar cadastrado na plataforma.');
+        return;
+      }
+      if (userRow.auth_id === tenant.owner_auth_id) {
+        setAdminError('Você já é o dono deste tenant.');
+        return;
+      }
+      if (coAdmins.some((a) => a.auth_id === userRow.auth_id)) {
+        setAdminError('Este usuário já é co-administrador.');
+        return;
+      }
+      const { error } = await supabase.from('tenant_admins').insert({
+        tenant_id: tenant.id,
+        auth_id: userRow.auth_id,
+        email: newAdminEmail.trim().toLowerCase(),
+        name: newAdminName.trim() || null,
+      });
+      if (error) throw error;
+      setNewAdminEmail('');
+      setNewAdminName('');
+      const { data: updated } = await supabase
+        .from('tenant_admins')
+        .select('id, auth_id, email, name')
+        .eq('tenant_id', tenant.id);
+      setCoAdmins((updated ?? []) as TenantAdmin[]);
+    } catch {
+      setAdminError('Erro ao adicionar co-administrador.');
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const removeCoAdmin = async (adminId: string) => {
+    await supabase.from('tenant_admins').delete().eq('id', adminId);
+    setCoAdmins((prev) => prev.filter((a) => a.id !== adminId));
+  };
+
   useEffect(() => {
     const id = window.setInterval(() => setTick((n) => n + 1), 60_000);
     return () => window.clearInterval(id);
@@ -149,6 +231,70 @@ export default function DashboardHome() {
                 </button>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* Co-administradores */}
+      <div className="mt-8">
+        <div className="flex items-center gap-2 mb-4">
+          <Shield className="w-5 h-5 text-orange-500" />
+          <h2 className="font-bold text-white">Co-administradores</h2>
+          <span className="text-xs text-slate-500">({coAdmins.length}/{MAX_CO_ADMINS})</span>
+        </div>
+        <p className="text-xs text-slate-500 mb-4">
+          Co-administradores podem iniciar sessões, gerenciar partidas, pontuar e encerrar sessões nos seus locais. Apenas você (dono) tem acesso a este painel de gestão.
+        </p>
+
+        {coAdmins.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {coAdmins.map((a) => (
+              <div key={a.id} className="flex items-center justify-between p-3 rounded-xl border border-slate-800 bg-slate-900">
+                <div>
+                  <p className="text-sm font-semibold text-white">{a.name || a.email}</p>
+                  {a.name && <p className="text-xs text-slate-500">{a.email}</p>}
+                </div>
+                <button
+                  onClick={() => removeCoAdmin(a.id)}
+                  className="p-2 rounded-lg hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors"
+                  title="Remover"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {coAdmins.length < MAX_CO_ADMINS && (
+          <div className="p-4 rounded-xl border border-dashed border-slate-700 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                value={newAdminEmail}
+                onChange={(e) => setNewAdminEmail(e.target.value)}
+                placeholder="Email do co-admin"
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50"
+              />
+              <input
+                value={newAdminName}
+                onChange={(e) => setNewAdminName(e.target.value)}
+                placeholder="Nome (opcional)"
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50"
+              />
+            </div>
+            {adminError && (
+              <p className="text-xs text-red-400 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {adminError}
+              </p>
+            )}
+            <button
+              onClick={addCoAdmin}
+              disabled={adminLoading || !newAdminEmail.trim()}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold transition-all disabled:opacity-50"
+            >
+              <UserPlus className="w-4 h-4" />
+              {adminLoading ? 'Adicionando...' : 'Adicionar co-admin'}
+            </button>
           </div>
         )}
       </div>

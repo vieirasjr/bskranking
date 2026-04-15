@@ -12,28 +12,16 @@ function cn(...inputs: unknown[]) {
 
 const layoutTransition = { type: 'spring' as const, stiffness: 350, damping: 30 };
 
-/** Rótulo curto no chip (alinhado ao tenant / vitrine). */
-const MODALITY_SHORT: Record<string, string> = {
-  '5x5': '5x5',
-  '3x3': '3x3',
-  street: 'Rua',
-  '1x1': '1x1',
-};
-
 export interface GlobalRankEntry extends StatsSortable {
   hot_streak_since?: string | null;
   user_id?: string | null;
   location_id?: string | null;
   avatarUrl: string | null;
   playerCity: string | null;
+  playerState?: string | null;
   countryIso: string | null;
   /** Primeira modalidade do local da stat, ex.: 5x5 */
   modalityKey: string | null;
-}
-
-function modalityLabel(key: string | null): string {
-  if (!key) return '—';
-  return MODALITY_SHORT[key] ?? key;
 }
 
 function HotStreakIcon({ size = 16 }: { size?: number }) {
@@ -75,6 +63,11 @@ export function GlobalRankCard({
 }) {
   const rankDisplay = index + 1;
   const showAvatar = !!player.avatarUrl && !!player.user_id;
+  const topStats = (['points', 'assists', 'blocks', 'steals'] as const)
+    .map((key) => ({ key, value: player[key] ?? 0 }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 2);
+  const cityOrState = player.playerCity?.trim() || player.playerState?.trim() || '—';
 
   return (
     <motion.div
@@ -110,9 +103,9 @@ export function GlobalRankCard({
         </div>
         <div className="min-w-0 flex-1">
           <h3 className={cn('font-bold truncate', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
-          <div className="flex flex-wrap gap-x-1.5 gap-y-0.5 mt-1 items-center">
-            {(['points', 'assists', 'blocks', 'steals'] as const).map((key, i) => (
-              <span key={key} className="flex items-center gap-1.5">
+          <div className="flex items-center gap-x-1.5 mt-1 min-w-0">
+            {topStats.map(({ key, value }, i) => (
+              <span key={key} className="flex items-center gap-1.5 shrink-0">
                 {i > 0 && <span className={cn('w-0.5 h-0.5 rounded-full', darkMode ? 'bg-slate-600' : 'bg-slate-300')} />}
                 <span
                   className={cn(
@@ -120,23 +113,15 @@ export function GlobalRankCard({
                     key === sortKey ? 'text-orange-500' : darkMode ? 'text-slate-500' : 'text-slate-400'
                   )}
                 >
-                  {player[key] ?? 0} {SKILL_LABELS[key].toLowerCase()}
+                  {value} {SKILL_LABELS[key].toLowerCase()}
                 </span>
               </span>
             ))}
           </div>
-          <div className="flex flex-wrap items-center gap-2 mt-2">
-            <span
-              className={cn(
-                'text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md',
-                darkMode ? 'bg-slate-800 text-orange-300/95 border border-slate-700' : 'bg-orange-50 text-orange-700 border border-orange-100'
-              )}
-            >
-              {modalityLabel(player.modalityKey)}
-            </span>
+          <div className="flex items-center gap-1.5 mt-2 min-w-0">
             <span className={cn('flex items-center gap-1.5 min-w-0', darkMode ? 'text-slate-400' : 'text-slate-500')}>
               <CountryFlagSvg code={player.countryIso} className="w-5 h-[13px] rounded-sm shadow-sm shrink-0 overflow-hidden" />
-              <span className="text-[11px] font-medium truncate">{player.playerCity?.trim() || '—'}</span>
+              <span className="text-[11px] font-medium truncate">{cityOrState}</span>
             </span>
           </div>
         </div>

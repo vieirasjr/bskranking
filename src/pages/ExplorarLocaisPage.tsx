@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -24,6 +24,7 @@ import {
   Moon,
   Menu,
   LogOut,
+  Filter,
 } from 'lucide-react';
 import {
   BASKETBALL_FORMAT_OPTIONS,
@@ -123,10 +124,13 @@ export default function ExplorarLocaisPage() {
   const [globalEventsLoading, setGlobalEventsLoading] = useState(false);
   const [globalTab, setGlobalTab] = useState<'inicio' | 'rank' | 'eventos' | 'perfil'>('inicio');
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [showInicioSearchControls, setShowInicioSearchControls] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [isAppInstalled, setIsAppInstalled] = useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
   const appShareLink = `${appPublicOrigin()}/`;
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const lastScrollYRef = useRef(0);
 
   useEffect(() => {
     migrateInstallModalDismissKey();
@@ -210,6 +214,18 @@ export default function ExplorarLocaisPage() {
     };
   }, [user]);
 
+  useEffect(() => {
+    const prevBodyGutter = document.body.style.scrollbarGutter;
+    const prevHtmlGutter = document.documentElement.style.scrollbarGutter;
+    // Reserva espaço da barra apenas no lado direito, sem deslocar a esquerda.
+    document.body.style.scrollbarGutter = 'stable';
+    document.documentElement.style.scrollbarGutter = 'stable';
+    return () => {
+      document.body.style.scrollbarGutter = prevBodyGutter;
+      document.documentElement.style.scrollbarGutter = prevHtmlGutter;
+    };
+  }, []);
+
   const toggleFavorite = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -235,8 +251,9 @@ export default function ExplorarLocaisPage() {
   const filterChips: { id: ExploreFilterChip; label: string }[] = [
     { id: 'all', label: 'Todos' },
     ...BASKETBALL_FORMAT_OPTIONS.map((o) => ({ id: o.id as ExploreFilterChip, label: o.label })),
-    { id: 'tournaments', label: 'Torneios' },
+    
     { id: 'championships', label: 'Campeonatos' },
+    { id: 'tournaments', label: 'Torneios' },
   ];
 
   const openLogin = () => {
@@ -305,7 +322,7 @@ export default function ExplorarLocaisPage() {
         points: number; wins: number; blocks: number; steals: number;
         clutch_points: number; assists: number; rebounds: number;
         user_id: string | null; location_id: string | null;
-        avatar_url: string | null; player_city: string | null; country_iso: string | null;
+        avatar_url: string | null; player_city: string | null; player_state?: string | null; country_iso: string | null;
       }>;
       setGlobalRank(
         rows.map((r) => ({
@@ -323,6 +340,7 @@ export default function ExplorarLocaisPage() {
           hot_streak_since: null,
           avatarUrl: r.avatar_url,
           playerCity: r.player_city,
+          playerState: r.player_state ?? null,
           countryIso: r.country_iso ?? 'BR',
           modalityKey: null,
         }))
@@ -361,6 +379,25 @@ export default function ExplorarLocaisPage() {
       void openGlobalEvents();
     }
   }, [globalTab, user]);
+
+  useEffect(() => {
+    if (globalTab !== 'inicio') {
+      setShowInicioSearchControls(false);
+      return;
+    }
+    const onScroll = () => {
+      const y = window.scrollY || 0;
+      const delta = y - lastScrollYRef.current;
+      if (delta > 8) {
+        // Rolou para baixo: esconde busca e modalidades.
+        setShowInicioSearchControls(false);
+      }
+      lastScrollYRef.current = y;
+    };
+    lastScrollYRef.current = window.scrollY || 0;
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [globalTab]);
 
   const shareLink = async () => {
     try {
@@ -407,7 +444,7 @@ export default function ExplorarLocaisPage() {
     navigate('/locais', { replace: true });
   };
 
-  const LocationCard = ({ loc }: { loc: PublicLocationRow }) => {
+  const renderLocationCard = useCallback((loc: PublicLocationRow) => {
     const fav = favorites.has(loc.id);
     const formats = loc.basketball_formats ?? [];
     const primaryTag =
@@ -436,6 +473,7 @@ export default function ExplorarLocaisPage() {
 
     return (
       <motion.div
+        key={loc.id}
         layout
         role="button"
         tabIndex={0}
@@ -541,7 +579,7 @@ export default function ExplorarLocaisPage() {
         </div>
       </motion.div>
     );
-  };
+  }, [darkMode, favorites, navigate, toggleFavorite, user]);
 
   return (
     <div className={`min-h-screen pb-24 ${darkMode ? 'bg-[#07090f] text-white' : 'bg-slate-50 text-slate-900'}`}>
@@ -568,18 +606,40 @@ export default function ExplorarLocaisPage() {
           <div className="justify-self-end relative">
             {user && (
               <>
-                <button
-                  type="button"
-                  onClick={() => setHeaderMenuOpen((v) => !v)}
-                  className={`inline-flex items-center justify-center w-9 h-9 rounded-xl border transition-colors ${
-                    darkMode
-                      ? 'bg-slate-800/90 border-slate-700/70 text-slate-200 hover:bg-slate-700'
-                      : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
-                  }`}
-                  aria-label="Abrir menu"
-                >
-                  <Menu className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  {globalTab === 'inicio' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowInicioSearchControls((v) => {
+                          const next = !v;
+                          if (next) {
+                            window.requestAnimationFrame(() => searchInputRef.current?.focus());
+                          } else {
+                            searchInputRef.current?.blur();
+                          }
+                          return next;
+                        });
+                      }}
+                      className={`inline-flex items-center justify-center w-10 h-10 rounded-xl transition-colors ${
+                        darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-700 hover:text-slate-900'
+                      }`}
+                      aria-label={showInicioSearchControls ? 'Fechar busca' : 'Abrir busca'}
+                    >
+                      <Search className="w-5 h-5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setHeaderMenuOpen((v) => !v)}
+                    className={`inline-flex items-center justify-center w-12 h-12 rounded-xl transition-colors ${
+                      darkMode ? 'text-slate-200 hover:text-white' : 'text-slate-700 hover:text-slate-900'
+                    }`}
+                    aria-label="Abrir menu"
+                  >
+                    <Menu className="w-6 h-6" />
+                  </button>
+                </div>
                 {headerMenuOpen && (
                   <div className={`absolute right-0 mt-2 w-56 rounded-xl border shadow-xl p-2 z-20 ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
                     <button
@@ -623,68 +683,78 @@ export default function ExplorarLocaisPage() {
           <p className="max-w-5xl mx-auto px-4 pb-2 text-xs text-orange-300">{shareFeedback}</p>
         )}
 
-        {globalTab === 'inicio' && (
-          <div className="max-w-5xl mx-auto px-4 pt-1 pb-4 flex gap-3">
-            <div className="relative flex-1 min-w-0">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#ff8a4c]/80 pointer-events-none" />
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Nome do local, cidade, bairro, UF..."
-                className={`w-full pl-12 pr-4 py-3.5 rounded-[20px] border focus:outline-none focus:ring-2 focus:ring-[#ff8a4c]/40 focus:border-[#ff8a4c]/35 text-[15px] ${
-                  darkMode
-                    ? 'bg-slate-900/90 border-slate-700/80 text-white placeholder:text-slate-500'
-                    : 'bg-white border-slate-300 text-slate-900 placeholder:text-slate-400'
-                }`}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => setFilterSheetOpen(true)}
-              className="shrink-0 w-14 h-[52px] rounded-[20px] bg-[#ff8a4c]/72 hover:bg-[#ff8a4c]/86 flex items-center justify-center shadow-lg shadow-[#ff8a4c]/15 transition-colors"
-              aria-label="Filtros"
+        <AnimatePresence initial={false}>
+          {globalTab === 'inicio' && showInicioSearchControls && (
+            <motion.section
+              initial={{ height: 0, opacity: 0, y: -6 }}
+              animate={{ height: 'auto', opacity: 1, y: 0 }}
+              exit={{ height: 0, opacity: 0, y: -6 }}
+              transition={{ duration: 0.24, ease: 'easeOut' }}
+              className="overflow-hidden"
             >
-              <SlidersHorizontal className="w-6 h-6 text-white" />
-            </button>
-          </div>
-        )}
-
-        {globalTab === 'inicio' && (
-          <div className="max-w-5xl mx-auto px-4 pb-5">
-            <div className="flex items-center justify-between mb-3.5">
-              <span className={`text-sm font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>Modalidades</span>
-              <button
-                type="button"
-                onClick={() => setChip('all')}
-                className="text-xs font-semibold text-[#ff8a4c] hover:underline"
-              >
-                Limpar filtros
-              </button>
-            </div>
-            <div className="flex gap-2.5 overflow-x-auto pb-1.5 pt-0.5 -mx-1 px-1 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-              {filterChips.map((c) => {
-                const active = chip === c.id;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setChip(c.id)}
-                    className={`shrink-0 px-4 py-2.5 rounded-full text-xs font-bold border transition-all ${
-                      active
-                        ? 'bg-[#ff8a4c]/20 border-[#ff8a4c]/50 text-[#ff8a4c]'
-                        : darkMode
-                          ? 'bg-slate-900/50 border-slate-700/60 text-slate-400 hover:border-slate-600'
-                          : 'bg-white border-slate-300 text-slate-600 hover:border-slate-400'
+              <div className="max-w-5xl mx-auto px-4 pt-1 pb-4">
+                <div className="relative flex-1 min-w-0">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#ff8a4c]/80 pointer-events-none" />
+                  <input
+                    ref={searchInputRef}
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Nome do local, cidade, bairro, UF..."
+                    className={`w-full h-12 pl-12 pr-12 py-3.5 rounded-[12px] border focus:outline-none focus:ring-2 focus:ring-[#ff8a4c]/40 focus:border-[#ff8a4c]/35 text-[15px] ${
+                      darkMode
+                        ? 'bg-slate-900/90 border-slate-700/80 text-white placeholder:text-slate-500'
+                        : 'bg-white border-slate-300 text-slate-900 placeholder:text-slate-400'
                     }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setFilterSheetOpen(true)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 inline-flex items-center justify-center w-7 h-7 text-[#ff8a4c] hover:text-[#ff9a63] transition-colors"
+                    aria-label="Filtros"
                   >
-                    {c.label}
+                    <Filter className="w-5 h-5" />
                   </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
+                </div>
+              </div>
+              <div className="max-w-5xl mx-auto px-4 pb-5">
+                <div className="flex items-center justify-between mb-3.5">
+                  <span className={`text-sm font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>Modalidades</span>
+                  {chip !== 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => setChip('all')}
+                      className="text-xs font-semibold text-[#ff8a4c] hover:underline"
+                    >
+                      Limpar filtros
+                    </button>
+                  )}
+                </div>
+                <div className="flex gap-2.5 overflow-x-auto pb-1.5 pt-0.5 -mx-1 px-1 scrollbar-none [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                  {filterChips.map((c) => {
+                    const active = chip === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => setChip(c.id)}
+                        className={`shrink-0 px-4 py-2.5 rounded-full text-xs font-bold border transition-all ${
+                          active
+                            ? 'bg-[#ff8a4c]/20 border-[#ff8a4c]/50 text-[#ff8a4c]'
+                            : darkMode
+                              ? 'bg-slate-900/50 border-slate-700/60 text-slate-400 hover:border-slate-600'
+                              : 'bg-white border-slate-300 text-slate-600 hover:border-slate-400'
+                        }`}
+                      >
+                        {c.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.section>
+          )}
+        </AnimatePresence>
 
         {globalTab === 'rank' && (
           <div className="max-w-5xl mx-auto px-4 pb-5 pt-1">
@@ -760,9 +830,7 @@ export default function ExplorarLocaisPage() {
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {displayed.map((loc) => (
-                <LocationCard key={loc.id} loc={loc} />
-              ))}
+              {displayed.map((loc) => renderLocationCard(loc))}
             </div>
           </section>
         ))}
@@ -861,7 +929,7 @@ export default function ExplorarLocaisPage() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
           >
             <button
               type="button"
@@ -874,7 +942,7 @@ export default function ExplorarLocaisPage() {
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: 40, opacity: 0 }}
               transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-              className={`relative w-full max-w-md rounded-t-3xl sm:rounded-3xl border shadow-2xl overflow-hidden ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}
+              className={`relative w-full max-w-md rounded-3xl border shadow-2xl overflow-hidden ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}
             >
               <div className={`flex items-center justify-between px-5 py-4 border-b ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
                 <h3 className={`font-black text-lg ${darkMode ? 'text-white' : 'text-slate-900'}`}>Filtros</h3>

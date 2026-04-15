@@ -16,7 +16,6 @@ import {
   Sun,
   Moon,
   Home,
-  List as ListIcon,
   Calendar,
   User,
   LogOut,
@@ -234,7 +233,6 @@ const EVENT_STATUS_LABELS: Record<Evento['status'], string> = { draft: 'Rascunho
 type Tab = 'inicio' | 'lista' | 'eventos' | 'perfil';
 type SortKey = 'efficiency' | 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assists' | 'rebounds';
 
-const ADMIN_PASSWORD = '1710';
 
 interface AppProps {
   locationId?: string;
@@ -291,7 +289,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [showWinnerModal, setShowWinnerModal] = useState<'team1' | 'team2' | null>(null);
   const [isStartingNextMatch, setIsStartingNextMatch] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
-  const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null; player_code: string | null } | null>(null);
+  const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null; player_code: string | null; admin_pin: string | null } | null>(null);
   const [adminAddName, setAdminAddName] = useState('');
   const [adminUserSuggestions, setAdminUserSuggestions] = useState<RegisteredUserSuggestion[]>([]);
   const [showAdminSuggestions, setShowAdminSuggestions] = useState(false);
@@ -308,6 +306,12 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   /** Confirmação antes do modal de senha ao iniciar sessão (mostra modalidade do local). */
   const [showStartSessionConfirm, setShowStartSessionConfirm] = useState(false);
+  const [sessionControlledBy, setSessionControlledBy] = useState<string | null>(null);
+  const [controlRequestedBy, setControlRequestedBy] = useState<string | null>(null);
+  const [controlRequestedName, setControlRequestedName] = useState<string | null>(null);
+  const [showControlRequestModal, setShowControlRequestModal] = useState(false);
+  const isSessionController = !!user && sessionControlledBy === user.id;
+  const hasActiveController = !!sessionControlledBy;
   const [venueModalityLabel, setVenueModalityLabel] = useState('Basquete 5x5');
   const [showHeaderQrModal, setShowHeaderQrModal] = useState(false);
   const adminSuggestionsRef = useRef<HTMLDivElement | null>(null);
@@ -497,10 +501,18 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     if (data) {
       setIsMatchStarted(data.is_started);
       setCurrentPartidaSessaoId(data.current_partida_sessao_id ?? null);
+      setSessionControlledBy((data as { controlled_by?: string | null }).controlled_by ?? null);
+      const reqBy = (data as { control_requested_by?: string | null }).control_requested_by ?? null;
+      setControlRequestedBy(reqBy);
+      setControlRequestedName((data as { control_requested_name?: string | null }).control_requested_name ?? null);
+      // Mostrar modal se há solicitação direcionada ao controlador atual
+      if (reqBy && user && (data as { controlled_by?: string | null }).controlled_by === user.id) {
+        setShowControlRequestModal(true);
+      }
     } else {
       await supabase.from('session').upsert({ id: sessionId, is_started: false, ...(locationId ? { location_id: locationId } : {}) });
     }
-  }, [locationId]);
+  }, [locationId, user]);
 
   useEffect(() => {
     if (!locationId) {
@@ -724,7 +736,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     }
     let { data } = await supabase
       .from('basquete_users')
-      .select('id, display_name, avatar_url, player_code')
+      .select('id, display_name, avatar_url, player_code, admin_pin')
       .eq('auth_id', user.id)
       .maybeSingle();
     if (!data) {
@@ -739,12 +751,12 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           },
           { onConflict: 'email', ignoreDuplicates: false }
         )
-        .select('id, display_name, avatar_url, player_code')
+        .select('id, display_name, avatar_url, player_code, admin_pin')
         .single();
       if (upserted) data = upserted;
       else {
-        const { data: byAuth } = await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code').eq('auth_id', user.id).maybeSingle();
-        const { data: byEmail } = user?.email ? await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code').eq('email', user.email).maybeSingle() : { data: null };
+        const { data: byAuth } = await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code, admin_pin').eq('auth_id', user.id).maybeSingle();
+        const { data: byEmail } = user?.email ? await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code, admin_pin').eq('email', user.email).maybeSingle() : { data: null };
         data = byAuth ?? byEmail ?? undefined;
       }
     }
@@ -757,8 +769,17 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         // code generation failed silently — will retry next login
       }
     }
-    setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url, player_code: data.player_code ?? null } : null);
-  }, [user?.id, user?.email, user?.user_metadata]);
+    if (data && !data.admin_pin && isOwner) {
+      try {
+        const newPin = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+        await supabase.from('basquete_users').update({ admin_pin: newPin }).eq('id', data.id);
+        data = { ...data, admin_pin: newPin };
+      } catch {
+        // PIN generation failed silently — will retry next login
+      }
+    }
+    setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url, player_code: data.player_code ?? null, admin_pin: data.admin_pin ?? null } : null);
+  }, [user?.id, user?.email, user?.user_metadata, isOwner]);
 
   useEffect(() => {
     fetchUserProfile();
@@ -1152,9 +1173,47 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
   const handleEndMatchAttempt = () => {
     if (!isAdminMode) return;
+    if (hasActiveController && !isSessionController) {
+      addNotification('Apenas o gestor que iniciou a sessão pode encerrá-la.', 'warning', { showToastForMs: 4000 });
+      return;
+    }
     setShowPasswordModal({ type: 'END_MATCH' });
     setPasswordInput('');
     setPasswordError(false);
+  };
+
+  // ── Controle de gestão da sessão ─────────────────────────
+  const requestSessionControl = async () => {
+    if (!user || !isAdminMode || !isMatchStarted) return;
+    if (isSessionController) return;
+    const displayName = userProfile?.display_name?.trim() || user.email?.split('@')[0] || 'Admin';
+    await supabase.from('session').update({
+      control_requested_by: user.id,
+      control_requested_name: displayName,
+    }).eq('id', locationId ?? 'current');
+    addNotification('Solicitação de controle enviada ao gestor atual.', 'info', { showToastForMs: 3000 });
+    fetchSession();
+  };
+
+  const acceptControlRequest = async () => {
+    if (!controlRequestedBy) return;
+    await supabase.from('session').update({
+      controlled_by: controlRequestedBy,
+      control_requested_by: null,
+      control_requested_name: null,
+    }).eq('id', locationId ?? 'current');
+    setShowControlRequestModal(false);
+    addNotification('Controle da sessão transferido.', 'info', { showToastForMs: 3000 });
+    fetchSession();
+  };
+
+  const rejectControlRequest = async () => {
+    await supabase.from('session').update({
+      control_requested_by: null,
+      control_requested_name: null,
+    }).eq('id', locationId ?? 'current');
+    setShowControlRequestModal(false);
+    fetchSession();
   };
 
   const handleAdminActivate = () => {
@@ -1175,14 +1234,23 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   };
 
   const pointsBlockedByTeams = isMatchStarted && (team1.length < 5 || team2.length < 5);
-  const pointsBlocked = pointsBlockedByTeams;
-  const pointsBlockedMessage = pointsBlockedByTeams
-    ? 'Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.'
-    : '';
 
   const addPlayerStat = async (player: Player, stat: 'points_1' | 'points_2' | 'points_3' | 'blocks' | 'steals' | 'assists' | 'rebounds') => {
-    if (pointsBlocked) return;
+    const isPointStat = stat === 'points_1' || stat === 'points_2' || stat === 'points_3';
+    const isPlayerInActiveTeam = player.status === 'team1' || player.status === 'team2';
+    if (!isPlayerInActiveTeam) {
+      addNotification('Atributos só podem ser registrados para jogadores em quadra (Time 1 ou Time 2).', 'warning', { showToastForMs: 4500 });
+      return;
+    }
+    if (isPointStat && pointsBlockedByTeams) {
+      addNotification('Times incompletos. É preciso 5 jogadores em cada time para atribuir pontos.', 'warning', { showToastForMs: 4500 });
+      return;
+    }
     if (isRegisteringStatRef.current) return;
+    if (isMatchStarted && hasActiveController && !isSessionController) {
+      addNotification('Apenas o gestor que iniciou a sessão pode registrar estatísticas.', 'warning', { showToastForMs: 4000 });
+      return;
+    }
     isRegisteringStatRef.current = true;
     const statLabels: Record<typeof stat, string> = {
       points_1: '1 Ponto',
@@ -1469,6 +1537,10 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
   // Ajusta stat inline no resumo da partida — sem spinner, sem fechar modal
   const adjustStatFromSummary = async (player: Player, statKey: 'points' | 'blocks' | 'steals' | 'assists' | 'rebounds', delta: number) => {
     if (!isAdminMode && delta < 0) return;
+    if (isMatchStarted && hasActiveController && !isSessionController) {
+      addNotification('Apenas o gestor da sessão pode ajustar estatísticas.', 'warning', { showToastForMs: 4000 });
+      return;
+    }
     const userId = player.user_id;
 
     // Pontos: placar + decisivos (cesta da vitória) alinhados ao mesmo update
@@ -1638,6 +1710,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
     if (!showWinnerModal) return;
     if (team1MatchPoints < 12 && team2MatchPoints < 12) return;
     if (isStartingNextMatch) return;
+    if (hasActiveController && !isSessionController) return;
 
     const winningTeamKey = team1MatchPoints >= 12 ? 'team1' : 'team2';
     const losingTeamKey = winningTeamKey === 'team1' ? 'team2' : 'team1';
@@ -1836,7 +1909,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
 
 
   const confirmAction = async () => {
-    if (passwordInput !== ADMIN_PASSWORD) {
+    if (!userProfile?.admin_pin || passwordInput !== userProfile.admin_pin) {
       setPasswordError(true);
       return;
     }
@@ -1869,6 +1942,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
             is_started: true,
             started_at: new Date().toISOString(),
             current_partida_sessao_id: partidaSessao?.id,
+            controlled_by: user?.id ?? null,
+            control_requested_by: null,
+            control_requested_name: null,
             ...(locationId ? { location_id: locationId } : {}),
           });
 
@@ -1901,6 +1977,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           is_started: false,
           started_at: null,
           current_partida_sessao_id: null,
+          controlled_by: null,
+          control_requested_by: null,
+          control_requested_name: null,
         }).eq('id', locationId ?? 'current');
         await supabase.from('partida_sessoes').delete().neq('id', '00000000-0000-0000-0000-000000000000');
         await supabase.from('players').delete().neq('id', '00000000-0000-0000-0000-000000000000');
@@ -1924,6 +2003,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
           .update({
             is_started: false,
             current_partida_sessao_id: null,
+            controlled_by: null,
+            control_requested_by: null,
+            control_requested_name: null,
           })
           .eq('id', locationId ?? 'current');
 
@@ -2084,6 +2166,9 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         await supabase.from('session').update({
           is_started: false,
           current_partida_sessao_id: null,
+          controlled_by: null,
+          control_requested_by: null,
+          control_requested_name: null,
         }).eq('id', locationId ?? 'current');
         setIsMatchStarted(false);
         setCurrentPartidaSessaoId(null);
@@ -2130,6 +2215,57 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         }
       `}</style>
       <AnimatePresence>
+        {/* Modal: solicitação de controle recebida (para o controlador atual) */}
+        {showControlRequestModal && controlRequestedName && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[55] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 12 }}
+              className={cn(
+                'border p-6 rounded-3xl shadow-2xl max-w-sm w-full space-y-4',
+                darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+              )}
+            >
+              <div className="text-center space-y-2">
+                <div className="w-12 h-12 bg-orange-500/20 rounded-full flex items-center justify-center mx-auto">
+                  <Shield className="text-orange-500 w-6 h-6" />
+                </div>
+                <h3 className={cn('text-lg font-bold', darkMode ? 'text-white' : 'text-slate-900')}>Solicitação de controle</h3>
+                <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                  <strong className={darkMode ? 'text-white' : 'text-slate-900'}>{controlRequestedName}</strong> está solicitando o controle da gestão desta sessão.
+                </p>
+                <p className={cn('text-xs', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+                  Ao aceitar, você perde o controle de pontuação e encerramento.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={rejectControlRequest}
+                  className={cn(
+                    'flex-1 py-3 rounded-xl font-semibold transition-colors',
+                    darkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'
+                  )}
+                >
+                  Recusar
+                </button>
+                <button
+                  type="button"
+                  onClick={acceptControlRequest}
+                  className="flex-1 py-3 rounded-xl font-semibold bg-orange-500 hover:bg-orange-600 text-white shadow-lg shadow-orange-500/20 transition-all active:scale-95"
+                >
+                  Transferir controle
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
         {showStartSessionConfirm && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -2214,18 +2350,20 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 </h3>
                 <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
                   {showPasswordModal.type === 'ADMIN_ACTIVATE'
-                    ? 'Digite a senha para ativar o modo administrador.'
+                    ? 'Digite seu PIN para ativar o modo administrador.'
                     : showPasswordModal.type === 'START_MATCH'
-                      ? 'Digite a senha para iniciar a sessão de partidas.'
+                      ? 'Digite seu PIN para iniciar a sessão de partidas.'
                       : showPasswordModal.type === 'CLEAR_MOCK'
-                        ? 'Remove fila, ranking e partida. Senha para confirmar.'
-                        : 'Digite a senha para encerrar a sessão de partidas.'}
+                        ? 'Remove fila, ranking e partida. PIN para confirmar.'
+                        : 'Digite seu PIN para encerrar a sessão de partidas.'}
                 </p>
               </div>
 
               <div className="space-y-4">
                 <input
                   type="password"
+                  inputMode="numeric"
+                  maxLength={4}
                   autoFocus
                   value={passwordInput}
                   onChange={(e) => {
@@ -2233,7 +2371,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                     setPasswordError(false);
                   }}
                   onKeyDown={(e) => e.key === 'Enter' && confirmAction()}
-                  placeholder="Senha de administrador"
+                  placeholder="PIN de administrador"
                   className={cn(
                     'w-full border rounded-xl px-4 py-3 focus:outline-none transition-all text-center text-lg tracking-widest',
                     darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-100 border-slate-200 text-slate-900',
@@ -2241,7 +2379,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   )}
                 />
                 {passwordError && (
-                  <p className="text-red-400 text-xs text-center">Senha incorreta. Tente novamente.</p>
+                  <p className="text-red-400 text-xs text-center">PIN incorreto. Tente novamente.</p>
                 )}
               </div>
 
@@ -2480,40 +2618,28 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                     );
                   })()}
 
-                  {pointsBlocked && (
-                    <div
-                      className={cn(
-                        'p-3 rounded-xl text-sm flex items-center gap-2',
-                        darkMode ? 'bg-amber-500/10 text-amber-400' : 'bg-amber-50 text-amber-700'
-                      )}
-                    >
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      {pointsBlockedMessage}
-                    </div>
-                  )}
-
                   {/* Botões rápidos de pontuação */}
-                  <div className={cn('grid grid-cols-3 gap-2', pointsBlocked && 'opacity-60 pointer-events-none')}>
+                  <div className="grid grid-cols-3 gap-2">
                     <StatButton
                       onClick={() => addPlayerStat(statsModalPlayer, 'points_1')}
-                      disabled={pointsBlocked}
-                      className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-orange-500/20 text-orange-600 dark:text-orange-400 hover:bg-orange-500/30 active:scale-[0.98]')}
+                      disabled={false}
+                      className="flex-1 bg-orange-500/20 text-orange-600 dark:text-orange-400 hover:bg-orange-500/30 active:scale-[0.98]"
                     >
                       <Target className="w-5 h-5 mx-auto mb-0.5" />
                       +1 pt
                     </StatButton>
                     <StatButton
                       onClick={() => addPlayerStat(statsModalPlayer, 'points_2')}
-                      disabled={pointsBlocked}
-                      className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]')}
+                      disabled={false}
+                      className="flex-1 bg-green-500/20 text-green-600 dark:text-green-400 hover:bg-green-500/30 active:scale-[0.98]"
                     >
                       <Target className="w-5 h-5 mx-auto mb-0.5" />
                       +2 pts
                     </StatButton>
                     <StatButton
                       onClick={() => addPlayerStat(statsModalPlayer, 'points_3')}
-                      disabled={pointsBlocked}
-                      className={cn('flex-1', pointsBlocked ? 'bg-slate-200 dark:bg-slate-700' : 'bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]')}
+                      disabled={false}
+                      className="flex-1 bg-blue-500/20 text-blue-600 dark:text-blue-400 hover:bg-blue-500/30 active:scale-[0.98]"
                     >
                       <Target className="w-5 h-5 mx-auto mb-0.5" />
                       +3 pts
@@ -2644,13 +2770,22 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                   </button>
                 ) : isAdminMode && hasAdminAccess ? (
                   <>
-                    {activeTab === 'lista' && isMatchStarted && (
+                    {activeTab === 'lista' && isMatchStarted && isSessionController && (
                       <button
                         type="button"
                         onClick={() => { handleEndMatchAttempt(); setHeaderMenuOpen(false); }}
                         className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-red-300' : 'hover:bg-slate-100 text-red-600')}
                       >
                         Encerrar evento
+                      </button>
+                    )}
+                    {isMatchStarted && hasActiveController && !isSessionController && (
+                      <button
+                        type="button"
+                        onClick={() => { requestSessionControl(); setHeaderMenuOpen(false); }}
+                        className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-orange-300' : 'hover:bg-slate-100 text-orange-600')}
+                      >
+                        Solicitar controle da sessão
                       </button>
                     )}
                     <button
@@ -2754,6 +2889,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
               darkMode={darkMode}
               onBack={() => {}}
               mandatory
+              hasAdminAccess={hasAdminAccess}
               onSaved={() => {
                 fetchUserProfile();
               }}
@@ -2851,13 +2987,6 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 </button>
               </div>
             )}
-            {pointsBlocked && (
-              <div className={cn('mb-6')}>
-                <p className={cn('mt-2 text-sm', darkMode ? 'text-amber-400' : 'text-amber-600')}>
-                  {pointsBlockedMessage}
-                </p>
-              </div>
-            )}
             {!canSeeList ? (
               <div className={cn('rounded-2xl border p-6 shadow-xl space-y-4', darkMode ? 'bg-slate-900/50 border-slate-700' : 'bg-slate-50 border-slate-200')}>
                 {/* Partida ainda não iniciada pelo admin */}
@@ -2903,6 +3032,17 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 !isMatchStarted && waitingList.length >= 10 && 'pointer-events-none select-none opacity-70'
               )}
             >
+            {/* Banner: outro admin controla a sessão */}
+            {isAdminMode && isMatchStarted && hasActiveController && !isSessionController && (
+              <div className={cn(
+                'flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs',
+                darkMode ? 'bg-amber-500/10 border-amber-500/20 text-amber-300' : 'bg-amber-50 border-amber-200 text-amber-700'
+              )}>
+                <Shield className="w-4 h-4 shrink-0" />
+                <span>Outro gestor controla esta sessão. Solicite o controle pelo menu para pontuar ou encerrar.</span>
+              </div>
+            )}
+
             {/* Iniciar Partida (admin, partida não iniciada, menos de 10 jogadores) */}
             {isAdminMode && !isMatchStarted && waitingList.length < 10 && (
               <motion.div
@@ -2927,6 +3067,49 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
                 >
                   Iniciar
                 </button>
+              </motion.div>
+            )}
+
+            {/* Encerrar sessão (admin, sessão iniciada) */}
+            {isAdminMode && isMatchStarted && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={cn(
+                  'border rounded-2xl p-4 sm:p-5 shadow-xl flex items-center justify-between gap-4',
+                  darkMode ? 'bg-red-500/10 border-red-500/20' : 'bg-red-50 border-red-200'
+                )}
+              >
+                <div>
+                  <p className={cn('font-semibold text-sm', darkMode ? 'text-red-300' : 'text-red-800')}>
+                    Encerrar a sessão
+                  </p>
+                  <p className={cn('text-xs mt-0.5', darkMode ? 'text-red-300/80' : 'text-red-700')}>
+                    Finaliza a sessão atual e fecha o evento em andamento.
+                  </p>
+                </div>
+                {isSessionController || !hasActiveController ? (
+                  <button
+                    type="button"
+                    onClick={handleEndMatchAttempt}
+                    className="shrink-0 px-4 py-2 rounded-xl font-bold text-sm bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20 transition-all active:scale-95"
+                  >
+                    Encerrar
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={requestSessionControl}
+                    className={cn(
+                      'shrink-0 px-4 py-2 rounded-xl font-bold text-sm transition-all active:scale-95 border',
+                      darkMode
+                        ? 'bg-amber-500/10 border-amber-400/30 text-amber-300 hover:bg-amber-500/20'
+                        : 'bg-amber-100 border-amber-300 text-amber-800 hover:bg-amber-200'
+                    )}
+                  >
+                    Solicitar controle
+                  </button>
+                )}
               </motion.div>
             )}
 
@@ -3509,6 +3692,7 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
               <EditarPerfil
                 darkMode={darkMode}
                 onBack={() => setEditingProfile(false)}
+                hasAdminAccess={hasAdminAccess}
                 onSaved={() => {
                   setEditingProfile(false);
                   fetchUserProfile();
@@ -3669,10 +3853,17 @@ export default function App({ locationId, locationSlug, venueCoords, isOwner, ma
         )}
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
-        <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-around">
+        <div className="max-w-5xl mx-auto px-4 py-2 flex items-end justify-around">
           <NavButton active={false} onClick={handleGoGlobal} icon={<Globe className="w-5 h-5" />} label="Global" darkMode={darkMode} />
           <NavButton active={activeTab === 'inicio'} onClick={() => setActiveTab('inicio')} icon={<Home className="w-5 h-5" />} label="Início" darkMode={darkMode} />
-          <NavButton active={activeTab === 'lista'} onClick={() => setActiveTab('lista')} icon={<ListIcon className="w-5 h-5" />} label="Lista" darkMode={darkMode} />
+          <NavButton
+            active={activeTab === 'lista'}
+            onClick={() => setActiveTab('lista')}
+            icon={<BasketballTabIcon className="w-12 h-12" />}
+            label="Lista"
+            darkMode={darkMode}
+            featured
+          />
           <NavButton active={activeTab === 'eventos'} onClick={() => setActiveTab('eventos')} icon={<Calendar className="w-5 h-5" />} label="Eventos" darkMode={darkMode} />
           <NavButton active={activeTab === 'perfil'} onClick={() => setActiveTab('perfil')} icon={<User className="w-5 h-5" />} label="Perfil" darkMode={darkMode} />
         </div>
@@ -4079,26 +4270,53 @@ function StatButton({ onClick, disabled, className, children }: StatButtonProps)
   );
 }
 
+function BasketballTabIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
+      <path
+        fill="#000000"
+        d="M248.37 41.094c-49.643 1.754-98.788 20.64-137.89 56.656L210.53 197.8c31.283-35.635 45.59-88.686 37.84-156.706zm18.126.107c7.646 71.205-7.793 129.56-43.223 169.345L256 243.27 401.52 97.75c-38.35-35.324-86.358-54.18-135.024-56.55zM97.75 110.48c-36.017 39.102-54.902 88.247-56.656 137.89 68.02 7.75 121.07-6.557 156.707-37.84L97.75 110.48zm316.5 0L268.73 256l32.71 32.71c33.815-30.112 81.05-45.78 138.183-45.11 10.088.118 20.49.753 31.176 1.9-2.37-48.665-21.227-96.672-56.55-135.02zM210.545 223.272c-39.785 35.43-98.14 50.87-169.344 43.223 2.37 48.666 21.226 96.675 56.55 135.025L243.27 256l-32.725-32.727zm225.002 38.27c-51.25.042-92.143 14.29-121.348 39.928l100.05 100.05c36.017-39.102 54.902-88.247 56.656-137.89-12.275-1.4-24.074-2.096-35.36-2.087zM256 268.73L110.48 414.25c38.35 35.324 86.358 54.18 135.024 56.55-7.646-71.205 7.793-129.56 43.223-169.345L256 268.73zm45.47 45.47c-31.283 35.635-45.59 88.686-37.84 156.706 49.643-1.754 98.788-20.64 137.89-56.656L301.47 314.2z"
+      />
+    </svg>
+  );
+}
+
 interface NavButtonProps {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
   darkMode: boolean;
+  featured?: boolean;
 }
 
-function NavButton({ active, onClick, icon, label, darkMode }: NavButtonProps) {
+function NavButton({ active, onClick, icon, label, darkMode, featured = false }: NavButtonProps) {
   return (
     <button
       onClick={onClick}
       className={cn(
         'flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all',
-        active ? 'text-orange-500' : darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'
+        featured && 'relative -mt-7',
+        featured && (darkMode ? 'text-slate-300' : 'text-slate-700'),
+        !featured &&
+          (active ? 'text-orange-500' : darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')
       )}
     >
-      <div className={cn('transition-transform', active && 'scale-110')}>{icon}</div>
+      <div
+        className={cn(
+          'transition-transform',
+          active && 'scale-110',
+          featured &&
+            'w-14 h-14 rounded-full flex items-center justify-center shadow-xl border-4 text-slate-950',
+          featured && (darkMode ? 'border-slate-900/95' : 'border-white/95'),
+          featured &&
+            'bg-gradient-to-br from-orange-400 to-orange-600 shadow-orange-500/45'
+        )}
+      >
+        {icon}
+      </div>
       <span className="text-[10px] font-medium">{label}</span>
-      {active && <motion.div layoutId="nav-indicator" className="w-1 h-1 rounded-full bg-orange-500" />}
+      {active && !featured && <motion.div layoutId="nav-indicator" className="w-1 h-1 rounded-full bg-orange-500" />}
     </button>
   );
 }

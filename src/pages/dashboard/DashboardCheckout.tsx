@@ -342,9 +342,9 @@ export default function DashboardCheckout() {
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
                 body: JSON.stringify({ formData, planId, tenantId: tenant?.id }),
               });
-              const data = await res.json() as { status?: string; error?: string; mp_error?: string };
+              const data = await res.json() as { status?: string; status_detail?: string; error?: string; message?: string };
               if (!res.ok) {
-                setError(`${data.error ?? 'Pagamento não aprovado.'} ${data.mp_error ? `(${data.mp_error})` : ''}`);
+                setError(data.error ?? 'Pagamento não aprovado.');
                 return;
               }
               if (data.status === 'approved') {
@@ -352,7 +352,7 @@ export default function DashboardCheckout() {
               } else if (data.status === 'pending' || data.status === 'in_process') {
                 navigate('/dashboard/assinatura?mp=pending');
               } else {
-                setError('Pagamento não aprovado. Verifique os dados e tente novamente.');
+                setError(data.message ?? 'Pagamento não aprovado. Verifique os dados e tente novamente.');
               }
             } catch {
               setError('Erro de conexão. Tente novamente.');
@@ -476,10 +476,17 @@ export default function DashboardCheckout() {
           </>
         )}
 
-        {/* Rodapé segurança */}
-        <div className="flex items-center gap-2 text-slate-600 text-xs mt-8">
-          <ShieldCheck className="w-4 h-4 text-slate-500 shrink-0" />
-          Pagamento processado com segurança via Mercado Pago
+        {/* Rodapé segurança + Logo MP */}
+        <div className="flex flex-col items-center gap-3 mt-8">
+          <img
+            src="https://imgmp.mlstatic.com/org-img/banners/br/medios/online/468X60.jpg"
+            alt="Meios de pagamento Mercado Pago"
+            className="h-8 object-contain opacity-70"
+          />
+          <div className="flex items-center gap-2 text-slate-600 text-xs">
+            <ShieldCheck className="w-4 h-4 text-slate-500 shrink-0" />
+            Pagamento processado com segurança via Mercado Pago
+          </div>
         </div>
       </div>
     </div>

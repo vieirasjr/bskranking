@@ -152,6 +152,9 @@ function PlansTab({ token }: { token: string }) {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', price_brl: '', max_players: '', max_locations: '', max_events: '' });
+  const [saving, setSaving] = useState(false);
 
   const fetchPlans = useCallback(() => {
     setLoading(true);
@@ -173,6 +176,38 @@ function PlansTab({ token }: { token: string }) {
     setToggling(null);
   };
 
+  const startEdit = (plan: Plan) => {
+    setEditingId(plan.id);
+    setEditForm({
+      name: plan.name,
+      price_brl: (plan.price_brl / 100).toFixed(2),
+      max_players: plan.max_players?.toString() ?? '',
+      max_locations: plan.max_locations?.toString() ?? '',
+      max_events: plan.max_events?.toString() ?? '',
+    });
+  };
+
+  const cancelEdit = () => { setEditingId(null); };
+
+  const saveEdit = async () => {
+    if (!editingId) return;
+    setSaving(true);
+    const payload: Record<string, unknown> = {
+      name: editForm.name.trim(),
+      price_brl: Math.round(parseFloat(editForm.price_brl) * 100),
+      max_players: editForm.max_players ? parseInt(editForm.max_players) : null,
+      max_locations: editForm.max_locations ? parseInt(editForm.max_locations) : null,
+      max_events: editForm.max_events ? parseInt(editForm.max_events) : null,
+    };
+    await adminFetch(`/api/admin/plans/${editingId}`, token, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    setSaving(false);
+    setEditingId(null);
+    fetchPlans();
+  };
+
   if (loading) return <Loading />;
 
   return (
@@ -181,39 +216,87 @@ function PlansTab({ token }: { token: string }) {
         <div key={plan.id} className={`p-4 rounded-2xl border transition-all ${
           plan.is_active ? 'border-slate-800 bg-slate-900' : 'border-red-500/20 bg-red-500/5 opacity-60'
         }`}>
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2">
-                <p className="font-bold text-white">{plan.name}</p>
+          {editingId === plan.id ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 mb-2">
                 <span className="text-xs text-slate-500 font-mono">{plan.id}</span>
-                {!plan.is_active && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30">
-                    Desativado
-                  </span>
-                )}
+                <span className="text-xs text-orange-400 font-bold">Editando</span>
               </div>
-              <div className="flex items-center gap-4 text-xs text-slate-400 mt-1">
-                <span>R${(plan.price_brl / 100).toFixed(2)}</span>
-                <span>{plan.max_players ?? '∞'} jogadores/sessão</span>
-                <span>{plan.max_locations ?? '∞'} locais</span>
-                <span>{plan.max_events ?? '∞'} eventos</span>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Nome</label>
+                <input value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} className={inputCls} />
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Preço (R$)</label>
+                  <input type="number" step="0.01" min="0" value={editForm.price_brl} onChange={(e) => setEditForm((f) => ({ ...f, price_brl: e.target.value }))} className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Jogadores/sessão</label>
+                  <input type="number" min="0" value={editForm.max_players} onChange={(e) => setEditForm((f) => ({ ...f, max_players: e.target.value }))} placeholder="∞" className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Locais</label>
+                  <input type="number" min="0" value={editForm.max_locations} onChange={(e) => setEditForm((f) => ({ ...f, max_locations: e.target.value }))} placeholder="∞" className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Eventos</label>
+                  <input type="number" min="0" value={editForm.max_events} onChange={(e) => setEditForm((f) => ({ ...f, max_events: e.target.value }))} placeholder="∞" className={inputCls} />
+                </div>
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={cancelEdit} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 text-sm font-medium transition-all">
+                  Cancelar
+                </button>
+                <button onClick={saveEdit} disabled={saving} className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-sm transition-all disabled:opacity-50">
+                  {saving ? 'Salvando...' : 'Salvar'}
+                </button>
               </div>
             </div>
-            <button
-              onClick={() => togglePlan(plan)}
-              disabled={toggling === plan.id}
-              className="shrink-0 p-2 rounded-xl hover:bg-slate-800 transition-colors disabled:opacity-50"
-              title={plan.is_active ? 'Desativar plano' : 'Ativar plano'}
-            >
-              {toggling === plan.id ? (
-                <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
-              ) : plan.is_active ? (
-                <ToggleRight className="w-6 h-6 text-green-400" />
-              ) : (
-                <ToggleLeft className="w-6 h-6 text-red-400" />
-              )}
-            </button>
-          </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="font-bold text-white">{plan.name}</p>
+                  <span className="text-xs text-slate-500 font-mono">{plan.id}</span>
+                  {!plan.is_active && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30">
+                      Desativado
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-4 text-xs text-slate-400 mt-1">
+                  <span>R${(plan.price_brl / 100).toFixed(2)}</span>
+                  <span>{plan.max_players ?? '∞'} jogadores/sessão</span>
+                  <span>{plan.max_locations ?? '∞'} locais</span>
+                  <span>{plan.max_events ?? '∞'} eventos</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => startEdit(plan)}
+                  className="p-2 rounded-xl hover:bg-slate-800 transition-colors text-slate-400 hover:text-white"
+                  title="Editar plano"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => togglePlan(plan)}
+                  disabled={toggling === plan.id}
+                  className="p-2 rounded-xl hover:bg-slate-800 transition-colors disabled:opacity-50"
+                  title={plan.is_active ? 'Desativar plano' : 'Ativar plano'}
+                >
+                  {toggling === plan.id ? (
+                    <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                  ) : plan.is_active ? (
+                    <ToggleRight className="w-6 h-6 text-green-400" />
+                  ) : (
+                    <ToggleLeft className="w-6 h-6 text-red-400" />
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ))}
     </div>

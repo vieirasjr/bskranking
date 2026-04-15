@@ -96,6 +96,8 @@ export interface PerfilAtleta {
   state: string | null;
   /** ISO 3166-1 alpha-2 — origem do atleta (bandeira no rank global). */
   country_iso: string | null;
+  /** PIN de 4 dígitos para ações administrativas. */
+  admin_pin: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -115,9 +117,11 @@ interface EditarPerfilProps {
   onSaved?: () => void;
   /** Primeiro login: obriga nome + avatar antes de continuar */
   mandatory?: boolean;
+  /** Exibe seção de PIN de admin no perfil */
+  hasAdminAccess?: boolean;
 }
 
-export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: EditarPerfilProps) {
+export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, hasAdminAccess }: EditarPerfilProps) {
   const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -143,6 +147,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
   });
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
+  const [adminPin, setAdminPin] = useState<string | null>(null);
 
   // Crop state
   const [cropImageSrc, setCropImageSrc] = useState<string | null>(null);
@@ -175,6 +180,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
 
         if (profile) {
           setProfileId(profile.id);
+          setAdminPin(profile.admin_pin ?? null);
           setForm({
             display_name: profile.display_name ?? '',
             full_name: profile.full_name ?? '',
@@ -341,6 +347,16 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleRegeneratePin = async () => {
+    if (!profileId) return;
+    const newPin = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+    const { error } = await supabase
+      .from('basquete_users')
+      .update({ admin_pin: newPin })
+      .eq('id', profileId);
+    if (!error) setAdminPin(newPin);
   };
 
   if (loading) {
@@ -718,6 +734,35 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory }: E
             </p>
           </div>
         </div>
+
+        {hasAdminAccess && adminPin && (
+          <div className="space-y-2">
+            <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+              PIN de Administrador
+            </label>
+            <div className="flex items-center gap-3">
+              <div className={cn(
+                'flex-1 px-4 py-3 rounded-xl border text-center text-2xl font-black tracking-[0.3em]',
+                darkMode ? 'bg-slate-800/50 border-slate-700 text-orange-400' : 'bg-slate-50 border-slate-200 text-orange-600'
+              )}>
+                {adminPin}
+              </div>
+              <button
+                type="button"
+                onClick={handleRegeneratePin}
+                className={cn(
+                  'px-4 py-3 rounded-xl font-semibold text-sm transition-colors',
+                  darkMode ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                )}
+              >
+                Gerar novo
+              </button>
+            </div>
+            <p className={cn('text-xs', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+              Use este PIN para confirmar ações administrativas. Visível apenas para você.
+            </p>
+          </div>
+        )}
 
         <button
           type="submit"

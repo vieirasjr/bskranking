@@ -28,6 +28,7 @@ export default function LocalApp() {
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
   const [loadingLoc, setLoadingLoc] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [isTenantAdmin, setIsTenantAdmin] = useState(false);
 
   useEffect(() => {
     if (!slug) { navigate('/'); return; }
@@ -45,11 +46,26 @@ export default function LocalApp() {
         setNotFound(true);
       } else {
         setLocation(data as Location);
-        setTenant((data as { tenant: TenantInfo }).tenant);
+        const t = (data as { tenant: TenantInfo }).tenant;
+        setTenant(t);
+
+        // Verifica se o usuário logado é co-admin deste tenant
+        if (session?.user && t && session.user.id !== t.owner_auth_id) {
+          const loc = data as { tenant_id?: string };
+          if (loc.tenant_id) {
+            const { data: adminRows } = await supabase
+              .from('tenant_admins')
+              .select('id')
+              .eq('tenant_id', loc.tenant_id)
+              .eq('auth_id', session.user.id)
+              .maybeSingle();
+            setIsTenantAdmin(!!adminRows);
+          }
+        }
       }
       setLoadingLoc(false);
     })();
-  }, [slug, navigate]);
+  }, [slug, navigate, session]);
 
   if (authLoading || loadingLoc) {
     return (
@@ -88,9 +104,10 @@ export default function LocalApp() {
     );
   }
 
-  const isOwner = !!session?.user && session.user.id === tenant?.owner_auth_id;
+  const isRealOwner = !!session?.user && session.user.id === tenant?.owner_auth_id;
+  const isOwner = isRealOwner || isTenantAdmin;
 
-  // Plano Entrada não tem link público — bloqueia acesso para não-owners
+  // Plano Entrada não tem link público — bloqueia acesso para não-owners/admins
   if (tenant && tenant.plan_id === 'entrada' && !isOwner) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-white p-6 text-center">

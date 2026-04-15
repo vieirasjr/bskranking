@@ -164,9 +164,16 @@ export default function DashboardAssinatura() {
         })}
       </div>
 
-      <p className="text-xs text-slate-600 mt-4 text-center">
-        Pagamentos processados com segurança via Mercado Pago · PIX e Cartão de crédito aceitos
-      </p>
+      <div className="flex flex-col items-center gap-3 mt-6">
+        <img
+          src="https://imgmp.mlstatic.com/org-img/banners/br/medios/online/468X60.jpg"
+          alt="Meios de pagamento Mercado Pago"
+          className="h-8 object-contain opacity-70"
+        />
+        <p className="text-xs text-slate-600 text-center">
+          Pagamentos processados com segurança via Mercado Pago
+        </p>
+      </div>
     </div>
   );
 }
