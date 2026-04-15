@@ -12,8 +12,6 @@ import {
   Share2,
   Trophy,
   Users,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
 import { supabase } from '../supabase';
 import {
@@ -23,7 +21,7 @@ import {
   type PublicLocationRow,
 } from '../lib/publicLocations';
 import { getThemeDarkStored } from '../lib/appStorage';
-import { formatLabelsList, avatarTintIndicesForId, avatarTintClass } from '../lib/basketballExplore';
+import { formatLabelsList } from '../lib/basketballExplore';
 
 type LocRow = PublicLocationRow & { cover_image_url?: string | null };
 
@@ -33,7 +31,6 @@ export default function LocalPublicDetailPage() {
   const [loc, setLoc] = useState<LocRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
   const [fav, setFav] = useState(false);
   const [playerCount, setPlayerCount] = useState<number | null>(null);
   const [darkMode] = useState<boolean>(() => {
@@ -220,249 +217,139 @@ export default function LocalPublicDetailPage() {
 
   const aboutParts = [loc.description, loc.opening_hours_note].filter(Boolean).join('\n\n');
   const aboutText = aboutParts || 'Sem descrição cadastrada.';
-  const aboutShort = aboutText.length > 280 ? `${aboutText.slice(0, 280)}…` : aboutText;
-  const showReadMore = aboutText.length > 280;
-
   const wa = whatsappHref(loc.whatsapp);
   const tel = loc.phone?.trim() ? `tel:${loc.phone.replace(/\D/g, '')}` : null;
 
-  const tintIdx = avatarTintIndicesForId(loc.id);
-  const initials = (loc.tenant?.name ?? loc.name).trim().split(/\s+/).filter(Boolean);
-  const letters = [
-    (initials[0]?.[0] ?? '?').toUpperCase(),
-    (initials[1]?.[0] ?? '·').toUpperCase(),
-    (initials[2]?.[0] ?? '·').toUpperCase(),
-  ];
+  const heroImage = (loc.cover_image_url || loc.image_url) as string | null;
+  const galleryImages = [loc.image_url, loc.cover_image_url, loc.image_url]
+    .filter((u): u is string => !!u)
+    .slice(0, 4);
+  const features = [
+    extras.formats.length ? `Modalidades: ${extras.formats.join(', ')}` : null,
+    loc.hosts_tournaments ? 'Suporta torneios' : null,
+    loc.hosts_championships ? 'Suporta campeonatos' : null,
+    loc.opening_hours_note ? `Horários: ${loc.opening_hours_note}` : null,
+    hasCoords ? 'Localização por coordenadas disponível' : null,
+    `Raio de acesso: ${loc.radius_m ?? 50}m`,
+  ].filter(Boolean) as string[];
 
   return (
-    <div className={darkMode ? 'min-h-screen bg-[#07090f] text-white pb-32' : 'min-h-screen bg-slate-50 text-slate-900 pb-32'}>
-      <div className="relative h-[min(52vh,520px)] w-full overflow-hidden">
-        {(loc.cover_image_url || loc.image_url) ? (
-          <img
-            src={(loc.cover_image_url || loc.image_url) as string}
-            alt=""
-            className="w-full h-full object-cover object-center"
-          />
-        ) : (
-          <div className="w-full h-full bg-gradient-to-br from-[#ff8a4c]/35 to-slate-950 flex items-center justify-center">
-            <Trophy className="w-24 h-24 text-[#ff8a4c]/30" />
-          </div>
-        )}
-        <div className={`absolute inset-0 bg-gradient-to-t ${darkMode ? 'from-[#07090f] via-[#07090f]/35 to-black/30' : 'from-slate-50 via-slate-50/35 to-black/20'}`} />
-
-        <div className="absolute top-0 left-0 right-0 p-4 pt-[max(1rem,env(safe-area-inset-top))] flex items-start justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => navigate('/locais')}
-            className="p-2.5 rounded-2xl bg-black/45 backdrop-blur-md border border-white/10 hover:bg-black/55 transition-colors"
-            aria-label="Voltar"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={share}
-              className="p-2.5 rounded-2xl bg-black/45 backdrop-blur-md border border-white/10 hover:bg-black/55 transition-colors"
-              aria-label="Compartilhar"
-            >
-              <Share2 className="w-5 h-5" />
-            </button>
-            <button
-              type="button"
-              onClick={toggleFav}
-              className="p-2.5 rounded-2xl bg-black/45 backdrop-blur-md border border-white/10 hover:bg-black/55 transition-colors"
-              aria-label="Favoritar"
-            >
-              <Heart className={`w-5 h-5 ${fav ? 'fill-[#ff8a4c] text-[#ff8a4c]' : 'text-white'}`} />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-lg mx-auto px-4 -mt-14 relative z-10"
-      >
-        <div className={`rounded-t-[28px] rounded-b-3xl border backdrop-blur-xl shadow-2xl overflow-hidden ${darkMode ? 'border-slate-700/80 bg-slate-900/95' : 'border-slate-200 bg-white/95'}`}>
-          <div className={`h-1.5 w-12 rounded-full mx-auto mt-3 mb-1 opacity-60 ${darkMode ? 'bg-slate-700' : 'bg-slate-300'}`} aria-hidden />
-
-          <div className="px-5 pt-4 pb-5">
-            {extras.formats.length > 0 && (
-              <p className="text-[#ff8a4c] text-xs font-black uppercase tracking-widest mb-1">{extras.formats.join(' · ')}</p>
-            )}
-            {(loc.hosts_tournaments || loc.hosts_championships) && (
-              <p className="text-amber-400/95 text-[11px] font-bold mb-1">
-                {loc.hosts_tournaments && loc.hosts_championships
-                  ? 'Torneios e campeonatos'
-                  : loc.hosts_tournaments
-                    ? 'Torneios'
-                    : 'Campeonatos'}
-              </p>
-            )}
-            <h1 className={`text-2xl sm:text-3xl font-black leading-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>{loc.name}</h1>
-
-            <div className={`mt-4 space-y-2 text-sm ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-              <div className="flex items-start gap-2">
-                <MapPin className="w-4 h-4 text-[#ff8a4c] shrink-0 mt-0.5" />
-                <span className="leading-snug">{locationLine}</span>
-              </div>
-              {addressText && (
-                <p className={`text-xs pl-6 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{addressText}</p>
-              )}
-              {loc.opening_hours_note && (
-                <div className="flex items-start gap-2">
-                  <Clock className="w-4 h-4 text-[#ff8a4c] shrink-0 mt-0.5" />
-                  <span className="leading-snug">{loc.opening_hours_note}</span>
-                </div>
-              )}
+    <div className={darkMode ? 'min-h-screen bg-[#07090f] text-white pb-36' : 'min-h-screen bg-slate-100 text-slate-900 pb-36'}>
+      <div className="w-full max-w-xl mx-auto min-h-screen">
+        <div className="relative h-60 w-full overflow-hidden rounded-b-3xl">
+          {heroImage ? (
+            <img src={heroImage} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full bg-gradient-to-br from-[#ff8a4c]/35 to-slate-950 flex items-center justify-center">
+              <Trophy className="w-20 h-20 text-[#ff8a4c]/30" />
             </div>
-
-            <div className="mt-5 flex items-center gap-3">
-              <div className="flex -space-x-2">
-                {tintIdx.map((ti, i) => (
-                  <div
-                    key={i}
-                    className={`w-9 h-9 rounded-full border-2 flex items-center justify-center text-[11px] font-bold text-white ${darkMode ? 'border-slate-900' : 'border-white'} ${avatarTintClass(ti)}`}
-                  >
-                    {letters[i]}
-                  </div>
-                ))}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className={`text-sm font-bold leading-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                  {playerCount != null ? (
-                    <>
-                      {playerCount.toLocaleString('pt-BR')} jogador{playerCount === 1 ? '' : 'es'} na lista
-                    </>
-                  ) : (
-                    'Carregando lista…'
-                  )}
-                </p>
-                <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Contagem em tempo real neste local</p>
-              </div>
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-black/10 to-transparent" />
+          <div className="absolute top-3 left-3 right-3 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => navigate('/locais')}
+              className="w-9 h-9 rounded-full bg-black/45 border border-white/10 text-white flex items-center justify-center"
+              aria-label="Voltar"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={goToTenantLogin}
-                className="text-xs font-bold text-[#ff8a4c] shrink-0 hover:underline"
+                onClick={toggleFav}
+                className="w-9 h-9 rounded-full bg-black/45 border border-white/10 text-white flex items-center justify-center"
+                aria-label="Favoritar"
               >
-                Ver lista
+                <Heart className={`w-4 h-4 ${fav ? 'fill-[#ff8a4c] text-[#ff8a4c]' : ''}`} />
+              </button>
+              <button
+                type="button"
+                onClick={share}
+                className="w-9 h-9 rounded-full bg-black/45 border border-white/10 text-white flex items-center justify-center"
+                aria-label="Compartilhar"
+              >
+                <Share2 className="w-4 h-4" />
               </button>
             </div>
           </div>
+        </div>
 
-          <div className={`border-t px-5 py-5 ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-            <h2 className={`text-sm font-black mb-2 flex items-center justify-between ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-              Sobre o local
-              {showReadMore && (
-                <button
-                  type="button"
-                  onClick={() => setAboutOpen((v) => !v)}
-                  className="text-[#ff8a4c] text-xs font-bold flex items-center gap-0.5"
-                >
-                  {aboutOpen ? (
-                    <>
-                      Ler menos <ChevronUp className="w-4 h-4" />
-                    </>
-                  ) : (
-                    <>
-                      Ler mais <ChevronDown className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              )}
-            </h2>
-            <p className={`text-sm leading-relaxed whitespace-pre-wrap ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>
-              {aboutOpen || !showReadMore ? aboutText : aboutShort}
-            </p>
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={darkMode ? 'mx-3 mt-3 rounded-3xl bg-[#10131a] border border-slate-800 p-4 shadow-xl' : 'mx-3 mt-3 rounded-3xl bg-white border border-slate-200 p-4 shadow-xl'}
+        >
+          <h1 className={darkMode ? 'text-2xl font-black text-white leading-tight' : 'text-2xl font-black text-slate-900 leading-tight'}>{loc.name}</h1>
+          <p className={darkMode ? 'mt-1 text-sm text-slate-400 flex items-start gap-1.5' : 'mt-1 text-sm text-slate-500 flex items-start gap-1.5'}>
+            <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{addressText ?? locationLine}</span>
+          </p>
+          <p className={darkMode ? 'mt-2 text-sm font-bold text-orange-300' : 'mt-2 text-sm font-bold text-orange-600'}>
+            {playerCount != null
+              ? `${playerCount.toLocaleString('pt-BR')} jogador${playerCount === 1 ? '' : 'es'} na lista`
+              : 'Carregando jogadores...'}
+          </p>
+
+          {galleryImages.length > 0 && (
+            <div className="relative mt-4">
+              <div className={`pointer-events-none absolute inset-y-0 left-0 w-6 z-10 ${darkMode ? 'bg-gradient-to-r from-[#10131a] to-transparent' : 'bg-gradient-to-r from-white to-transparent'}`} />
+              <div className={`pointer-events-none absolute inset-y-0 right-0 w-10 z-10 ${darkMode ? 'bg-gradient-to-l from-[#10131a] to-transparent' : 'bg-gradient-to-l from-white to-transparent'}`} />
+              <div className="flex gap-2 overflow-x-auto no-scrollbar pr-8 snap-x snap-mandatory">
+              {galleryImages.map((img, i) => (
+                <img key={`${img}-${i}`} src={img} alt="" className="w-24 h-20 rounded-xl object-cover shrink-0 border border-black/10 snap-start" />
+              ))}
+              </div>
+            </div>
+          )}
+
+          <div className={darkMode ? 'mt-4 rounded-2xl bg-slate-900 border border-slate-800 p-3' : 'mt-4 rounded-2xl bg-slate-50 border border-slate-200 p-3'}>
+            <h2 className={darkMode ? 'text-sm font-black text-white' : 'text-sm font-black text-slate-900'}>Sobre o local</h2>
+            <div className="mt-2 space-y-1.5">
+              {features.map((f, i) => (
+                <p key={i} className={darkMode ? 'text-xs text-slate-300' : 'text-xs text-slate-600'}>{f}</p>
+              ))}
+              <p className={darkMode ? 'text-xs text-slate-400 whitespace-pre-wrap' : 'text-xs text-slate-500 whitespace-pre-wrap'}>
+                {aboutText}
+              </p>
+            </div>
           </div>
 
-          <div className={`border-t px-5 py-5 ${darkMode ? 'border-slate-800 bg-slate-900/50' : 'border-slate-200 bg-slate-50/50'}`}>
-            <h2 className={`text-sm font-black mb-3 ${darkMode ? 'text-white' : 'text-slate-900'}`}>Organização</h2>
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-[#ff8a4c]/20 flex items-center justify-center text-[#ff8a4c] font-black text-lg shrink-0">
-                {(loc.tenant?.name ?? loc.name).slice(0, 1).toUpperCase()}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className={`font-bold truncate ${darkMode ? 'text-white' : 'text-slate-900'}`}>{loc.tenant?.name ?? loc.name}</p>
-                <p className={`text-xs ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Organização (tenant)</p>
-              </div>
-              <div className="flex gap-2 shrink-0">
+          <div className="mt-4 flex items-center gap-2">
+            {(tel || wa) && (
+              <>
                 {tel && (
-                  <a
-                    href={tel}
-                    className="w-11 h-11 rounded-full bg-[#ff8a4c] flex items-center justify-center shadow-lg shadow-[#ff8a4c]/20 hover:bg-[#ff7a38] transition-colors"
-                    aria-label="Ligar"
-                  >
-                    <Phone className="w-5 h-5 text-white" />
+                  <a href={tel} className={darkMode ? 'w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center' : 'w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center'}>
+                    <Phone className="w-4 h-4" />
                   </a>
                 )}
                 {wa && (
-                  <a
-                    href={wa}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-11 h-11 rounded-full bg-[#ff8a4c] flex items-center justify-center shadow-lg shadow-[#ff8a4c]/20 hover:bg-[#ff7a38] transition-colors"
-                    aria-label="WhatsApp"
-                  >
-                    <MessageCircle className="w-5 h-5 text-white" />
+                  <a href={wa} target="_blank" rel="noopener noreferrer" className={darkMode ? 'w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center' : 'w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center'}>
+                    <MessageCircle className="w-4 h-4" />
                   </a>
                 )}
-              </div>
-            </div>
-            {!tel && !wa && (
-              <p className={`text-[11px] mt-2 ${darkMode ? 'text-slate-600' : 'text-slate-400'}`}>Telefone e WhatsApp podem ser cadastrados no painel do gestor.</p>
+              </>
             )}
-          </div>
-
-          <div className={`border-t px-5 py-5 ${darkMode ? 'border-slate-800' : 'border-slate-200'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <h2 className={`text-sm font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Endereço</h2>
-              {(hasCoords || addressText) && (
-                <button type="button" onClick={openMaps} className="text-xs font-bold text-[#ff8a4c] hover:underline">
-                  Ver no mapa
-                </button>
-              )}
-            </div>
-            <p className={`text-sm flex items-start gap-2 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-              <MapPin className="w-4 h-4 text-[#ff8a4c] shrink-0 mt-0.5" />
-              <span>{addressText ?? locationLine}</span>
-            </p>
             {(hasCoords || addressText) && (
               <button
                 type="button"
                 onClick={openMaps}
-                className={`mt-3 w-full flex items-center justify-center gap-2 py-3 rounded-2xl border text-sm font-semibold transition-colors ${darkMode ? 'border-slate-600 bg-slate-800/50 hover:bg-slate-800 text-white' : 'border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-700'}`}
+                className={darkMode ? 'ml-auto text-xs font-bold text-orange-300 inline-flex items-center gap-1.5' : 'ml-auto text-xs font-bold text-orange-600 inline-flex items-center gap-1.5'}
               >
-                <ExternalLink className="w-4 h-4" />
-                {hasCoords ? 'Abrir no Google Maps (coordenadas)' : 'Abrir no Google Maps (endereço)'}
+                <ExternalLink className="w-3.5 h-3.5" />
+                Ver no mapa
               </button>
             )}
-            {loc.website && (
-              <a
-                href={loc.website.startsWith('http') ? loc.website : `https://${loc.website}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-3 block text-center text-sm text-[#ff8a4c] font-semibold hover:underline"
-              >
-                Site do local
-              </a>
-            )}
           </div>
-        </div>
-      </motion.div>
+        </motion.div>
+      </div>
 
-      <div className={`fixed bottom-0 left-0 right-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] bg-gradient-to-t z-20 pointer-events-none ${darkMode ? 'from-[#07090f] via-[#07090f] to-transparent' : 'from-slate-50 via-slate-50 to-transparent'}`}>
-        <div className="max-w-lg mx-auto pointer-events-auto flex items-center gap-3">
-          <div className="flex-1 min-w-0">
-            <p className={`text-[10px] uppercase tracking-wider font-bold ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Lista do local</p>
-            <p className={`text-sm font-bold truncate ${darkMode ? 'text-white' : 'text-slate-900'}`}>Entrar na fila Braska</p>
-          </div>
+      <div className={`fixed bottom-0 left-0 right-0 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] bg-gradient-to-t z-20 ${darkMode ? 'from-[#07090f] via-[#07090f] to-transparent' : 'from-slate-100 via-slate-100 to-transparent'}`}>
+        <div className="w-full max-w-xl mx-auto">
           <button
             type="button"
             onClick={goToTenantLogin}
-            className="shrink-0 px-6 py-3.5 rounded-2xl font-black text-sm bg-[#ff8a4c] hover:bg-[#ff7a38] text-white shadow-xl shadow-[#ff8a4c]/25 flex items-center gap-2 transition-all active:scale-[0.98]"
+            className="w-full py-3.5 rounded-2xl font-black text-sm bg-[#1d1f26] hover:bg-[#11131a] text-white shadow-xl flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
           >
             <Users className="w-5 h-5" />
             Entrar na lista
