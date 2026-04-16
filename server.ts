@@ -53,12 +53,17 @@ const PLAN_DESCRIPTIONS: Record<string, string> = {
 };
 const PLAN_PRICES: Record<string, number> = {
   teste: 1,
-  entrada: 36.9,
+  entrada: 36.90,
   basico: 100,
   profissional: 150,
   enterprise: 200,
   avulso: 50,
 };
+// Garante que o valor enviado ao MP tenha no máximo 2 casas decimais
+// (evita artefatos de floating-point como 36.90000000000000035527…)
+function mpAmount(price: number): number {
+  return Math.round(price * 100) / 100;
+}
 // Planos com expiração por tempo (horas) em vez de ciclo mensal
 const PLAN_EXPIRY_HOURS: Record<string, number> = {
   teste: 168, // 7 dias
@@ -171,6 +176,8 @@ async function startServer() {
     const isPublicUrl = !baseUrl.includes("localhost") && !baseUrl.includes("127.0.0.1");
     const payer = await getPayerInfo(auth.userId);
 
+    const amount = mpAmount(PLAN_PRICES[planId]);
+
     try {
       const mpData = await mpPreference.create({
         body: {
@@ -181,7 +188,7 @@ async function startServer() {
             category_id: "services",
             quantity: 1,
             currency_id: "BRL",
-            unit_price: PLAN_PRICES[planId],
+            unit_price: amount,
           }],
           payer: {
             email: (req.body.email as string | undefined) ?? payer.email,
@@ -252,12 +259,13 @@ async function startServer() {
     if (!tenant) return res.status(403).json({ error: "Tenant não encontrado." });
 
     const payer = await getPayerInfo(auth.userId);
+    const amount = mpAmount(PLAN_PRICES[planId]);
 
     try {
       const payment = await mpPayment.create({
         body: {
           ...formData,
-          transaction_amount: PLAN_PRICES[planId],
+          transaction_amount: amount,
           description: PLAN_DESCRIPTIONS[planId],
           external_reference: `${tenant.id}|${planId}`,
           statement_descriptor: "BRASKA",
@@ -276,7 +284,7 @@ async function startServer() {
               description: PLAN_DESCRIPTIONS[planId],
               category_id: "services",
               quantity: 1,
-              unit_price: PLAN_PRICES[planId],
+              unit_price: amount,
             }],
             payer: {
               first_name: payer.first_name || undefined,
@@ -323,11 +331,11 @@ async function startServer() {
         message: getPaymentMessage(statusDetail),
       });
     } catch (err: unknown) {
-      console.error("MP process-payment error:", err);
-      const mpErr = err as { message?: string; cause?: Array<{ description: string }> };
-      return res.status(502).json({
-        error: mpErr.cause?.[0]?.description ?? mpErr.message ?? "Erro ao processar pagamento.",
-      });
+      console.error("MP process-payment error:", JSON.stringify(err, null, 2));
+      const mpErr = err as { message?: string; cause?: Array<{ code?: string; description: string }> };
+      const detail = mpErr.cause?.[0]?.description ?? mpErr.message ?? "Erro ao processar pagamento.";
+      console.error("MP process-payment detail:", detail);
+      return res.status(502).json({ error: detail });
     }
   });
 
@@ -362,10 +370,12 @@ async function startServer() {
       ? "comprador@braska.app"
       : (rawEmail || "comprador@braska.app");
 
+    const amount = mpAmount(PLAN_PRICES[planId]);
+
     try {
       const payment = await mpPayment.create({
         body: {
-          transaction_amount: PLAN_PRICES[planId],
+          transaction_amount: amount,
           payment_method_id: "pix",
           description: PLAN_DESCRIPTIONS[planId],
           external_reference: `${tenant.id}|${planId}`,
@@ -382,7 +392,7 @@ async function startServer() {
               description: PLAN_DESCRIPTIONS[planId],
               category_id: "services",
               quantity: 1,
-              unit_price: PLAN_PRICES[planId],
+              unit_price: amount,
             }],
             payer: {
               first_name: payer.first_name || undefined,
@@ -405,9 +415,11 @@ async function startServer() {
         ticket_url: txData?.ticket_url,
       });
     } catch (err: unknown) {
-      console.error("MP create-pix error:", err);
-      const mpErr = err as { message?: string; cause?: Array<{ description: string }> };
-      return res.status(502).json({ error: mpErr.cause?.[0]?.description ?? mpErr.message ?? "Erro ao gerar PIX." });
+      console.error("MP create-pix error:", JSON.stringify(err, null, 2));
+      const mpErr = err as { message?: string; cause?: Array<{ code?: string; description: string }> };
+      const detail = mpErr.cause?.[0]?.description ?? mpErr.message ?? "Erro ao gerar PIX.";
+      console.error("MP create-pix detail:", detail);
+      return res.status(502).json({ error: detail });
     }
   });
 

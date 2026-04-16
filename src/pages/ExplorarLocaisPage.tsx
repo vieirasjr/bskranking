@@ -89,6 +89,8 @@ function locationSubtitle(loc: PublicLocationRow): string {
   return loc.country === 'BR' || !loc.country ? 'Brasil' : (loc.country ?? '');
 }
 
+import { GlobalPointsListener } from '../components/GlobalPointsListener';
+
 export default function ExplorarLocaisPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -583,6 +585,7 @@ export default function ExplorarLocaisPage() {
 
   return (
     <div className={`min-h-screen pb-24 ${darkMode ? 'bg-[#07090f] text-white' : 'bg-slate-50 text-slate-900'}`}>
+      <GlobalPointsListener />
       <header className={`sticky top-0 z-30 border-b backdrop-blur-xl ${darkMode ? 'border-slate-800/80 bg-[#07090f]/92' : 'border-slate-200 bg-white/92'}`}>
         <div className="max-w-5xl mx-auto px-4 pt-4 pb-3 sm:pt-5 sm:pb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
           <div className="flex items-center gap-2 min-w-0">
