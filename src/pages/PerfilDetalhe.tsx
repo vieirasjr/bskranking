@@ -11,6 +11,7 @@ import {
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { supabase } from '../supabase';
+import StatsEvolutionChart from '../components/StatsEvolutionChart';
 
 function cn(...inputs: unknown[]) {
   return twMerge(clsx(inputs));
@@ -411,6 +412,11 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
           ))}
         </div>
       </div>
+
+      {/* ── EVOLUÇÃO (gráfico de linha com área) ─────────────────── */}
+      {data.user_id && (
+        <StatsEvolutionChart userId={data.user_id} darkMode={darkMode} />
+      )}
 
       {/* ── ESTATÍSTICAS (estilo "Performed Training") ───────────── */}
       <div
