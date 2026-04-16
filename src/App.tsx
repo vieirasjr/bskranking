@@ -2886,7 +2886,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                   </>
                 ) : isAdminMode && hasAdminAccess ? (
                   <>
-                    {activeTab === 'lista' && isMatchStarted && isSessionController && (
+                    {activeTab === 'lista' && isMatchStarted && (
                       <button
                         type="button"
                         onClick={() => { handleEndMatchAttempt(); setHeaderMenuOpen(false); }}
@@ -3193,8 +3193,8 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
               </motion.div>
             )}
 
-            {/* Encerrar sessão (apenas controlador) */}
-            {isAdminMode && isMatchStarted && (isSessionController || !hasActiveController) && (
+            {/* Encerrar sessão (qualquer gestor em modo admin) */}
+            {isAdminMode && isMatchStarted && (
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
