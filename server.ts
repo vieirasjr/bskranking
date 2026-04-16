@@ -523,7 +523,7 @@ async function startServer() {
       await mpPreApproval.update({ id: subscriptionId, body: { status: "cancelled" } });
     } catch (err) {
       console.error("MP cancel-subscription error:", err);
-      return res.status(502).json({ error: "Erro ao cancelar no Mercado Pago." });
+      return res.status(502).json({ error: "Erro ao cancelar a assinatura." });
     }
 
     await getSupabaseAdmin()

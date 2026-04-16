@@ -477,16 +477,11 @@ export default function DashboardCheckout() {
           </>
         )}
 
-        {/* Rodapé segurança + Logo MP */}
+        {/* Rodapé segurança */}
         <div className="flex flex-col items-center gap-3 mt-8">
-          <img
-            src="https://imgmp.mlstatic.com/org-img/banners/br/medios/online/468X60.jpg"
-            alt="Meios de pagamento Mercado Pago"
-            className="h-8 object-contain opacity-70"
-          />
           <div className="flex items-center gap-2 text-slate-600 text-xs">
             <ShieldCheck className="w-4 h-4 text-slate-500 shrink-0" />
-            Pagamento processado com segurança via Mercado Pago
+            Pagamento processado com segurança
           </div>
         </div>
       </div>

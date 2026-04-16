@@ -305,7 +305,7 @@ export default function LandingPage() {
       <footer className="border-t border-slate-700/50 px-6 py-8 text-center text-slate-400 text-sm">
         <div className="flex items-center justify-center gap-2 mb-2">
           <Shield className="w-4 h-4" />
-          <span>Pagamentos processados com segurança via Mercado Pago</span>
+          <span>Pagamentos processados com segurança</span>
         </div>
         <p>© {new Date().getFullYear()} Braska · Todos os direitos reservados</p>
       </footer>
