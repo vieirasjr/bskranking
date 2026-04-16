@@ -681,9 +681,9 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         .maybeSingle();
       if (!error && data?.admin === true) {
         setHasAdminAccess(true);
-        // Usuário com acesso admin só entra em modo admin após validação de PIN.
-        setIsAdminMode(false);
-        setAdminModeStored(false);
+        // Preservar modo admin se o PIN já foi validado nesta sessão (persistido no localStorage)
+        const storedAdminMode = getAdminModeStored();
+        setIsAdminMode(storedAdminMode);
       }
     };
     checkAdmin();
