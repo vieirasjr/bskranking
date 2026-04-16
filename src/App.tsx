@@ -331,15 +331,18 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
   const profileComplete = !!(userProfile?.display_name?.trim() && userProfile?.avatar_url);
 
   useEffect(() => {
-    setHasAdminAccess(!!isOwner);
     if (!user) {
+      setHasAdminAccess(false);
       setIsAdminMode(false);
       setAdminModeStored(false);
     } else if (isOwner) {
+      setHasAdminAccess(true);
       // Owner mantém acesso administrativo e preserva o modo admin previamente validado por PIN.
       const storedAdminMode = getAdminModeStored();
       setIsAdminMode(storedAdminMode);
     }
+    // Para usuário admin por e-mail (não owner), não resetar aqui:
+    // o acesso/mode é controlado pelo checkAdmin e pela validação de PIN.
   }, [user, isOwner]);
 
   useEffect(() => {
@@ -1220,10 +1223,8 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
 
   const handleEndMatchAttempt = () => {
     if (!isAdminMode) return;
-    if (isMatchStarted && !isSessionController) {
-      addNotification('Apenas o gestor que iniciou a sessão pode encerrá-la.', 'warning', { showToastForMs: 4000 });
-      return;
-    }
+    // Removida a restrição de "apenas o gestor que iniciou":
+    // Se o usuário possui a senha de admin, ele tem permissão total.
     setShowPasswordModal({ type: 'END_MATCH' });
     setPasswordInput('');
     setPasswordError(false);
