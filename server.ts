@@ -53,7 +53,7 @@ const PLAN_DESCRIPTIONS: Record<string, string> = {
 };
 const PLAN_PRICES: Record<string, number> = {
   teste: 1,
-  entrada: 36.90,
+  entrada: 36,
   basico: 100,
   profissional: 150,
   enterprise: 200,
