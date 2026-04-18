@@ -9,6 +9,7 @@ export interface Plan {
   price_brl: number;
   max_players: number | null;
   max_locations: number | null;
+  can_create_tournaments?: boolean;
 }
 
 export interface Tenant {
@@ -57,7 +58,9 @@ interface TenantContextValue {
   loading: boolean;
   isSubscriptionActive: boolean;
   canAddLocation: boolean;
+  canCreateTournaments: boolean;
   maxPlayers: number | null;
+  hasFeature: (featureId: string) => boolean;
   refresh: () => void;
 }
 
@@ -69,12 +72,14 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   const [locations, setLocations] = useState<Location[]>([]);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [loading, setLoading] = useState(true);
+  const [disabledFeatures, setDisabledFeatures] = useState<Set<string>>(new Set());
 
   const fetch = useCallback(async () => {
     if (!user) {
       setTenant(null);
       setLocations([]);
       setPlan(null);
+      setDisabledFeatures(new Set());
       setLoading(false);
       return;
     }
@@ -90,6 +95,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
         setTenant(null);
         setLocations([]);
         setPlan(null);
+        setDisabledFeatures(new Set());
         setLoading(false);
         return;
       }
@@ -97,6 +103,18 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       const p = tenantData.plan as Plan;
       setTenant({ ...tenantData, plan: p });
       setPlan(p);
+
+      const { data: pf, error: pfErr } = await supabase
+        .from('plan_features')
+        .select('feature_id, enabled')
+        .eq('plan_id', p.id);
+      if (pfErr) {
+        setDisabledFeatures(new Set());
+      } else {
+        setDisabledFeatures(
+          new Set((pf ?? []).filter((r) => r.enabled === false).map((r) => r.feature_id as string))
+        );
+      }
 
       const { data: locs } = await supabase
         .from('locations')
@@ -156,9 +174,23 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     return true;
   })();
 
+  // Feature é considerada habilitada por padrão; a lista explícita
+  // guarda apenas as DESATIVADAS pelo admin para o plano corrente.
+  const hasFeature = useCallback(
+    (featureId: string) => !disabledFeatures.has(featureId),
+    [disabledFeatures],
+  );
+
   const canAddLocation =
-    plan?.max_locations == null ||
-    locations.length < plan.max_locations;
+    (plan?.max_locations == null || locations.length < plan.max_locations) &&
+    hasFeature('action.criar_local');
+
+  // Apenas planos com a flag explícita (profissional e enterprise) podem
+  // criar torneios, e precisam estar com assinatura ativa.
+  const canCreateTournaments =
+    !!plan?.can_create_tournaments &&
+    isSubscriptionActive &&
+    hasFeature('action.criar_torneio');
 
   return (
     <TenantContext.Provider value={{
@@ -168,7 +200,9 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       loading,
       isSubscriptionActive,
       canAddLocation,
+      canCreateTournaments,
       maxPlayers: plan?.max_players ?? null,
+      hasFeature,
       refresh: fetch,
     }}>
       {children}

@@ -225,6 +225,12 @@ interface Evento {
   status: 'draft' | 'open' | 'in_progress' | 'finished' | 'cancelled';
   created_at: string;
   _inscricoes_count?: number;
+  // Campos adicionais quando `kind === 'torneio'` (mesclado da tabela tournaments)
+  kind?: 'evento' | 'torneio';
+  slug?: string;
+  logo_url?: string | null;
+  is_paid?: boolean;
+  price_brl?: number | null;
 }
 
 const EVENT_TYPE_LABELS: Record<Evento['type'], string> = { torneio: 'Torneio', campeonato: 'Campeonato', festival: 'Festival' };
@@ -421,17 +427,48 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
 
   const fetchEventos = useCallback(async () => {
     if (!locationId) return;
-    const { data, error } = await supabase
-      .from('eventos')
-      .select('*, evento_inscricoes(count)')
-      .eq('location_id', locationId)
-      .neq('status', 'cancelled')
-      .order('event_date', { ascending: true });
-    if (error) { console.error('Eventos fetch error:', error); return; }
-    setEventos((data ?? []).map((e: any) => ({
+    const [{ data: evs, error }, { data: tourneys }] = await Promise.all([
+      supabase
+        .from('eventos')
+        .select('*, evento_inscricoes(count)')
+        .eq('location_id', locationId)
+        .neq('status', 'cancelled')
+        .order('event_date', { ascending: true }),
+      supabase
+        .from('tournaments')
+        .select('id, name, slug, description, start_date, modality, status, logo_url, is_paid, price_brl, max_teams')
+        .eq('location_id', locationId)
+        .in('status', ['open', 'in_progress', 'closed', 'finished'])
+        .order('start_date', { ascending: true }),
+    ]);
+    if (error) { console.error('Eventos fetch error:', error); }
+    const eventosList: Evento[] = (evs ?? []).map((e: any) => ({
       ...e,
+      kind: 'evento' as const,
       _inscricoes_count: Array.isArray(e.evento_inscricoes) ? e.evento_inscricoes[0]?.count ?? 0 : 0,
-    })));
+    }));
+    const tourneysList: Evento[] = (tourneys ?? []).map((t: any) => ({
+      id: t.id,
+      title: t.name,
+      description: t.description,
+      event_date: t.start_date,
+      event_time: null,
+      type: 'torneio' as const,
+      modality: t.modality,
+      max_participants: t.max_teams,
+      status: t.status === 'closed' ? 'finished' : t.status,
+      created_at: '',
+      kind: 'torneio' as const,
+      slug: t.slug,
+      logo_url: t.logo_url,
+      is_paid: t.is_paid,
+      price_brl: t.price_brl,
+      _inscricoes_count: 0,
+    }));
+    const merged = [...eventosList, ...tourneysList].sort((a, b) =>
+      a.event_date.localeCompare(b.event_date)
+    );
+    setEventos(merged);
   }, [locationId]);
 
   const fetchPlayers = useCallback(async () => {
@@ -3766,28 +3803,42 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                     in_progress: darkMode ? 'bg-blue-500/15 text-blue-400 border-blue-500/20' : 'bg-blue-50 text-blue-700 border-blue-200',
                     finished: darkMode ? 'bg-slate-500/15 text-slate-500 border-slate-500/20' : 'bg-slate-100 text-slate-500 border-slate-200',
                   };
+                  const isTourney = evento.kind === 'torneio';
+                  const onCardClick = isTourney && evento.slug
+                    ? () => window.open(`/torneios/${evento.slug}`, '_blank')
+                    : undefined;
                   return (
                     <motion.div
-                      key={evento.id}
+                      key={`${evento.kind ?? 'evento'}-${evento.id}`}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: i * 0.05 }}
+                      onClick={onCardClick}
                       className={cn(
                         'p-5 rounded-2xl border transition-all',
-                        darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+                        darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm',
+                        onCardClick && 'cursor-pointer hover:border-orange-500/40'
                       )}
                     >
                       <div className="flex items-start justify-between gap-3 mb-2">
                         <div className="flex items-center gap-2 flex-wrap">
+                          {isTourney && evento.logo_url && (
+                            <img src={evento.logo_url} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-700" />
+                          )}
                           <span className="text-[10px] font-bold uppercase tracking-wider text-orange-500">
                             {EVENT_TYPE_LABELS[evento.type]} · {evento.modality}
                           </span>
                           <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full border', statusColors[evento.status] ?? '')}>
                             {EVENT_STATUS_LABELS[evento.status]}
                           </span>
+                          {isTourney && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/25">
+                              INSCRIÇÃO
+                            </span>
+                          )}
                         </div>
-                        {isAdminMode && (
-                          <button onClick={() => handleDeleteEvento(evento.id)} className={cn('p-1.5 rounded-lg transition-colors', darkMode ? 'text-slate-500 hover:text-red-400 hover:bg-red-500/10' : 'text-slate-400 hover:text-red-500 hover:bg-red-50')}>
+                        {isAdminMode && !isTourney && (
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteEvento(evento.id); }} className={cn('p-1.5 rounded-lg transition-colors', darkMode ? 'text-slate-500 hover:text-red-400 hover:bg-red-500/10' : 'text-slate-400 hover:text-red-500 hover:bg-red-50')}>
                             <Trash2 className="w-4 h-4" />
                           </button>
                         )}
@@ -3796,7 +3847,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                       {evento.description && (
                         <p className={cn('text-sm mb-2', darkMode ? 'text-slate-400' : 'text-slate-500')}>{evento.description}</p>
                       )}
-                      <div className={cn('flex items-center gap-4 text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                      <div className={cn('flex items-center gap-4 text-sm flex-wrap', darkMode ? 'text-slate-400' : 'text-slate-500')}>
                         <span className="flex items-center gap-1">
                           <Calendar className="w-3.5 h-3.5" /> {dateStr}
                         </span>
@@ -3805,10 +3856,19 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                             <Timer className="w-3.5 h-3.5" /> {evento.event_time.slice(0, 5)}
                           </span>
                         )}
-                        <span className="flex items-center gap-1">
-                          <Users className="w-3.5 h-3.5" />
-                          {evento._inscricoes_count ?? 0}{evento.max_participants ? `/${evento.max_participants}` : ''}
-                        </span>
+                        {!isTourney && (
+                          <span className="flex items-center gap-1">
+                            <Users className="w-3.5 h-3.5" />
+                            {evento._inscricoes_count ?? 0}{evento.max_participants ? `/${evento.max_participants}` : ''}
+                          </span>
+                        )}
+                        {isTourney && (
+                          <span className="font-semibold text-emerald-400">
+                            {evento.is_paid && evento.price_brl
+                              ? `R$ ${(evento.price_brl / 100).toFixed(2).replace('.', ',')} por equipe`
+                              : 'Inscrição gratuita'}
+                          </span>
+                        )}
                       </div>
                     </motion.div>
                   );

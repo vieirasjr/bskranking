@@ -1,8 +1,10 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import LandingPage from '../pages/LandingPage';
 import ExplorarLocaisPage from '../pages/ExplorarLocaisPage';
-import LocalPublicDetailPage from '../pages/LocalPublicDetailPage';
+import LocaisListPage from '../pages/LocaisListPage';
+import TorneiosListPage from '../pages/TorneiosListPage';
+import TreinosPage from '../pages/TreinosPage';
 import Login from '../pages/Login';
 import CadastroAdmin from '../pages/CadastroAdmin';
 import LocalApp from '../pages/LocalApp';
@@ -10,9 +12,12 @@ import DashboardLayout from '../pages/dashboard/DashboardLayout';
 import DashboardHome from '../pages/dashboard/DashboardHome';
 import DashboardLocais from '../pages/dashboard/DashboardLocais';
 import DashboardEventos from '../pages/dashboard/DashboardEventos';
+import DashboardTorneios from '../pages/dashboard/DashboardTorneios';
 import DashboardAssinatura from '../pages/dashboard/DashboardAssinatura';
 import DashboardCheckout from '../pages/dashboard/DashboardCheckout';
 import SuperAdmin from '../pages/SuperAdmin';
+import TorneioInscricaoPage from '../pages/TorneioInscricaoPage';
+import MinhasEquipesPage from '../pages/MinhasEquipesPage';
 import { TenantProvider } from '../contexts/TenantContext';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -35,6 +40,11 @@ function PublicOnlyRoute({ children }: { children: React.ReactNode }) {
   return session ? <Navigate to="/dashboard" replace /> : <>{children}</>;
 }
 
+function RedirectToTenant() {
+  const { slug } = useParams<{ slug: string }>();
+  return <Navigate to={`/${slug}`} replace />;
+}
+
 export default function RouterSwitch() {
   return (
     <Routes future={{ v7_relativeSplatPath: true }}>
@@ -42,9 +52,16 @@ export default function RouterSwitch() {
       <Route path="/" element={<ExplorarLocaisPage />} />
       <Route path="/landing" element={<LandingPage />} />
 
-      {/* Explorar locais (atletas) — antes de /:slug */}
-      <Route path="/locais" element={<ExplorarLocaisPage />} />
-      <Route path="/locais/:slug" element={<LocalPublicDetailPage />} />
+      {/* Listagem completa de locais (busca + filtros) */}
+      <Route path="/locais" element={<LocaisListPage />} />
+      {/* /locais/:slug redireciona para o tenant diretamente */}
+      <Route path="/locais/:slug" element={<RedirectToTenant />} />
+
+      {/* Listagem completa de torneios (busca + filtros) */}
+      <Route path="/torneios" element={<TorneiosListPage />} />
+
+      {/* Treinos — em breve */}
+      <Route path="/treinos" element={<TreinosPage />} />
 
       {/* Auth — redireciona para /dashboard se já autenticado */}
       <Route path="/entrar" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />
@@ -61,12 +78,19 @@ export default function RouterSwitch() {
         <Route index element={<DashboardHome />} />
         <Route path="locais" element={<DashboardLocais />} />
         <Route path="eventos" element={<DashboardEventos />} />
+        <Route path="torneios" element={<DashboardTorneios />} />
         <Route path="assinatura" element={<DashboardAssinatura />} />
         <Route path="checkout/:planId" element={<DashboardCheckout />} />
       </Route>
 
       {/* Super Admin */}
       <Route path="/admin" element={<PrivateRoute><SuperAdmin /></PrivateRoute>} />
+
+      {/* Página pública de inscrição de torneio */}
+      <Route path="/torneios/:slug" element={<TorneioInscricaoPage />} />
+
+      {/* Minhas equipes (logado) */}
+      <Route path="/minhas-equipes" element={<MinhasEquipesPage />} />
 
       {/* App público de cada local (slug dinâmico) */}
       <Route path="/:slug" element={<LocalApp />} />

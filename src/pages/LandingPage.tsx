@@ -14,21 +14,49 @@ interface DbPlan {
   max_locations: number | null;
   max_events: number | null;
   is_active: boolean;
+  can_create_tournaments?: boolean;
+}
+
+interface FeatureRow {
+  id: string;
+  marketing_label: string | null;
+  sort_order: number;
+}
+
+interface PlanFeatureRow {
+  plan_id: string;
+  feature_id: string;
+  enabled: boolean;
 }
 
 // Planos que expiram por tempo (não mensais)
 const TIME_LIMITED_IDS = new Set(['avulso', 'teste']);
 
-// Gera a lista de features a partir dos atributos do plano
-function buildFeatures(p: DbPlan): string[] {
+// Bullets "quantitativos" derivados das colunas do plano (sempre visíveis)
+function quantitativeBullets(p: DbPlan): string[] {
   const f: string[] = [];
   f.push('Jogadores ilimitados no ranking');
   f.push(p.max_players ? `Até ${p.max_players} jogadores por sessão` : 'Jogadores ilimitados por sessão');
   f.push(p.max_locations ? `${p.max_locations} ${p.max_locations === 1 ? 'local' : 'locais'} de partidas` : 'Locais ilimitados');
   f.push(p.max_events ? `${p.max_events === 1 ? '1 evento' : `Até ${p.max_events} eventos`}` : 'Eventos ilimitados');
-  f.push('Fila e times automáticos');
-  if ((p.max_locations ?? 0) > 1) f.push('Ranking consolidado');
   return f;
+}
+
+// Retorna os bullets dinâmicos a partir da matriz plan_features:
+//   - Feature precisa ter marketing_label definido
+//   - Precisa estar enabled=true no plano (ausência = habilitada)
+function marketingBullets(
+  planId: string,
+  features: FeatureRow[],
+  pf: PlanFeatureRow[],
+): string[] {
+  const disabled = new Set(
+    pf.filter((r) => r.plan_id === planId && r.enabled === false).map((r) => r.feature_id),
+  );
+  return features
+    .filter((f) => f.marketing_label && !disabled.has(f.id))
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((f) => f.marketing_label!);
 }
 
 // Determina badge e highlight com base no preço
@@ -53,6 +81,8 @@ export default function LandingPage() {
   const navigate = useNavigate();
   const [activeLocations, setActiveLocations] = useState<ActiveLocation[]>([]);
   const [plans, setPlans] = useState<DbPlan[]>([]);
+  const [features, setFeatures] = useState<FeatureRow[]>([]);
+  const [planFeatures, setPlanFeatures] = useState<PlanFeatureRow[]>([]);
   const [darkMode] = useState<boolean>(() => {
     const saved = getThemeDarkStored();
     if (saved === 'true') return true;
@@ -80,6 +110,23 @@ export default function LandingPage() {
       .then(({ data, error }) => {
         if (error) { console.error('Plans fetch error:', error); return; }
         if (data) setPlans(data);
+      });
+
+    supabase
+      .from('features')
+      .select('id, marketing_label, sort_order')
+      .order('sort_order')
+      .then(({ data, error }) => {
+        if (error) return;
+        if (data) setFeatures(data as FeatureRow[]);
+      });
+
+    supabase
+      .from('plan_features')
+      .select('plan_id, feature_id, enabled')
+      .then(({ data, error }) => {
+        if (error) return;
+        if (data) setPlanFeatures(data as PlanFeatureRow[]);
       });
   }, []);
 
@@ -232,7 +279,10 @@ export default function LandingPage() {
             {plans.map((dbPlan) => {
               const meta = getPlanMeta(dbPlan);
               const price = dbPlan.price_brl / 100;
-              const features = buildFeatures(dbPlan);
+              const bullets = [
+                ...quantitativeBullets(dbPlan),
+                ...marketingBullets(dbPlan.id, features, planFeatures),
+              ];
 
               return (
               <div
@@ -271,7 +321,7 @@ export default function LandingPage() {
 
                 {/* Features */}
                 <ul className="space-y-2 flex-1 mb-6">
-                  {features.map((f) => (
+                  {bullets.map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm">
                       <Check className={`w-4 h-4 shrink-0 mt-0.5 ${meta.highlight ? 'text-orange-500' : 'text-slate-400'}`} />
                       <span className="text-slate-200">{f}</span>

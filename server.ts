@@ -823,6 +823,80 @@ async function startServer() {
     return res.json({ ok: true });
   });
 
+  // ── GET /api/admin/features ─────────────────────────────────
+  app.get("/api/admin/features", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { data, error } = await getSupabaseAdmin()
+      .from("features")
+      .select("*")
+      .order("sort_order");
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json(data ?? []);
+  });
+
+  // ── PATCH /api/admin/features/:id ───────────────────────────
+  app.patch("/api/admin/features/:id", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { id } = req.params;
+    const { label, description, marketing_label } = req.body as {
+      label?: string; description?: string | null; marketing_label?: string | null;
+    };
+    const update: Record<string, unknown> = {};
+    if (label !== undefined) update.label = label;
+    if (description !== undefined) update.description = description;
+    if (marketing_label !== undefined) {
+      update.marketing_label =
+        typeof marketing_label === "string" && marketing_label.trim() === ""
+          ? null
+          : marketing_label;
+    }
+    if (Object.keys(update).length === 0) {
+      return res.status(400).json({ error: "Nenhum campo para atualizar." });
+    }
+
+    const { error } = await getSupabaseAdmin().from("features").update(update).eq("id", id);
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json({ ok: true });
+  });
+
+  // ── GET /api/admin/plan-features ────────────────────────────
+  app.get("/api/admin/plan-features", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { data, error } = await getSupabaseAdmin()
+      .from("plan_features")
+      .select("plan_id, feature_id, enabled");
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json(data ?? []);
+  });
+
+  // ── PATCH /api/admin/plan-features ──────────────────────────
+  app.patch("/api/admin/plan-features", async (req, res) => {
+    const admin = await validateAdmin(req);
+    if (!admin) return res.status(403).json({ error: "Acesso negado." });
+
+    const { plan_id, feature_id, enabled } = req.body as {
+      plan_id?: string; feature_id?: string; enabled?: boolean;
+    };
+    if (!plan_id || !feature_id || typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "plan_id, feature_id e enabled são obrigatórios." });
+    }
+
+    const { error } = await getSupabaseAdmin()
+      .from("plan_features")
+      .upsert(
+        { plan_id, feature_id, enabled, updated_at: new Date().toISOString() },
+        { onConflict: "plan_id,feature_id" },
+      );
+    if (error) return res.status(400).json({ error: error.message });
+    return res.json({ ok: true });
+  });
+
   // ── Vite / Static ────────────────────────────────────────
   console.log(`NODE_ENV is: ${process.env.NODE_ENV}`);
   if (process.env.NODE_ENV !== "production") {

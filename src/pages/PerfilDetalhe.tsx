@@ -12,6 +12,7 @@ import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { supabase } from '../supabase';
 import StatsEvolutionChart from '../components/StatsEvolutionChart';
+import SkillsRadar from '../components/SkillsRadar';
 
 function cn(...inputs: unknown[]) {
   return twMerge(clsx(inputs));
@@ -62,48 +63,6 @@ function computePlayerScore(d: PerfilDetalheData): string {
   ).toFixed(1);
 }
 
-/** Valores do gráfico: total acumulado ou média por partida (PTS = pontos/jogo; VIT = % vitórias no modo por partida). */
-function getPerformanceBars(data: PerfilDetalheData, mode: PerfMode) {
-  const pj = Math.max(data.partidas, 1);
-  const safe = (n: number) => (Number.isFinite(n) ? n : 0);
-  const total = (k: keyof PerfilDetalheData) => safe(Number(data[k]) || 0);
-  const winRateRaw =
-    data.partidas > 0 ? Math.min(1, Math.max(0, data.wins / data.partidas)) : 0;
-  const winRatePct = Math.round(winRateRaw * 100);
-
-  const bars = PERF_BARS.map((s) => {
-    if (mode === 'total') {
-      return {
-        key: s.key,
-        label: s.label,
-        color: s.color,
-        value: total(s.key),
-        display: undefined as string | undefined,
-      };
-    }
-    if (s.key === 'wins') {
-      return {
-        key: s.key,
-        label: 'Vit%',
-        color: s.color,
-        value: winRatePct,
-        display: `${winRatePct}%`,
-      };
-    }
-    const v = total(s.key) / pj;
-    return {
-      key: s.key,
-      label: s.label,
-      color: s.color,
-      value: v,
-      display: v >= 10 ? v.toFixed(1) : v.toFixed(2),
-    };
-  });
-
-  const maxVal = Math.max(...bars.map((b) => b.value), 0.01);
-  return { bars, maxVal };
-}
-
 function getStatListValue(data: PerfilDetalheData, key: keyof PerfilDetalheData, mode: PerfMode): string {
   const pj = Math.max(data.partidas, 1);
   const t = Number(data[key]) || 0;
@@ -112,17 +71,6 @@ function getStatListValue(data: PerfilDetalheData, key: keyof PerfilDetalheData,
   const v = t / pj;
   return v >= 10 ? v.toFixed(1) : v.toFixed(2);
 }
-
-/* ── Stat bars do gráfico de performance ─────────────────────────── */
-const PERF_BARS: { key: keyof PerfilDetalheData; label: string; color: string }[] = [
-  { key: 'points',       label: 'Pts',  color: '#10b981' },
-  { key: 'wins',         label: 'Vit',  color: '#f59e0b' },
-  { key: 'assists',      label: 'Ast',  color: '#06b6d4' },
-  { key: 'rebounds',     label: 'Reb',  color: '#14b8a6' },
-  { key: 'blocks',       label: 'Blk',  color: '#3b82f6' },
-  { key: 'steals',       label: 'Rou',  color: '#8b5cf6' },
-  { key: 'clutch_points',label: 'Dec',  color: '#f43f5e' },
-];
 
 /* ── Lista estilo "Performed Training" ───────────────────────────── */
 const STAT_ROWS: { key: keyof PerfilDetalheData; label: string; emoji: string }[] = [
@@ -133,62 +81,6 @@ const STAT_ROWS: { key: keyof PerfilDetalheData; label: string; emoji: string }[
   { key: 'steals',        label: 'Roubos',       emoji: '⚡' },
   { key: 'clutch_points', label: 'Decisivos',    emoji: '🎯' },
 ];
-
-/* ── Barra animada vertical ─────────────────────────────────────── */
-function AnimatedBar({
-  value,
-  maxValue,
-  color,
-  label,
-  delay,
-  darkMode,
-  display,
-}: {
-  value: number;
-  maxValue: number;
-  color: string;
-  label: string;
-  delay: number;
-  darkMode: boolean;
-  /** Texto exibido acima da barra (ex.: médias com decimais) */
-  display?: string;
-}) {
-  const MAX_PX = 90;
-  const heightPx = maxValue > 0 ? Math.max((value / maxValue) * MAX_PX, value > 0 ? 4 : 0) : 0;
-  const labelTop =
-    display ??
-    (value > 0 ? (Number.isInteger(value) ? String(value) : value.toFixed(1)) : '');
-
-  return (
-    <div className="flex flex-col items-center gap-1 flex-1 min-w-0">
-      <span
-        className="text-[10px] font-bold tabular-nums"
-        style={{ color, minHeight: 14 }}
-      >
-        {labelTop}
-      </span>
-
-      {/* track */}
-      <div
-        className={cn('w-full rounded-lg flex items-end', darkMode ? 'bg-slate-800' : 'bg-slate-100')}
-        style={{ height: MAX_PX }}
-      >
-        <motion.div
-          initial={{ height: 0 }}
-          animate={{ height: heightPx }}
-          transition={{ duration: 0.65, delay, ease: [0.34, 1.56, 0.64, 1] }}
-          style={{ backgroundColor: color, width: '100%', borderRadius: 6 }}
-        />
-      </div>
-
-      <span
-        className={cn('text-[9px] font-semibold uppercase tracking-wide', darkMode ? 'text-slate-500' : 'text-slate-400')}
-      >
-        {label}
-      </span>
-    </div>
-  );
-}
 
 /* ── Componente principal ───────────────────────────────────────── */
 export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheProps) {
@@ -210,7 +102,6 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
     data.partidas > 0
       ? Math.min(100, Math.max(0, Math.round((data.wins / data.partidas) * 100)))
       : 0;
-  const { bars: perfBars, maxVal: perfMaxVal } = getPerformanceBars(data, perfMode);
   const listMax = useMemo(() => {
     if (perfMode === 'total') {
       return Math.max(...STAT_ROWS.map((s) => Number(data[s.key]) || 0), 1);
@@ -389,28 +280,10 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
               <span className={cn('font-semibold', darkMode ? 'text-slate-500' : 'text-slate-400')}>Win rate </span>
               <span className="font-black tabular-nums text-amber-500">{winRatePct}%</span>
             </span>
-            {perfMode === 'perGame' && data.partidas > 0 && (
-              <span className={cn('text-xs', darkMode ? 'text-slate-500' : 'text-slate-400')}>
-                Coluna Pts = pontos por jogo
-              </span>
-            )}
           </div>
         </div>
 
-        <div className="flex items-end gap-1.5 sm:gap-2">
-          {perfBars.map((stat, i) => (
-            <AnimatedBar
-              key={stat.key}
-              value={stat.value}
-              maxValue={perfMaxVal}
-              color={stat.color}
-              label={stat.label}
-              display={stat.display}
-              delay={i * 0.07}
-              darkMode={darkMode}
-            />
-          ))}
-        </div>
+        <SkillsRadar data={data} mode={perfMode} darkMode={darkMode} />
       </div>
 
       {/* ── EVOLUÇÃO (gráfico de linha com área) ─────────────────── */}

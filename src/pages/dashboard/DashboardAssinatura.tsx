@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { CreditCard, CheckCircle, AlertCircle, ExternalLink, RefreshCw, Loader2 } from 'lucide-react';
+import { CreditCard, CheckCircle, AlertCircle, ExternalLink, RefreshCw, Loader2, Check } from 'lucide-react';
 import { useTenant } from '../../contexts/TenantContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { brl, isTimeLimitedPlan } from '../../lib/planAccess';
@@ -14,6 +14,19 @@ interface DbPlan {
   max_locations: number | null;
   max_events: number | null;
   is_active: boolean;
+  can_create_tournaments?: boolean;
+}
+
+interface FeatureRow {
+  id: string;
+  marketing_label: string | null;
+  sort_order: number;
+}
+
+interface PlanFeatureRow {
+  plan_id: string;
+  feature_id: string;
+  enabled: boolean;
 }
 
 const STATUS_INFO: Record<string, { label: string; color: string; bg: string }> = {
@@ -31,6 +44,8 @@ export default function DashboardAssinatura() {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dbPlans, setDbPlans] = useState<DbPlan[]>([]);
+  const [features, setFeatures] = useState<FeatureRow[]>([]);
+  const [planFeatures, setPlanFeatures] = useState<PlanFeatureRow[]>([]);
 
   useEffect(() => {
     supabase
@@ -39,7 +54,28 @@ export default function DashboardAssinatura() {
       .eq('is_active', true)
       .order('price_brl')
       .then(({ data }) => { if (data) setDbPlans(data); });
+
+    supabase
+      .from('features')
+      .select('id, marketing_label, sort_order')
+      .order('sort_order')
+      .then(({ data }) => { if (data) setFeatures(data as FeatureRow[]); });
+
+    supabase
+      .from('plan_features')
+      .select('plan_id, feature_id, enabled')
+      .then(({ data }) => { if (data) setPlanFeatures(data as PlanFeatureRow[]); });
   }, []);
+
+  const marketingBullets = (planId: string): string[] => {
+    const disabled = new Set(
+      planFeatures.filter((r) => r.plan_id === planId && r.enabled === false).map((r) => r.feature_id),
+    );
+    return features
+      .filter((f) => f.marketing_label && !disabled.has(f.id))
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((f) => f.marketing_label!);
+  };
 
   const handleSubscribe = (planId: string) => {
     setLoading(planId);
@@ -147,13 +183,14 @@ export default function DashboardAssinatura() {
           const price = p.price_brl / 100;
           const locs = p.max_locations ?? '∞';
           const players = p.max_players ? `${p.max_players} jogadores/sessão` : 'sessão ilimitada';
+          const bullets = marketingBullets(p.id);
           return (
-            <div key={p.id} className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
+            <div key={p.id} className={`flex items-start justify-between p-4 rounded-2xl border transition-all ${
               isCurrent
                 ? 'border-orange-500/50 bg-orange-500/5'
                 : 'border-slate-800 bg-slate-900 hover:border-slate-700'
             }`}>
-              <div>
+              <div className="flex-1">
                 <div className="flex items-center gap-2">
                   <p className="font-bold text-white">{p.name}</p>
                   {isCurrent && (
@@ -165,6 +202,16 @@ export default function DashboardAssinatura() {
                 <p className="text-sm text-slate-400 mt-0.5">
                   {brl(price)} · {players} · {locs} {(p.max_locations ?? 2) === 1 ? 'local' : 'locais'}
                 </p>
+                {bullets.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {bullets.map((b) => (
+                      <li key={b} className="flex items-start gap-1.5 text-xs text-slate-300">
+                        <Check className="w-3 h-3 shrink-0 mt-0.5 text-orange-400" />
+                        <span>{b}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               {!isCurrent && (
                 <button

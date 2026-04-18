@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Trophy, MapPin, CreditCard, LogOut, ExternalLink, AlertCircle, Menu, X, ChevronLeft, ChevronRight, LayoutDashboard, Calendar, Shield, Clock } from 'lucide-react';
+import { Trophy, MapPin, CreditCard, LogOut, ExternalLink, AlertCircle, Menu, X, ChevronLeft, ChevronRight, LayoutDashboard, Calendar, Clock, Swords, Users } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
-import { supabase } from '../../supabase';
 import { formatAccessTimeRemaining, isTimeLimitedPlan } from '../../lib/planAccess';
+import PersonaSwitcher from '../../components/PersonaSwitcher';
 
 const STATUS_COLOR: Record<string, string> = {
   active:    'bg-green-500',
@@ -20,35 +20,27 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 const NAV_ITEMS = [
-  { to: '/dashboard', end: true,              icon: LayoutDashboard, label: 'Painel'      },
-  { to: '/dashboard/locais', end: false,       icon: MapPin,          label: 'Locais'      },
-  { to: '/dashboard/eventos', end: false,      icon: Calendar,        label: 'Eventos'     },
-  { to: '/dashboard/assinatura', end: false,   icon: CreditCard,      label: 'Assinatura'  },
+  { to: '/dashboard', end: true,              icon: LayoutDashboard, label: 'Painel',         feature: 'nav.painel'     },
+  { to: '/dashboard/locais', end: false,       icon: MapPin,          label: 'Locais',         feature: 'nav.locais'     },
+  { to: '/dashboard/eventos', end: false,      icon: Calendar,        label: 'Eventos',        feature: 'nav.eventos'    },
+  { to: '/dashboard/torneios', end: false,     icon: Swords,          label: 'Torneios',       feature: 'nav.torneios'   },
+  { to: '/minhas-equipes', end: false,         icon: Users,           label: 'Minhas Equipes', feature: 'nav.equipes'    },
+  { to: '/dashboard/assinatura', end: false,   icon: CreditCard,      label: 'Assinatura',     feature: 'nav.assinatura' },
 ];
 
 export default function DashboardLayout() {
-  const { signOut, user } = useAuth();
-  const { tenant, locations, loading, plan } = useTenant();
+  const { signOut } = useAuth();
+  const { tenant, locations, loading, hasFeature } = useTenant();
+  const visibleNavItems = NAV_ITEMS.filter((item) => hasFeature(item.feature));
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [, setTick] = useState(0);
 
   useEffect(() => {
     const id = window.setInterval(() => setTick((n) => n + 1), 60_000);
     return () => window.clearInterval(id);
   }, []);
-
-  useEffect(() => {
-    if (!user?.id) return;
-    supabase
-      .from('basquete_users')
-      .select('issuperusuario')
-      .eq('auth_id', user.id)
-      .maybeSingle()
-      .then(({ data }) => setIsAdmin(data?.issuperusuario === true));
-  }, [user?.id]);
 
   const accessCountdown =
     tenant?.status === 'active' && isTimeLimitedPlan(tenant.plan_id) && tenant.current_period_ends_at
@@ -116,7 +108,7 @@ export default function DashboardLayout() {
 
       {/* Nav */}
       <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map(({ to, end, icon: Icon, label }) => (
+        {visibleNavItems.map(({ to, end, icon: Icon, label }) => (
           <NavLink key={to} to={to} end={end}
             onClick={() => isMobile && setDrawerOpen(false)}
             className={({ isActive }) =>
@@ -154,15 +146,9 @@ export default function DashboardLayout() {
         </div>
       )}
 
-      {/* Admin + Sign out */}
+      {/* Persona switcher + Sign out */}
       <div className={`px-2 pb-4 border-t border-slate-800 pt-3 space-y-1`}>
-        {isAdmin && (
-          <button onClick={() => { navigate('/admin'); isMobile && setDrawerOpen(false); }}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors ${collapsed && !isMobile ? 'justify-center' : ''}`}>
-            <Shield className="w-4 h-4 shrink-0" />
-            {(!collapsed || isMobile) && 'Super Admin'}
-          </button>
-        )}
+        {(!collapsed || isMobile) && <PersonaSwitcher current="gestor" />}
         <button onClick={signOut}
           className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition-colors ${collapsed && !isMobile ? 'justify-center' : ''}`}>
           <LogOut className="w-4 h-4 shrink-0" />
@@ -220,7 +206,7 @@ export default function DashboardLayout() {
 
       {/* ── Mobile bottom nav ───────────────────────────────── */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-20 bg-slate-900/95 backdrop-blur border-t border-slate-800 flex">
-        {NAV_ITEMS.map(({ to, end, icon: Icon, label }) => (
+        {visibleNavItems.map(({ to, end, icon: Icon, label }) => (
           <NavLink key={to} to={to} end={end}
             className={({ isActive }) =>
               `flex-1 flex flex-col items-center justify-center gap-1 py-3 text-[10px] font-semibold transition-colors ${

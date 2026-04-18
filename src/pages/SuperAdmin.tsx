@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import {
   Shield, BarChart3, Users, CreditCard, Calendar, LogOut,
   ToggleLeft, ToggleRight, Pencil, Trash2, Plus, X, Check,
-  AlertCircle, Loader2, ArrowLeft, Search, ChevronDown,
-  Trophy, Eye, EyeOff,
+  AlertCircle, Loader2, Search, ChevronDown,
+  Trophy, Eye, EyeOff, SlidersHorizontal,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../supabase';
+import PersonaSwitcher from '../components/PersonaSwitcher';
 
-type Tab = 'overview' | 'plans' | 'tenants' | 'events';
+type Tab = 'overview' | 'plans' | 'tenants' | 'events' | 'products' | 'features';
 
 interface Stats {
   totalTenants: number;
@@ -67,10 +68,12 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const TABS: { id: Tab; label: string; icon: typeof BarChart3 }[] = [
-  { id: 'overview', label: 'Visão Geral', icon: BarChart3 },
-  { id: 'plans',    label: 'Planos',      icon: CreditCard },
-  { id: 'tenants',  label: 'Usuários',    icon: Users },
-  { id: 'events',   label: 'Eventos',     icon: Calendar },
+  { id: 'overview', label: 'Visão Geral',     icon: BarChart3 },
+  { id: 'plans',    label: 'Planos',          icon: CreditCard },
+  { id: 'features', label: 'Funcionalidades', icon: SlidersHorizontal },
+  { id: 'tenants',  label: 'Usuários',        icon: Users },
+  { id: 'events',   label: 'Eventos',         icon: Calendar },
+  { id: 'products', label: 'Produtos',        icon: CreditCard },
 ];
 
 const inputCls = 'w-full px-3 py-2.5 bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50 text-sm';
@@ -659,6 +662,459 @@ function EventsTab({ token }: { token: string }) {
   );
 }
 
+// ── Products Tab ────────────────────────────────────────────
+const CATEGORIES = [
+  { value: 'geral',      label: 'Geral' },
+  { value: 'vestuario',  label: 'Vestuário' },
+  { value: 'acessorio',  label: 'Acessório' },
+  { value: 'servico',    label: 'Serviço' },
+  { value: 'perfil_pro', label: 'Perfil PRO' },
+];
+
+function ProductsTab() {
+  interface Product {
+    id: string; name: string; description: string | null; price_brl: number;
+    image_url: string | null; category: string; is_pro_exclusive: boolean;
+    is_active: boolean; stock: number | null;
+  }
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<Product | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [priceBrl, setPriceBrl] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
+  const [category, setCategory] = useState('geral');
+  const [isProExclusive, setIsProExclusive] = useState(false);
+  const [stock, setStock] = useState('');
+
+  const fetchProducts = useCallback(async () => {
+    setLoading(true);
+    const { data } = await supabase.from('products').select('*').order('created_at', { ascending: false });
+    if (data) setProducts(data as Product[]);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchProducts(); }, [fetchProducts]);
+
+  const resetForm = () => {
+    setName(''); setDescription(''); setPriceBrl(''); setImageUrl('');
+    setCategory('geral'); setIsProExclusive(false); setStock('');
+    setEditing(null); setCreating(false);
+  };
+
+  const openCreate = () => {
+    resetForm();
+    setCreating(true);
+  };
+
+  const openEdit = (p: Product) => {
+    setEditing(p);
+    setCreating(false);
+    setName(p.name);
+    setDescription(p.description ?? '');
+    setPriceBrl(String(p.price_brl / 100));
+    setImageUrl(p.image_url ?? '');
+    setCategory(p.category);
+    setIsProExclusive(p.is_pro_exclusive);
+    setStock(p.stock != null ? String(p.stock) : '');
+  };
+
+  const handleSave = async () => {
+    if (!name.trim() || !priceBrl) return;
+    setSaving(true);
+    const payload = {
+      name: name.trim(),
+      description: description.trim() || null,
+      price_brl: Math.round(parseFloat(priceBrl) * 100),
+      image_url: imageUrl.trim() || null,
+      category,
+      is_pro_exclusive: isProExclusive,
+      stock: stock.trim() ? parseInt(stock, 10) : null,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (editing) {
+      await supabase.from('products').update(payload).eq('id', editing.id);
+    } else {
+      await supabase.from('products').insert(payload);
+    }
+    resetForm();
+    await fetchProducts();
+    setSaving(false);
+  };
+
+  const toggleActive = async (p: Product) => {
+    await supabase.from('products').update({ is_active: !p.is_active }).eq('id', p.id);
+    fetchProducts();
+  };
+
+  const deleteProduct = async (p: Product) => {
+    if (!window.confirm(`Deletar "${p.name}"?`)) return;
+    await supabase.from('products').delete().eq('id', p.id);
+    fetchProducts();
+  };
+
+  if (loading) return <Loading />;
+
+  const isFormOpen = creating || !!editing;
+
+  return (
+    <div className="space-y-6">
+      {!isFormOpen && (
+        <button onClick={openCreate}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold transition-all">
+          <Plus className="w-4 h-4" /> Novo produto
+        </button>
+      )}
+
+      {isFormOpen && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-white">{editing ? 'Editar produto' : 'Novo produto'}</h3>
+            <button onClick={resetForm} className="p-1 text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome *"
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm outline-none focus:ring-2 focus:ring-orange-500/50" />
+            <input value={priceBrl} onChange={(e) => setPriceBrl(e.target.value)} placeholder="Preço (R$) *" type="number" step="0.01"
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm outline-none focus:ring-2 focus:ring-orange-500/50" />
+            <select value={category} onChange={(e) => setCategory(e.target.value)}
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm outline-none focus:ring-2 focus:ring-orange-500/50">
+              {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+            <input value={stock} onChange={(e) => setStock(e.target.value)} placeholder="Estoque (vazio = ilimitado)" type="number"
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm outline-none focus:ring-2 focus:ring-orange-500/50" />
+            <input value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="URL da imagem"
+              className="sm:col-span-2 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm outline-none focus:ring-2 focus:ring-orange-500/50" />
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Descrição"
+              className="sm:col-span-2 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm outline-none focus:ring-2 focus:ring-orange-500/50 resize-none" rows={2} />
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+            <input type="checkbox" checked={isProExclusive} onChange={(e) => setIsProExclusive(e.target.checked)}
+              className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-orange-500 focus:ring-orange-500/50" />
+            Exclusivo para Perfil PRO
+          </label>
+
+          <div className="flex gap-2">
+            <button onClick={handleSave} disabled={saving || !name.trim() || !priceBrl}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold transition-all disabled:opacity-50">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+              {editing ? 'Salvar' : 'Criar'}
+            </button>
+            <button onClick={resetForm} className="px-4 py-2 rounded-xl text-slate-400 hover:text-white text-sm font-medium transition-colors">
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {products.map((p) => (
+          <div key={p.id} className={`flex items-center gap-4 p-4 rounded-xl border transition-all ${
+            p.is_active ? 'border-slate-800 bg-slate-900' : 'border-slate-800/50 bg-slate-900/50 opacity-60'
+          }`}>
+            <div className={`w-12 h-12 rounded-xl overflow-hidden shrink-0 ${p.image_url ? '' : 'bg-slate-800 flex items-center justify-center'}`}>
+              {p.image_url ? (
+                <img src={p.image_url} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <CreditCard className="w-5 h-5 text-slate-600" />
+              )}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-white font-bold text-sm truncate">{p.name}</p>
+                {p.is_pro_exclusive && (
+                  <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[9px] font-bold">PRO</span>
+                )}
+                <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 text-[9px] font-bold uppercase">{p.category}</span>
+              </div>
+              <p className="text-orange-400 font-bold text-xs">R${(p.price_brl / 100).toFixed(2)}</p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button onClick={() => toggleActive(p)} className="p-2 rounded-lg hover:bg-slate-800 transition-colors" title={p.is_active ? 'Desativar' : 'Ativar'}>
+                {p.is_active ? <ToggleRight className="w-5 h-5 text-green-400" /> : <ToggleLeft className="w-5 h-5 text-slate-600" />}
+              </button>
+              <button onClick={() => openEdit(p)} className="p-2 rounded-lg hover:bg-slate-800 transition-colors">
+                <Pencil className="w-4 h-4 text-slate-400" />
+              </button>
+              <button onClick={() => deleteProduct(p)} className="p-2 rounded-lg hover:bg-slate-800 transition-colors">
+                <Trash2 className="w-4 h-4 text-red-400" />
+              </button>
+            </div>
+          </div>
+        ))}
+        {products.length === 0 && (
+          <p className="text-slate-500 text-sm text-center py-8">Nenhum produto cadastrado.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Features Tab ─────────────────────────────────────────────
+interface Feature {
+  id: string;
+  label: string;
+  description: string | null;
+  category: string;
+  sort_order: number;
+  marketing_label: string | null;
+}
+
+interface PlanFeatureRow {
+  plan_id: string;
+  feature_id: string;
+  enabled: boolean;
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  nav: 'Navegação',
+  action: 'Ações',
+};
+
+function FeaturesTab({ token }: { token: string }) {
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [features, setFeatures] = useState<Feature[]>([]);
+  const [matrix, setMatrix] = useState<Map<string, boolean>>(new Map());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [editingMkt, setEditingMkt] = useState<string | null>(null);
+  const [mktDraft, setMktDraft] = useState('');
+  const [savingMkt, setSavingMkt] = useState(false);
+
+  const key = (planId: string, featureId: string) => `${planId}::${featureId}`;
+
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const safeJson = async (path: string) => {
+      const r = await adminFetch(path, token);
+      const body = await r.json().catch(() => null);
+      if (!r.ok) throw new Error((body as { error?: string })?.error ?? `Erro em ${path}`);
+      return body;
+    };
+    try {
+      const [plansRes, featsRes, pfRes] = await Promise.all([
+        safeJson('/api/admin/plans'),
+        safeJson('/api/admin/features'),
+        safeJson('/api/admin/plan-features'),
+      ]);
+      setPlans(((plansRes as Plan[]) ?? []).filter((p) => p.is_active));
+      setFeatures((featsRes as Feature[]) ?? []);
+      const map = new Map<string, boolean>();
+      for (const row of ((pfRes as PlanFeatureRow[]) ?? [])) {
+        map.set(key(row.plan_id, row.feature_id), row.enabled);
+      }
+      setMatrix(map);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Erro ao carregar.');
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Ausente na matriz == habilitada por padrão
+  const isEnabled = (planId: string, featureId: string) => {
+    const k = key(planId, featureId);
+    return matrix.has(k) ? matrix.get(k)! : true;
+  };
+
+  const startEditMkt = (f: Feature) => {
+    setEditingMkt(f.id);
+    setMktDraft(f.marketing_label ?? '');
+  };
+
+  const cancelEditMkt = () => {
+    setEditingMkt(null);
+    setMktDraft('');
+  };
+
+  const saveMkt = async (featureId: string) => {
+    setSavingMkt(true);
+    const trimmed = mktDraft.trim();
+    const res = await adminFetch(`/api/admin/features/${featureId}`, token, {
+      method: 'PATCH',
+      body: JSON.stringify({ marketing_label: trimmed === '' ? null : trimmed }),
+    });
+    if (res.ok) {
+      setFeatures((prev) =>
+        prev.map((f) => (f.id === featureId ? { ...f, marketing_label: trimmed === '' ? null : trimmed } : f)),
+      );
+      setEditingMkt(null);
+      setMktDraft('');
+    }
+    setSavingMkt(false);
+  };
+
+  const toggle = async (planId: string, featureId: string) => {
+    const current = isEnabled(planId, featureId);
+    const next = !current;
+    const k = key(planId, featureId);
+    setSaving(k);
+    // Atualização otimista
+    setMatrix((prev) => {
+      const m = new Map(prev);
+      m.set(k, next);
+      return m;
+    });
+    const res = await adminFetch('/api/admin/plan-features', token, {
+      method: 'PATCH',
+      body: JSON.stringify({ plan_id: planId, feature_id: featureId, enabled: next }),
+    });
+    if (!res.ok) {
+      setMatrix((prev) => {
+        const m = new Map(prev);
+        m.set(k, current);
+        return m;
+      });
+    }
+    setSaving(null);
+  };
+
+  if (loading) return <Loading />;
+  if (loadError) return <ErrorMsg msg={`Falha ao carregar: ${loadError}. Verifique se a migration 20270110000000_plan_features.sql foi aplicada.`} />;
+
+  if (plans.length === 0) {
+    return <ErrorMsg msg="Nenhum plano ativo encontrado." />;
+  }
+
+  // Agrupa features por categoria
+  const grouped = features.reduce<Record<string, Feature[]>>((acc, f) => {
+    (acc[f.category] ??= []).push(f);
+    return acc;
+  }, {});
+
+  return (
+    <div className="space-y-6">
+      <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/50 text-sm text-slate-400 space-y-1.5">
+        <p>
+          Ative ou desative funcionalidades por plano. Quando desativada, o item some
+          do menu do usuário e os botões relacionados ficam escondidos.
+        </p>
+        <p>
+          O <strong className="text-slate-300">rótulo de marketing</strong> aparece como bullet no card
+          do plano (landing page e assinatura). Vazio = a feature não aparece nos cards
+          mesmo quando habilitada.
+        </p>
+      </div>
+
+      {Object.keys(grouped).map((cat) => (
+        <div key={cat} className="space-y-2">
+          <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">
+            {CATEGORY_LABELS[cat] ?? cat}
+          </h3>
+
+          <div className="overflow-x-auto rounded-2xl border border-slate-800">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-900">
+                <tr>
+                  <th className="text-left font-semibold text-slate-400 px-4 py-3 min-w-[220px]">
+                    Funcionalidade
+                  </th>
+                  {plans.map((p) => (
+                    <th key={p.id} className="text-center font-semibold text-slate-400 px-3 py-3 whitespace-nowrap">
+                      {p.name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {grouped[cat].map((f) => (
+                  <tr key={f.id} className="border-t border-slate-800 bg-slate-950/40">
+                    <td className="px-4 py-3">
+                      <p className="text-white font-medium">{f.label}</p>
+                      {f.description && (
+                        <p className="text-xs text-slate-500 mt-0.5">{f.description}</p>
+                      )}
+                      <p className="text-[10px] font-mono text-slate-600 mt-0.5">{f.id}</p>
+
+                      {editingMkt === f.id ? (
+                        <div className="mt-2 flex items-center gap-1.5">
+                          <input
+                            autoFocus
+                            value={mktDraft}
+                            onChange={(e) => setMktDraft(e.target.value)}
+                            placeholder="Texto mostrado nos cards do plano"
+                            className="flex-1 px-2 py-1 bg-slate-800 border border-slate-700 rounded-lg text-white text-xs placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50"
+                          />
+                          <button
+                            onClick={() => saveMkt(f.id)}
+                            disabled={savingMkt}
+                            className="p-1 rounded-md bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50"
+                            title="Salvar"
+                          >
+                            {savingMkt ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            onClick={cancelEditMkt}
+                            className="p-1 rounded-md bg-slate-700 hover:bg-slate-600 text-slate-200"
+                            title="Cancelar"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => startEditMkt(f)}
+                          className="mt-2 group flex items-center gap-1.5 text-left w-full"
+                          title="Editar rótulo de marketing"
+                        >
+                          {f.marketing_label ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-500/10 border border-orange-500/20 text-orange-300 text-[11px]">
+                              <Check className="w-3 h-3" /> {f.marketing_label}
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-slate-600 italic group-hover:text-slate-400">
+                              sem rótulo de marketing — clique para adicionar
+                            </span>
+                          )}
+                          <Pencil className="w-3 h-3 text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </button>
+                      )}
+                    </td>
+                    {plans.map((p) => {
+                      const enabled = isEnabled(p.id, f.id);
+                      const k = key(p.id, f.id);
+                      return (
+                        <td key={p.id} className="text-center px-3 py-3">
+                          <button
+                            onClick={() => toggle(p.id, f.id)}
+                            disabled={saving === k}
+                            className="p-1.5 rounded-lg hover:bg-slate-800 transition-colors disabled:opacity-50 inline-flex items-center justify-center"
+                            title={enabled ? 'Desativar' : 'Ativar'}
+                          >
+                            {saving === k ? (
+                              <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                            ) : enabled ? (
+                              <ToggleRight className="w-6 h-6 text-green-400" />
+                            ) : (
+                              <ToggleLeft className="w-6 h-6 text-slate-600" />
+                            )}
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 function Loading() {
   return (
@@ -744,11 +1200,8 @@ export default function SuperAdmin() {
           ))}
         </nav>
 
-        <div className="hidden lg:block px-2 pb-4 mt-auto border-t border-slate-800 pt-3">
-          <button onClick={() => navigate('/dashboard')}
-            className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
-            <ArrowLeft className="w-4 h-4 shrink-0" /> Dashboard
-          </button>
+        <div className="hidden lg:block px-2 pb-4 mt-auto border-t border-slate-800 pt-3 space-y-1">
+          <PersonaSwitcher current="admin" />
           <button onClick={signOut}
             className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
             <LogOut className="w-4 h-4 shrink-0" /> Sair
@@ -765,8 +1218,10 @@ export default function SuperAdmin() {
 
         {tab === 'overview' && <OverviewTab token={token} />}
         {tab === 'plans' && <PlansTab token={token} />}
+        {tab === 'features' && <FeaturesTab token={token} />}
         {tab === 'tenants' && <TenantsTab token={token} />}
         {tab === 'events' && <EventsTab token={token} />}
+        {tab === 'products' && <ProductsTab />}
       </main>
     </div>
   );

@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import Login from './Login';
 import App from '../App';
 import type { Location } from '../contexts/TenantContext';
+import PersonaSwitcher from '../components/PersonaSwitcher';
 
 interface TenantInfo {
   status: string;
@@ -167,18 +168,25 @@ export default function LocalApp() {
   }
 
   return (
-    <App
-      locationId={location!.id}
-      locationSlug={slug!}
-      locationName={location!.name}
-      isOwner={isOwner}
-      maxPlayers={tenant?.plan?.max_players ?? null}
-      venueCoords={
-        location?.lat != null && location?.lng != null
-          ? { lat: location.lat, lng: location.lng, radiusMeters: location.radius_m ?? 50 }
-          : undefined
-      }
-    />
+    <>
+      <App
+        locationId={location!.id}
+        locationSlug={slug!}
+        locationName={location!.name}
+        isOwner={isOwner}
+        maxPlayers={tenant?.plan?.max_players ?? null}
+        venueCoords={
+          location?.lat != null && location?.lng != null
+            ? { lat: location.lat, lng: location.lng, radiusMeters: location.radius_m ?? 50 }
+            : undefined
+        }
+      />
+      {session?.user && (
+        <div className="fixed top-3 right-3 z-40">
+          <PersonaSwitcher current="jogador" variant="floating" />
+        </div>
+      )}
+    </>
   );
 }
 

@@ -25,6 +25,11 @@ import {
   Menu,
   LogOut,
   Filter,
+  ShoppingBag,
+  Star,
+  Crown,
+  Dumbbell,
+  ChevronRight,
 } from 'lucide-react';
 import {
   BASKETBALL_FORMAT_OPTIONS,
@@ -111,6 +116,8 @@ export default function ExplorarLocaisPage() {
   const [athleteSuccess, setAthleteSuccess] = useState<string | null>(null);
   const [profileName, setProfileName] = useState<string>('');
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
+  const [profilePlayerCode, setProfilePlayerCode] = useState<string | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
   const [qrSheetOpen, setQrSheetOpen] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -121,9 +128,13 @@ export default function ExplorarLocaisPage() {
   });
   const [globalRank, setGlobalRank] = useState<GlobalRankEntry[]>([]);
   const [globalRankSort, setGlobalRankSort] = useState<SortKey>('efficiency');
-  const [globalEvents, setGlobalEvents] = useState<Array<{ id: string; title: string; event_date: string; event_time: string | null; modality: string; type: string; status: string }>>([]);
+  const [globalEvents, setGlobalEvents] = useState<Array<{ id: string; title: string; event_date: string; event_time: string | null; modality: string; type: string; status: string; kind: 'evento' | 'torneio'; slug?: string; logo_url?: string | null; is_paid?: boolean; price_brl?: number | null }>>([]);
   const [globalRankLoading, setGlobalRankLoading] = useState(false);
   const [globalEventsLoading, setGlobalEventsLoading] = useState(false);
+  const [homeTournaments, setHomeTournaments] = useState<Array<{
+    id: string; name: string; slug: string; start_date: string;
+    modality: string; logo_url: string | null; is_paid: boolean; price_brl: number | null;
+  }>>([]);
   const [globalTab, setGlobalTab] = useState<'inicio' | 'rank' | 'eventos' | 'perfil'>('inicio');
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [showInicioSearchControls, setShowInicioSearchControls] = useState(false);
@@ -133,6 +144,41 @@ export default function ExplorarLocaisPage() {
   const appShareLink = `${appPublicOrigin()}/`;
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const lastScrollYRef = useRef(0);
+
+  // Produtos
+  interface Product {
+    id: string; name: string; description: string | null; price_brl: number;
+    image_url: string | null; category: string; is_pro_exclusive: boolean; is_active: boolean;
+    stock: number | null;
+  }
+
+  const MOCK_PRODUCTS: Product[] = [
+    { id: 'mock-1', name: 'Perfil PRO', description: 'Perfil profissional com card exclusivo e compartilhamento no Instagram.', price_brl: 2990, image_url: null, category: 'perfil_pro', is_pro_exclusive: false, is_active: true, stock: 0 },
+    { id: 'mock-2', name: 'Camiseta Braska', description: 'Camiseta oficial dry-fit com logo bordado.', price_brl: 8990, image_url: null, category: 'vestuario', is_pro_exclusive: false, is_active: true, stock: 0 },
+    { id: 'mock-3', name: 'Munhequeira PRO', description: 'Munhequeira esportiva com absorção de suor. Exclusivo PRO.', price_brl: 3490, image_url: null, category: 'acessorio', is_pro_exclusive: true, is_active: true, stock: 0 },
+    { id: 'mock-4', name: 'Shorts Basquete', description: 'Shorts leve e confortável para treinos e jogos.', price_brl: 6990, image_url: null, category: 'vestuario', is_pro_exclusive: false, is_active: true, stock: 0 },
+  ];
+
+  const [products, setProducts] = useState<Product[]>(MOCK_PRODUCTS);
+
+  useEffect(() => {
+    supabase.from('products').select('*').eq('is_active', true).order('created_at', { ascending: false })
+      .then(({ data }) => {
+        if (data && data.length > 0) setProducts(data as Product[]);
+      });
+
+    // Torneios em destaque para o hub inicial
+    supabase
+      .from('tournaments')
+      .select('id, name, slug, start_date, modality, status, logo_url, is_paid, price_brl, visibility')
+      .in('status', ['open', 'in_progress'])
+      .in('visibility', ['tenant', 'global'])
+      .order('start_date', { ascending: true })
+      .limit(8)
+      .then(({ data }) => {
+        if (data) setHomeTournaments(data as typeof homeTournaments);
+      });
+  }, []);
 
   useEffect(() => {
     migrateInstallModalDismissKey();
@@ -191,6 +237,7 @@ export default function ExplorarLocaisPage() {
     if (!user) {
       setProfileName('');
       setProfileAvatarUrl(null);
+      setProfilePlayerCode(null);
       return;
     }
     const fallbackName =
@@ -203,13 +250,14 @@ export default function ExplorarLocaisPage() {
     let cancelled = false;
     supabase
       .from('basquete_users')
-      .select('display_name, avatar_url')
+      .select('display_name, avatar_url, player_code')
       .eq('auth_id', user.id)
       .maybeSingle()
       .then(({ data }) => {
         if (cancelled || !data) return;
         if (data.display_name?.trim()) setProfileName(data.display_name.trim());
         setProfileAvatarUrl(data.avatar_url ?? null);
+        setProfilePlayerCode(data.player_code ?? null);
       });
     return () => {
       cancelled = true;
@@ -362,13 +410,49 @@ export default function ExplorarLocaisPage() {
   const openGlobalEvents = async () => {
     setGlobalTab('eventos');
     setGlobalEventsLoading(true);
-    const { data } = await supabase
-      .from('eventos')
-      .select('id, title, event_date, event_time, modality, type, status')
-      .in('status', ['open', 'in_progress'])
-      .order('event_date', { ascending: true })
-      .limit(100);
-    setGlobalEvents((data ?? []) as Array<{ id: string; title: string; event_date: string; event_time: string | null; modality: string; type: string; status: string }>);
+    const [{ data: evs }, { data: tournaments }] = await Promise.all([
+      supabase
+        .from('eventos')
+        .select('id, title, event_date, event_time, modality, type, status')
+        .in('status', ['open', 'in_progress'])
+        .order('event_date', { ascending: true })
+        .limit(100),
+      supabase
+        .from('tournaments')
+        .select('id, name, slug, start_date, modality, status, logo_url, is_paid, price_brl, visibility')
+        .in('status', ['open', 'in_progress'])
+        .in('visibility', ['tenant', 'global'])
+        .order('start_date', { ascending: true })
+        .limit(100),
+    ]);
+    const eventItems = (evs ?? []).map((e: any) => ({
+      id: `e-${e.id}`,
+      title: e.title,
+      event_date: e.event_date,
+      event_time: e.event_time,
+      modality: e.modality,
+      type: e.type,
+      status: e.status,
+      kind: 'evento' as const,
+    }));
+    const tourneyItems = (tournaments ?? []).map((t: any) => ({
+      id: `t-${t.id}`,
+      title: t.name,
+      event_date: t.start_date,
+      event_time: null,
+      modality: t.modality,
+      type: 'torneio',
+      status: t.status,
+      kind: 'torneio' as const,
+      slug: t.slug,
+      logo_url: t.logo_url,
+      is_paid: t.is_paid,
+      price_brl: t.price_brl,
+    }));
+    const merged = [...eventItems, ...tourneyItems].sort((a, b) =>
+      a.event_date.localeCompare(b.event_date)
+    );
+    setGlobalEvents(merged);
     setGlobalEventsLoading(false);
   };
 
@@ -461,13 +545,6 @@ export default function ExplorarLocaisPage() {
     ];
 
     const goDetail = () => {
-      if (loc.is_private) return;
-      localStorage.setItem(LAST_LOCATION_SLUG_KEY, loc.slug);
-      navigate(`/locais/${loc.slug}`);
-    };
-    const goTenantDirect = (e: React.MouseEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
       if (loc.is_private) return;
       localStorage.setItem(LAST_LOCATION_SLUG_KEY, loc.slug);
       navigate(`/${loc.slug}`);
@@ -566,18 +643,6 @@ export default function ExplorarLocaisPage() {
               <span className={`text-[11px] font-medium truncate max-w-[45%] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{loc.tenant.name}</span>
             )}
           </div>
-          {user && (
-            <button
-              type="button"
-              onClick={goTenantDirect}
-              disabled={loc.is_private}
-              className={`w-full mt-2 py-2.5 rounded-xl text-xs font-bold transition-colors ${
-                loc.is_private ? 'bg-slate-700 text-slate-400 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600 text-white'
-              }`}
-            >
-              {loc.is_private ? 'Acesso restrito' : 'Entrar no local'}
-            </button>
-          )}
         </div>
       </motion.div>
     );
@@ -821,22 +886,213 @@ export default function ExplorarLocaisPage() {
               </button>
             )}
           </div>
-        ) : (
+        ) : (<>
+          {/* Torneios — slide horizontal */}
+          <section>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h2 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Torneios</h2>
+              <button
+                type="button"
+                onClick={() => navigate('/torneios')}
+                className={`inline-flex items-center gap-1 text-xs font-bold ${darkMode ? 'text-orange-400 hover:text-orange-300' : 'text-orange-500 hover:text-orange-600'}`}
+              >
+                Ver mais <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {homeTournaments.length === 0 ? (
+              <div className={`rounded-2xl border border-dashed px-4 py-8 text-center text-sm ${darkMode ? 'border-slate-800 text-slate-500' : 'border-slate-200 text-slate-400'}`}>
+                Nenhum torneio em aberto no momento.
+              </div>
+            ) : (
+              <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory scrollbar-none -mx-4 px-4" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+                {homeTournaments.map((t) => {
+                  const dateStr = new Date(t.start_date + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+                  return (
+                    <motion.button
+                      key={t.id}
+                      type="button"
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      onClick={() => navigate(`/torneios/${t.slug}`)}
+                      className={`snap-start shrink-0 rounded-2xl border overflow-hidden text-left transition-all ${
+                        darkMode
+                          ? 'border-slate-700/70 bg-slate-900/60 shadow-lg shadow-black/20 hover:border-orange-500/30'
+                          : 'border-slate-200 bg-white shadow-md hover:border-orange-400/40'
+                      }`}
+                      style={{ width: 'calc(70vw - 12px)', minWidth: 240, maxWidth: 300 }}
+                    >
+                      <div className={`aspect-[16/9] w-full overflow-hidden relative ${darkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                        {t.logo_url ? (
+                          <img src={t.logo_url} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-orange-500/30 to-slate-950">
+                            <Trophy className="w-10 h-10 text-orange-400/60" />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent pointer-events-none" />
+                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/55 backdrop-blur-sm text-[10px] font-bold text-white">
+                          {t.modality}
+                        </span>
+                        {t.is_paid && (
+                          <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-orange-500 text-[10px] font-bold text-white">
+                            R$ {((t.price_brl ?? 0) / 100).toFixed(2).replace('.', ',')}
+                          </span>
+                        )}
+                        <div className="absolute bottom-2 left-2 right-2">
+                          <h3 className="text-white font-bold text-sm leading-tight line-clamp-2 drop-shadow">{t.name}</h3>
+                        </div>
+                      </div>
+                      <div className="px-3 py-2 flex items-center gap-1.5">
+                        <Calendar className={`w-3 h-3 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`} />
+                        <span className={`text-[11px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>{dateStr}</span>
+                      </div>
+                    </motion.button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* Locais — grid */}
           <section>
             <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
               <h2 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Locais</h2>
-              <span className="text-xs text-slate-500">
-                {displayed.length}
-                {sorted.length > PUBLIC_LOCAIS_DISPLAY_LIMIT
-                  ? ` de ${sorted.length} (limite ${PUBLIC_LOCAIS_DISPLAY_LIMIT} na tela)`
-                  : ` local${displayed.length === 1 ? '' : 'ais'}`}
-              </span>
+              <button
+                type="button"
+                onClick={() => navigate('/locais')}
+                className={`inline-flex items-center gap-1 text-xs font-bold ${darkMode ? 'text-orange-400 hover:text-orange-300' : 'text-orange-500 hover:text-orange-600'}`}
+              >
+                Ver mais <ChevronRight className="w-3.5 h-3.5" />
+              </button>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {displayed.map((loc) => renderLocationCard(loc))}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {displayed.slice(0, 8).map((loc) => {
+                const fav = favorites.has(loc.id);
+                const formats = loc.basketball_formats ?? [];
+                const primaryTag = formats.length > 0 ? BASKETBALL_FORMAT_LABELS[formats[0]] ?? formats[0] : 'Basquete';
+                const sub = locationSubtitle(loc);
+                const goDetail = () => {
+                  if (loc.is_private) return;
+                  localStorage.setItem(LAST_LOCATION_SLUG_KEY, loc.slug);
+                  navigate(`/${loc.slug}`);
+                };
+                return (
+                  <motion.div
+                    key={loc.id}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    onClick={goDetail}
+                    className={`rounded-2xl border overflow-hidden transition-all ${
+                      darkMode
+                        ? `border-slate-700/70 bg-slate-900/60 shadow-lg shadow-black/20 ${loc.is_private ? 'cursor-not-allowed opacity-80' : 'cursor-pointer hover:border-orange-500/30'}`
+                        : `border-slate-200 bg-white shadow-md ${loc.is_private ? 'cursor-not-allowed opacity-80' : 'cursor-pointer hover:border-orange-400/40'}`
+                    }`}
+                  >
+                    <div className={`aspect-[4/3] w-full overflow-hidden relative ${darkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                      {loc.image_url ? (
+                        <img src={loc.image_url} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-orange-500/20 to-slate-950">
+                          <MapPin className="w-8 h-8 text-orange-400/40" />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent pointer-events-none" />
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-black/50 backdrop-blur-sm text-[9px] font-bold text-white border border-white/10">
+                        {primaryTag}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => toggleFavorite(loc.id, e)}
+                        className="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 z-[1]"
+                      >
+                        <Heart className={`w-3 h-3 ${fav ? 'fill-orange-400 text-orange-400' : 'text-white'}`} />
+                      </button>
+                      <div className="absolute bottom-2 left-2 right-2">
+                        <h3 className="text-white font-bold text-xs leading-tight line-clamp-2 drop-shadow">{loc.name}</h3>
+                      </div>
+                    </div>
+                    <div className="px-2.5 py-2 space-y-0.5">
+                      <div className={`flex items-center gap-1 text-[10px] ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        <MapPin className="w-2.5 h-2.5 shrink-0 text-orange-400/80" />
+                        <span className="truncate">{sub}</span>
+                      </div>
+                      {loc.tenant?.name && (
+                        <p className={`text-[9px] font-medium truncate ${darkMode ? 'text-slate-600' : 'text-slate-400'}`}>{loc.tenant.name}</p>
+                      )}
+                    </div>
+                  </motion.div>
+                );
+              })}
             </div>
           </section>
-        ))}
+
+          {/* Produtos */}
+          {products.length > 0 && (
+            <section>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Loja</h2>
+                <ShoppingBag className={`w-4 h-4 ${darkMode ? 'text-slate-600' : 'text-slate-400'}`} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {products.map((product) => (
+                  <motion.div
+                    key={product.id}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className={`rounded-2xl border overflow-hidden transition-all cursor-pointer group ${
+                      darkMode
+                        ? 'border-slate-700/70 bg-slate-900/60 hover:border-orange-500/30'
+                        : 'border-slate-200 bg-white hover:border-orange-400/40 shadow-sm'
+                    }`}
+                  >
+                    <div className={`aspect-square w-full overflow-hidden relative ${darkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                      {product.image_url ? (
+                        <img src={product.image_url} alt="" className="w-full h-full object-cover group-hover:scale-[1.04] transition-transform duration-500" />
+                      ) : (
+                        <div className={`w-full h-full flex items-center justify-center ${
+                          product.category === 'perfil_pro'
+                            ? 'bg-gradient-to-br from-amber-500/20 via-orange-500/10 to-slate-950'
+                            : 'bg-gradient-to-br from-slate-700/30 to-slate-950'
+                        }`}>
+                          {product.category === 'perfil_pro' ? (
+                            <Crown className="w-10 h-10 text-amber-400/60" />
+                          ) : (
+                            <ShoppingBag className="w-10 h-10 text-slate-500/40" />
+                          )}
+                        </div>
+                      )}
+                      {product.is_pro_exclusive && (
+                        <span className="absolute top-2 left-2 flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/90 text-[9px] font-bold text-white">
+                          <Star className="w-2.5 h-2.5" /> PRO
+                        </span>
+                      )}
+                      {product.stock === 0 && (
+                        <span className={`absolute top-2 ${product.is_pro_exclusive ? 'left-[60px]' : 'left-2'} px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                          darkMode ? 'bg-slate-800/90 text-slate-400 border border-slate-700' : 'bg-slate-200/90 text-slate-500'
+                        }`}>
+                          Esgotado
+                        </span>
+                      )}
+                    </div>
+                    <div className="p-3 space-y-1">
+                      <h3 className={`font-bold text-sm leading-tight line-clamp-2 ${darkMode ? 'text-white' : 'text-slate-900'}`}>
+                        {product.name}
+                      </h3>
+                      {product.description && (
+                        <p className={`text-[11px] leading-snug line-clamp-2 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                          {product.description}
+                        </p>
+                      )}
+                      <p className="text-orange-500 font-black text-base tabular-nums">
+                        R${(product.price_brl / 100).toFixed(2).replace('.', ',')}
+                      </p>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            </section>
+          )}
+        </>))}
 
         {globalTab === 'rank' && (
           <section className="space-y-5">
@@ -878,13 +1134,46 @@ export default function ExplorarLocaisPage() {
               <p className="text-sm text-slate-400">Sem eventos globais abertos no momento.</p>
             ) : (
               <div className="space-y-2">
-                {globalEvents.map((ev) => (
-                  <div key={ev.id} className={`rounded-xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-800/40' : 'border-slate-200 bg-white'}`}>
-                    <p className={`text-sm font-semibold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{ev.title}</p>
-                    <p className={`text-xs mt-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>{ev.event_date}{ev.event_time ? ` · ${ev.event_time}` : ''}</p>
-                    <p className={`text-xs mt-1 ${darkMode ? 'text-orange-300' : 'text-orange-600'}`}>{ev.type} · {ev.modality} · {ev.status}</p>
-                  </div>
-                ))}
+                {globalEvents.map((ev) => {
+                  const isTourney = ev.kind === 'torneio';
+                  const content = (
+                    <div className={`flex items-start gap-3 rounded-xl border p-3 ${darkMode ? 'border-slate-800 bg-slate-800/40' : 'border-slate-200 bg-white'} ${isTourney ? 'hover:border-orange-500/40 cursor-pointer transition-colors' : ''}`}>
+                      {isTourney && (
+                        ev.logo_url ? (
+                          <img src={ev.logo_url} alt="" className="w-12 h-12 rounded-lg object-cover border border-slate-700 shrink-0" />
+                        ) : (
+                          <div className={`w-12 h-12 rounded-lg flex items-center justify-center shrink-0 ${darkMode ? 'bg-orange-500/10 border border-orange-500/20' : 'bg-orange-50 border border-orange-200'}`}>
+                            <span className="text-orange-500 text-lg font-black">{ev.modality}</span>
+                          </div>
+                        )
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className={`text-sm font-semibold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{ev.title}</p>
+                          {isTourney && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-400 border border-orange-500/25">
+                              TORNEIO
+                            </span>
+                          )}
+                        </div>
+                        <p className={`text-xs mt-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>{ev.event_date}{ev.event_time ? ` · ${ev.event_time}` : ''}</p>
+                        <p className={`text-xs mt-1 ${darkMode ? 'text-orange-300' : 'text-orange-600'}`}>
+                          {ev.type} · {ev.modality} · {ev.status}
+                          {isTourney && (ev.is_paid && ev.price_brl
+                            ? ` · R$ ${(ev.price_brl / 100).toFixed(2).replace('.', ',')}`
+                            : ' · Gratuito')}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                  return isTourney && ev.slug ? (
+                    <button key={ev.id} type="button" onClick={() => navigate(`/torneios/${ev.slug}`)} className="block w-full text-left">
+                      {content}
+                    </button>
+                  ) : (
+                    <div key={ev.id}>{content}</div>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -907,15 +1196,52 @@ export default function ExplorarLocaisPage() {
                       {(profileName?.[0] ?? 'A').toUpperCase()}
                     </div>
                   )}
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className={`font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{profileName}</p>
                     <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Perfil global</p>
                   </div>
                 </div>
+
+                {profilePlayerCode && (
+                  <div className={`mt-4 flex items-center justify-between gap-2 p-3 rounded-xl border ${darkMode ? 'border-slate-700 bg-slate-800/60' : 'border-slate-200 bg-slate-50'}`}>
+                    <div className="min-w-0">
+                      <p className={`text-[10px] font-bold uppercase tracking-widest ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                        Meu código de atleta
+                      </p>
+                      <p className={`font-mono font-bold text-lg ${darkMode ? 'text-orange-300' : 'text-orange-600'}`}>
+                        #{profilePlayerCode}
+                      </p>
+                      <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-500'}`}>
+                        Envie este código para o capitão da sua equipe.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(profilePlayerCode);
+                          setCodeCopied(true);
+                          setTimeout(() => setCodeCopied(false), 1800);
+                        } catch { /* ignore */ }
+                      }}
+                      className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold transition-colors ${darkMode ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'}`}
+                    >
+                      {codeCopied ? 'Copiado' : 'Copiar'}
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => navigate('/minhas-equipes')}
+                  className={`mt-4 w-full py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${darkMode ? 'bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30' : 'bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100'}`}
+                >
+                  Minhas Equipes
+                </button>
                 <button
                   type="button"
                   onClick={handleGlobalSignOut}
-                  className="mt-4 w-full py-2.5 rounded-xl border border-red-500/30 text-red-300 hover:bg-red-500/10 text-sm font-semibold"
+                  className="mt-2 w-full py-2.5 rounded-xl border border-red-500/30 text-red-300 hover:bg-red-500/10 text-sm font-semibold"
                 >
                   Sair da conta
                 </button>
@@ -1287,6 +1613,22 @@ export default function ExplorarLocaisPage() {
             >
               <Calendar className="w-5 h-5" />
               <span className="text-[10px] font-semibold mt-0.5">Eventos</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/treinos')}
+              className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all relative ${
+                darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'
+              }`}
+            >
+              <Dumbbell className="w-5 h-5" />
+              <span className="text-[10px] font-semibold mt-0.5">Treinos</span>
+              <motion.span
+                className="absolute -top-0.5 right-2 w-2 h-2 rounded-full bg-orange-500"
+                animate={{ scale: [1, 1.4, 1], opacity: [0.7, 1, 0.7] }}
+                transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+                aria-hidden
+              />
             </button>
             <button
               type="button"

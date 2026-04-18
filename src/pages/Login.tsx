@@ -223,6 +223,10 @@ function RankCard({ entry, rank }: { entry: RankEntry; rank: number }) {
 export default function Login({ redirectTo, locationName, locationId, allowGuest = true }: LoginProps) {
   const { enterAsGuest } = useAuth();
   const navigate = useNavigate();
+  const redirectFromQuery = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('redirect')
+    : null;
+  const effectiveRedirect = redirectTo ?? redirectFromQuery ?? undefined;
   const isPlayerMode = !!locationName;
   const [darkMode] = useState<boolean>(() => {
     const saved = getThemeDarkStored();
@@ -286,7 +290,7 @@ export default function Login({ redirectTo, locationName, locationId, allowGuest
     return () => { cancelled = true; clearTimeout(t); };
   }, [locationSearch]);
 
-  const handleSuccess = () => navigate(redirectTo ?? '/dashboard', { replace: true });
+  const handleSuccess = () => navigate(effectiveRedirect ?? '/dashboard', { replace: true });
   const openForm = (m: Mode) => { setMode(m); setFormOpen(true); };
   const handleCreateAccount = () => { setShowRoleChoice(true); };
 
