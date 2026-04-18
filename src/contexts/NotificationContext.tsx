@@ -18,13 +18,17 @@ export interface Notification {
 export type AddNotificationOptions = {
   showToastForMs?: number;
   action?: NotificationAction;
+  /** Adiciona a notificação à lista sem mostrar o toast flutuante. */
+  silent?: boolean;
 };
 
 type NotificationContextValue = {
   notifications: Notification[];
   visibleToast: Notification | null;
+  hasUnread: boolean;
   addNotification: (message: string, type?: NotificationType, options?: AddNotificationOptions) => void;
   dismissToast: () => void;
+  markAllRead: () => void;
   clearNotification: (id: string) => void;
   clearAll: () => void;
 };
@@ -34,6 +38,7 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [visibleToast, setVisibleToast] = useState<Notification | null>(null);
+  const [hasUnread, setHasUnread] = useState(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const addNotification = useCallback(
@@ -47,8 +52,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         action: options?.action,
       };
       setNotifications((prev) => [n, ...prev].slice(0, 100));
-      setVisibleToast(n);
+      setHasUnread(true);
 
+      if (options?.silent) return;
+
+      setVisibleToast(n);
       const showFor = options?.showToastForMs ?? 5000;
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => {
@@ -67,6 +75,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     setVisibleToast(null);
   }, []);
 
+  const markAllRead = useCallback(() => {
+    setHasUnread(false);
+  }, []);
+
   const clearNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
     setVisibleToast((curr) => (curr?.id === id ? null : curr));
@@ -75,6 +87,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const clearAll = useCallback(() => {
     setNotifications([]);
     setVisibleToast(null);
+    setHasUnread(false);
     if (toastTimerRef.current) {
       clearTimeout(toastTimerRef.current);
       toastTimerRef.current = null;
@@ -82,7 +95,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, []);
 
   return (
-    <NotificationContext.Provider value={{ notifications, visibleToast, addNotification, dismissToast, clearNotification, clearAll }}>
+    <NotificationContext.Provider value={{ notifications, visibleToast, hasUnread, addNotification, dismissToast, markAllRead, clearNotification, clearAll }}>
       {children}
     </NotificationContext.Provider>
   );

@@ -30,7 +30,7 @@ export function PwaUpdateNotifier() {
       'Nova versão do Braska está disponível. Toque em Atualizar agora para carregar as melhorias.',
       'info',
       {
-        showToastForMs: 12_000,
+        silent: true,
         action: {type: 'pwa_reload', label: 'Atualizar agora'},
       }
     );

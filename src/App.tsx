@@ -253,7 +253,7 @@ import { GlobalPointsListener } from './components/GlobalPointsListener';
 
 export default function App({ locationId, locationSlug, locationName, venueCoords, isOwner, maxPlayers }: AppProps = {}) {
   const { user, isGuest, signOut, leaveGuestMode } = useAuth();
-  const { notifications, visibleToast, addNotification, dismissToast, clearNotification, clearAll } = useNotifications();
+  const { notifications, visibleToast, hasUnread, addNotification, dismissToast, markAllRead, clearNotification, clearAll } = useNotifications();
   const isLoggedIn = !!user;
 
   const [players, setPlayers] = useState<Player[]>([]);
@@ -1851,7 +1851,10 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     if (!showWinnerModal) return;
     if (team1MatchPoints < 12 && team2MatchPoints < 12) return;
     if (isStartingNextMatch) return;
-    if (isMatchStarted && !isSessionController) return;
+    // Alinhado com canManageSessionPlayers: permite avanço quando o usuário
+    // é controlador OU quando não há controlador ativo. Senão, quem podia
+    // registrar a 12ª cesta ficaria preso no modal (lista congelava).
+    if (isMatchStarted && hasActiveController && !isSessionController) return;
 
     const winningTeamKey = team1MatchPoints >= 12 ? 'team1' : 'team2';
     const losingTeamKey = winningTeamKey === 'team1' ? 'team2' : 'team1';
@@ -2033,6 +2036,9 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     } catch (err) {
       console.error('Error starting next match:', err);
       addNotification('Erro ao iniciar próxima partida.', 'error', { showToastForMs: 5000 });
+      // Resincroniza com o banco — evita lista travada se algumas
+      // atualizações rodaram e outras não.
+      try { await fetchPlayers(); } catch { /* ignore */ }
     } finally {
       setIsStartingNextMatch(false);
     }
@@ -2858,7 +2864,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                 {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </button>
               <button
-                onClick={() => setShowNotificationsPanel(true)}
+                onClick={() => { setShowNotificationsPanel(true); markAllRead(); }}
                 className={cn(
                   'relative transition-colors p-2 rounded-xl',
                   darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'
@@ -2866,10 +2872,13 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                 title="Notificações"
               >
                 <Bell className="w-5 h-5" />
-                {notifications.length > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold bg-orange-500 text-white">
-                    {notifications.length > 99 ? '99+' : notifications.length}
-                  </span>
+                {hasUnread && (
+                  <motion.span
+                    className="absolute top-1 right-1 w-2 h-2 rounded-full bg-orange-500"
+                    animate={{ scale: [1, 1.4, 1], opacity: [0.7, 1, 0.7] }}
+                    transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+                    aria-hidden
+                  />
                 )}
               </button>
               {headerQrUrl && (
