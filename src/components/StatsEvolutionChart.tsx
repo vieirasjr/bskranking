@@ -189,36 +189,45 @@ export default function StatsEvolutionChart({ userId, darkMode }: StatsEvolution
       });
   }, [userId, range]);
 
-  // Build chart data
+  // Build chart data — usamos totais acumulados (running sum) por bucket.
+  // Isso faz stats esparsas (tocos/roubos/decisivos) permanecerem visíveis
+  // mesmo em períodos com poucos eventos: a área fica estável a partir do
+  // primeiro registro em vez de colapsar em zero no bucket seguinte.
   const chartData = useMemo(() => {
     const buckets = generateBuckets(range.days);
-    const dataMap: Record<string, Record<string, number>> = {};
-    for (const b of buckets) {
-      dataMap[b] = {};
-    }
+    const perBucket: Record<string, Record<string, number>> = {};
+    for (const b of buckets) perBucket[b] = {};
 
     for (const log of rawLogs) {
       const d = new Date(log.created_at);
       const bk = bucketKey(d, range.days);
-      if (!dataMap[bk]) dataMap[bk] = {};
-      dataMap[bk][log.stat_type] = (dataMap[bk][log.stat_type] ?? 0) + log.value;
+      if (!perBucket[bk]) perBucket[bk] = {};
+      perBucket[bk][log.stat_type] = (perBucket[bk][log.stat_type] ?? 0) + log.value;
     }
 
-    return buckets.map(bk => {
-      const stats = dataMap[bk] ?? {};
+    const running: Record<string, number> = {
+      points: 0, assists: 0, rebounds: 0, blocks: 0,
+      steals: 0, clutch_points: 0, wins: 0,
+    };
+
+    return buckets.map((bk) => {
+      const inc = perBucket[bk] ?? {};
+      for (const k of Object.keys(running)) {
+        running[k] += inc[k] ?? 0;
+      }
       const eff = Object.entries(EFF_WEIGHTS).reduce(
-        (sum, [k, w]) => sum + (stats[k] ?? 0) * w, 0
+        (sum, [k, w]) => sum + (running[k] ?? 0) * w, 0
       );
       return {
         bucket: bk,
         label: bucketLabel(bk, range.days),
-        points: stats.points ?? 0,
-        assists: stats.assists ?? 0,
-        rebounds: stats.rebounds ?? 0,
-        blocks: stats.blocks ?? 0,
-        steals: stats.steals ?? 0,
-        clutch_points: stats.clutch_points ?? 0,
-        wins: stats.wins ?? 0,
+        points: running.points,
+        assists: running.assists,
+        rebounds: running.rebounds,
+        blocks: running.blocks,
+        steals: running.steals,
+        clutch_points: running.clutch_points,
+        wins: running.wins,
         efficiency: Math.round(eff * 10) / 10,
       };
     });

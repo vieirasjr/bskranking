@@ -106,7 +106,10 @@ export default function PersonaSwitcher({ current, variant = 'sidebar' }: Props)
       icon: Shield,
     });
   }
-  if (profile.firstLocationSlug) {
+  // "Visão de jogador" só aparece aqui quando essa já é a view atual
+  // (ex.: widget flutuante no LocalApp). Nas demais telas, a opção vive
+  // dentro do menu hamburguer global.
+  if (profile.firstLocationSlug && current === 'jogador') {
     options.push({
       id: 'jogador',
       label: 'Visão de jogador',

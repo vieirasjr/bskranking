@@ -15,14 +15,19 @@ interface Skill {
   maxPerGame: number;
 }
 
-/** Ordem define a posição no polígono (começa no topo, sentido horário). */
+/**
+ * Ordem define a posição no polígono (começa no topo, sentido horário).
+ * Tetos calibrados pra stats reais de jogadores casuais: tocos/roubos/clutch
+ * ficavam invisíveis com tetos altos (100/5/3) porque 1 toco a cada 16 jogos
+ * normalizava pra ~0.01. Abaixamos e aplicamos sqrt na normalização.
+ */
 const SKILLS: Skill[] = [
-  { key: 'points',        label: 'Ataque',  color: '#10b981', maxTotal: 500, maxPerGame: 30 },
-  { key: 'assists',       label: 'Visão',   color: '#06b6d4', maxTotal: 200, maxPerGame: 10 },
-  { key: 'clutch_points', label: 'Clutch',  color: '#f43f5e', maxTotal: 100, maxPerGame: 3  },
-  { key: 'steals',        label: 'Pressão', color: '#8b5cf6', maxTotal: 100, maxPerGame: 5  },
-  { key: 'blocks',        label: 'Muralha', color: '#3b82f6', maxTotal: 100, maxPerGame: 5  },
-  { key: 'rebounds',      label: 'Rebote',  color: '#14b8a6', maxTotal: 200, maxPerGame: 10 },
+  { key: 'points',        label: 'Ataque',  color: '#10b981', maxTotal: 300, maxPerGame: 20 },
+  { key: 'assists',       label: 'Visão',   color: '#06b6d4', maxTotal: 100, maxPerGame: 6  },
+  { key: 'clutch_points', label: 'Clutch',  color: '#f43f5e', maxTotal: 20,  maxPerGame: 1  },
+  { key: 'steals',        label: 'Pressão', color: '#8b5cf6', maxTotal: 30,  maxPerGame: 2  },
+  { key: 'blocks',        label: 'Muralha', color: '#3b82f6', maxTotal: 30,  maxPerGame: 2  },
+  { key: 'rebounds',      label: 'Rebote',  color: '#14b8a6', maxTotal: 100, maxPerGame: 6  },
   { key: 'wins',          label: 'Vitória', color: '#f59e0b', maxTotal: 1,   maxPerGame: 1  },
 ];
 
@@ -48,8 +53,11 @@ function normalizeSkill(data: PerfilDetalheData, s: Skill, mode: Mode): number {
   }
   const partidas = Math.max(data.partidas || 0, 1);
   const raw = Number(data[s.key]) || 0;
-  const scaled = mode === 'perGame' ? raw / partidas / s.maxPerGame : raw / s.maxTotal;
-  return Math.max(0, Math.min(1, scaled));
+  const linear = mode === 'perGame' ? raw / partidas / s.maxPerGame : raw / s.maxTotal;
+  // Raiz quadrada amplifica valores baixos (stats raras como tocos/roubos)
+  // sem distorcer valores altos, mantendo o topo em 1.
+  const scaled = Math.sqrt(Math.max(0, Math.min(1, linear)));
+  return scaled;
 }
 
 interface Props {

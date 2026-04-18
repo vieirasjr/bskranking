@@ -117,6 +117,10 @@ export default function ExplorarLocaisPage() {
   const [profileName, setProfileName] = useState<string>('');
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
   const [profilePlayerCode, setProfilePlayerCode] = useState<string | null>(null);
+  const [profileAdminPin, setProfileAdminPin] = useState<string | null>(null);
+  const [profileIsAdmin, setProfileIsAdmin] = useState(false);
+  const [adminCodeCopied, setAdminCodeCopied] = useState(false);
+  const [tenantFirstLocationSlug, setTenantFirstLocationSlug] = useState<string | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [qrSheetOpen, setQrSheetOpen] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
@@ -250,7 +254,7 @@ export default function ExplorarLocaisPage() {
     let cancelled = false;
     supabase
       .from('basquete_users')
-      .select('display_name, avatar_url, player_code')
+      .select('display_name, avatar_url, player_code, admin_pin')
       .eq('auth_id', user.id)
       .maybeSingle()
       .then(({ data }) => {
@@ -258,7 +262,34 @@ export default function ExplorarLocaisPage() {
         if (data.display_name?.trim()) setProfileName(data.display_name.trim());
         setProfileAvatarUrl(data.avatar_url ?? null);
         setProfilePlayerCode(data.player_code ?? null);
+        setProfileAdminPin((data as { admin_pin?: string | null }).admin_pin ?? null);
       });
+
+    // Verifica se é admin: dono de tenant OU co-admin em tenant_admins.
+    // Para usuários donos de tenant (perfil de gestor), busca o slug do
+    // primeiro local ativo — usado no item "Visão de jogador" do menu.
+    Promise.all([
+      supabase.from('tenants').select('id').eq('owner_auth_id', user.id).limit(1),
+      supabase.from('tenant_admins').select('id').eq('auth_id', user.id).limit(1),
+    ]).then(async ([owned, coAdmin]) => {
+      if (cancelled) return;
+      const ownedTenantId = owned.data?.[0]?.id as string | undefined;
+      setProfileIsAdmin(!!ownedTenantId || (coAdmin.data?.length ?? 0) > 0);
+      if (ownedTenantId) {
+        const { data: loc } = await supabase
+          .from('locations')
+          .select('slug')
+          .eq('tenant_id', ownedTenantId)
+          .eq('is_active', true)
+          .order('created_at')
+          .limit(1)
+          .maybeSingle();
+        if (!cancelled) setTenantFirstLocationSlug(loc?.slug ?? null);
+      } else {
+        setTenantFirstLocationSlug(null);
+      }
+    });
+
     return () => {
       cancelled = true;
     };
@@ -710,6 +741,16 @@ export default function ExplorarLocaisPage() {
                 </div>
                 {headerMenuOpen && (
                   <div className={`absolute right-0 mt-2 w-56 rounded-xl border shadow-xl p-2 z-20 ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+                    {tenantFirstLocationSlug && profilePlayerCode && (
+                      <button
+                        type="button"
+                        onClick={() => { navigate(`/${tenantFirstLocationSlug}`); setHeaderMenuOpen(false); }}
+                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-2 ${darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700'}`}
+                      >
+                        <User className="w-4 h-4 shrink-0" />
+                        Visão de jogador
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => { setQrSheetOpen(true); setHeaderMenuOpen(false); }}
@@ -1202,32 +1243,66 @@ export default function ExplorarLocaisPage() {
                   </div>
                 </div>
 
-                {profilePlayerCode && (
-                  <div className={`mt-4 flex items-center justify-between gap-2 p-3 rounded-xl border ${darkMode ? 'border-slate-700 bg-slate-800/60' : 'border-slate-200 bg-slate-50'}`}>
-                    <div className="min-w-0">
-                      <p className={`text-[10px] font-bold uppercase tracking-widest ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                        Meu código de atleta
-                      </p>
-                      <p className={`font-mono font-bold text-lg ${darkMode ? 'text-orange-300' : 'text-orange-600'}`}>
-                        #{profilePlayerCode}
-                      </p>
-                      <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-500'}`}>
-                        Envie este código para o capitão da sua equipe.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(profilePlayerCode);
-                          setCodeCopied(true);
-                          setTimeout(() => setCodeCopied(false), 1800);
-                        } catch { /* ignore */ }
-                      }}
-                      className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold transition-colors ${darkMode ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'}`}
-                    >
-                      {codeCopied ? 'Copiado' : 'Copiar'}
-                    </button>
+                {(profilePlayerCode || (profileIsAdmin && profileAdminPin)) && (
+                  <div className={`mt-4 grid gap-2 ${profileIsAdmin && profileAdminPin && profilePlayerCode ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
+                    {profilePlayerCode && (
+                      <div className={`flex items-start justify-between gap-2 p-3 rounded-xl border ${darkMode ? 'border-slate-700 bg-slate-800/60' : 'border-slate-200 bg-slate-50'}`}>
+                        <div className="min-w-0">
+                          <p className={`text-[10px] font-bold uppercase tracking-widest ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                            Código de atleta
+                          </p>
+                          <p className={`font-mono font-bold text-lg ${darkMode ? 'text-orange-300' : 'text-orange-600'}`}>
+                            #{profilePlayerCode}
+                          </p>
+                          <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-500'}`}>
+                            Envie ao capitão da sua equipe.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(profilePlayerCode);
+                              setCodeCopied(true);
+                              setTimeout(() => setCodeCopied(false), 1800);
+                            } catch { /* ignore */ }
+                          }}
+                          className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold transition-colors ${darkMode ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'}`}
+                        >
+                          {codeCopied ? 'Copiado' : 'Copiar'}
+                        </button>
+                      </div>
+                    )}
+
+                    {profileIsAdmin && profileAdminPin && (
+                      <div className={`flex items-start justify-between gap-2 p-3 rounded-xl border ${darkMode ? 'border-red-500/25 bg-red-500/5' : 'border-red-300 bg-red-50'}`}>
+                        <div className="min-w-0">
+                          <p className={`text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 ${darkMode ? 'text-red-400' : 'text-red-600'}`}>
+                            <Shield className="w-3 h-3" />
+                            Código admin
+                          </p>
+                          <p className={`font-mono font-bold text-lg ${darkMode ? 'text-red-300' : 'text-red-600'}`}>
+                            {profileAdminPin}
+                          </p>
+                          <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-500'}`}>
+                            PIN para confirmar ações administrativas.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(profileAdminPin);
+                              setAdminCodeCopied(true);
+                              setTimeout(() => setAdminCodeCopied(false), 1800);
+                            } catch { /* ignore */ }
+                          }}
+                          className={`shrink-0 px-3 py-2 rounded-lg text-xs font-bold transition-colors ${darkMode ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'}`}
+                        >
+                          {adminCodeCopied ? 'Copiado' : 'Copiar'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
