@@ -31,8 +31,8 @@ import {
   Settings,
   UserMinus,
   RotateCcw,
-  GripVertical,
   Menu,
+  GripVertical,
   QrCode,
   Crown,
   Globe,
@@ -54,6 +54,7 @@ import {
   SortableContext,
   useSortable,
   verticalListSortingStrategy,
+  arrayMove,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { QRCodeSVG } from 'qrcode.react';
@@ -312,6 +313,8 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
   const [userCodes, setUserCodes] = useState<Record<string, string>>({});
   const [showAdminGestao, setShowAdminGestao] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [personaIsSuperAdmin, setPersonaIsSuperAdmin] = useState(false);
+  const [personaOwnsTenant, setPersonaOwnsTenant] = useState(false);
   /** Confirmação antes do modal de senha ao iniciar sessão (mostra modalidade do local). */
   const [showStartSessionConfirm, setShowStartSessionConfirm] = useState(false);
   const [sessionControlledBy, setSessionControlledBy] = useState<string | null>(null);
@@ -328,6 +331,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     activeTab === 'lista' && !isAdminMode && !hasAdminAccess && !!venueCoords,
     venueCoords
   );
+  const lastLocationErrorRef = useRef<string | null>(null);
 
   const canSeeList = isAdminMode || (isWithinRadius === true && isMatchStarted);
   const canAddToList = isAdminMode || (isWithinRadius === true && isMatchStarted);
@@ -707,6 +711,45 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     fetchPartidaSessao(currentPartidaSessaoId);
   }, [currentPartidaSessaoId, players, fetchPartidaSessao]);
 
+  // Notificação silenciosa quando a localização falha ou é negada.
+  // Só dispara quando o erro muda, evitando spam. O ponto laranja no sino
+  // chama atenção; na notificação há ação pra tentar ativar.
+  useEffect(() => {
+    if (!locationError) {
+      lastLocationErrorRef.current = null;
+      return;
+    }
+    if (lastLocationErrorRef.current === locationError) return;
+    lastLocationErrorRef.current = locationError;
+    addNotification(
+      'O app precisa da sua localização para visualizar a lista. Clique aqui para ativar.',
+      'warning',
+      {
+        silent: true,
+        action: { type: 'request_location', label: 'Ativar localização' },
+      },
+    );
+  }, [locationError, addNotification]);
+
+  // Persona do usuário logado (para os atalhos no menu hamburguer)
+  useEffect(() => {
+    if (!user?.id) {
+      setPersonaIsSuperAdmin(false);
+      setPersonaOwnsTenant(false);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      supabase.from('basquete_users').select('issuperusuario').eq('auth_id', user.id).maybeSingle(),
+      supabase.from('tenants').select('id').eq('owner_auth_id', user.id).limit(1),
+    ]).then(([bu, tn]) => {
+      if (cancelled) return;
+      setPersonaIsSuperAdmin(bu.data?.issuperusuario === true);
+      setPersonaOwnsTenant((tn.data?.length ?? 0) > 0);
+    });
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
   // Admin por email no banco (basquete_users.admin): concede acesso mesmo sem ser owner.
   useEffect(() => {
     if (!user?.email) return;
@@ -883,7 +926,13 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
 
   const team1 = useMemo(() => players.filter((p) => p.status === 'team1'), [players]);
   const team2 = useMemo(() => players.filter((p) => p.status === 'team2'), [players]);
-  const waitingList = useMemo(() => players.filter((p) => p.status === 'waiting'), [players]);
+  const waitingList = useMemo(
+    () =>
+      players
+        .filter((p) => p.status === 'waiting')
+        .sort((a, b) => a.joined_at.localeCompare(b.joined_at)),
+    [players],
+  );
   const suspendedList = useMemo(() => players.filter((p) => p.status === 'suspended'), [players]);
 
   // Corrige sessão sem partida: se partida em andamento (5+5) mas currentPartidaSessaoId é null
@@ -1214,15 +1263,52 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     const oldIndex = waitingList.findIndex((p) => p.id === active.id);
     const newIndex = waitingList.findIndex((p) => p.id === over.id);
     if (oldIndex === -1 || newIndex === -1) return;
-    const draggedPlayer = waitingList[oldIndex];
-    const targetPlayer = waitingList[newIndex];
-    await supabase.from('players').update({ joined_at: targetPlayer.joined_at }).eq('id', draggedPlayer.id);
-    await supabase.from('players').update({ joined_at: draggedPlayer.joined_at }).eq('id', targetPlayer.id);
-  }, [canManageSessionPlayers, waitingList]);
+
+    // Inserção (não troca): o arrastado ocupa a posição do alvo e os
+    // demais se acomodam. Reatribuímos os joined_at por POSIÇÃO — cada
+    // slot mantém seu timestamp original, mudando apenas o dono.
+    const reordered = arrayMove(waitingList, oldIndex, newIndex);
+    const slotTimestamps = waitingList.map((p) => p.joined_at);
+    const newByIdMap = new Map<string, string>(
+      reordered.map((p, i) => [p.id, slotTimestamps[i]]),
+    );
+
+    // Snapshot pro rollback em caso de erro
+    const prevPlayers = players;
+
+    // Atualização otimista: UI reflete a nova ordem imediatamente
+    setPlayers((curr) =>
+      curr.map((p) => {
+        const ts = newByIdMap.get(p.id);
+        return ts && ts !== p.joined_at ? { ...p, joined_at: ts } : p;
+      }),
+    );
+
+    const updates = [...newByIdMap.entries()].filter(([id, ts]) => {
+      const original = waitingList.find((w) => w.id === id);
+      return original && original.joined_at !== ts;
+    });
+
+    try {
+      const results = await Promise.all(
+        updates.map(([id, ts]) =>
+          supabase.from('players').update({ joined_at: ts }).eq('id', id),
+        ),
+      );
+      if (results.some((r) => r.error)) throw new Error('drag_drop_update_failed');
+    } catch (err) {
+      console.error('Drag update failed:', err);
+      setPlayers(prevPlayers);
+      addNotification('Erro ao reordenar a lista. Posição restaurada.', 'error', { showToastForMs: 4000 });
+    }
+  }, [canManageSessionPlayers, waitingList, players, addNotification]);
 
   const dndSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    // Drag agora é iniciado pela alça dedicada à direita do card — não
+    // precisa de longpress, basta encostar na alça e arrastar. Delay
+    // curto + tolerance pequena dão resposta imediata.
+    useSensor(TouchSensor, { activationConstraint: { delay: 80, tolerance: 4 } }),
   );
 
   const handleRemoveAttempt = async (playerId: string) => {
@@ -1378,38 +1464,20 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     try {
       // Atualizar stats (ranking) apenas para jogadores cadastrados
       if (userId) {
-        // Usa o estado local (já carregado pelo fetchStats) para evitar SELECT com filtro que falha via RLS
-        const existing = stats.find((s) => s.user_id === userId) ?? null;
-
-        if (existing) {
-          const updates =
-            (stat === 'points_1' || stat === 'points_2' || stat === 'points_3')
-              ? { points: (existing.points ?? 0) + pts, user_id: userId }
-              : stat === 'blocks'
-                ? { blocks: (existing.blocks ?? 0) + 1, user_id: userId }
-                : stat === 'steals'
-                  ? { steals: (existing.steals ?? 0) + 1, user_id: userId }
-                  : stat === 'rebounds'
-                    ? { rebounds: (existing.rebounds ?? 0) + 1, user_id: userId }
-                    : { assists: (existing.assists ?? 0) + 1, user_id: userId };
-          const { error: updErr } = await supabase.from('stats').update(updates).eq('id', existing.id);
-          if (updErr) throw updErr;
-        } else {
-          const base: Record<string, unknown> = {
-            name: player.name,
-            user_id: userId,
-            wins: 0,
-            points: pts,
-            blocks: stat === 'blocks' ? 1 : 0,
-            steals: stat === 'steals' ? 1 : 0,
-            rebounds: stat === 'rebounds' ? 1 : 0,
-            clutch_points: 0,
-            ...(locationId ? { location_id: locationId } : {}),
-          };
-          if (stat === 'assists') base.assists = 1;
-          const { error: insErr } = await supabase.from('stats').insert(base);
-          if (insErr) throw insErr;
-        }
+        // RPC atômica: envia apenas DELTAS. O banco faz soma com
+        // ON CONFLICT, eliminando race entre clientes simultâneos.
+        const isPts = stat === 'points_1' || stat === 'points_2' || stat === 'points_3';
+        const { error: upErr } = await supabase.rpc('increment_stats', {
+          p_user_id: userId,
+          p_location_id: locationId ?? null,
+          p_name: player.name,
+          p_points:   isPts                ? pts : 0,
+          p_blocks:   stat === 'blocks'    ? 1   : 0,
+          p_steals:   stat === 'steals'    ? 1   : 0,
+          p_rebounds: stat === 'rebounds'  ? 1   : 0,
+          p_assists:  stat === 'assists'   ? 1   : 0,
+        });
+        if (upErr) throw upErr;
         fetchStats();
 
         // Log para destaque semanal
@@ -2001,31 +2069,14 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
       for (const { player: p, venceu } of jogadoresDaPartida) {
         const userId = p.user_id;
         if (!userId) continue;
-        const s = stats.find((st) => st.user_id === userId)
-          ?? stats.find((st) => st.name === p.name)
-          ?? null;
-        if (s) {
-          await supabase
-            .from('stats')
-            .update({
-              partidas: (s.partidas ?? 0) + 1,
-              wins: (s.wins ?? 0) + (venceu ? 1 : 0),
-              user_id: userId,
-            })
-            .eq('id', s.id);
-        } else {
-          await supabase.from('stats').insert({
-            name: p.name,
-            user_id: userId,
-            partidas: 1,
-            wins: venceu ? 1 : 0,
-            points: 0,
-            blocks: 0,
-            steals: 0,
-            clutch_points: 0,
-            ...(locationId ? { location_id: locationId } : {}),
-          });
-        }
+        // RPC atômica: +1 partida e +1 vitória (se venceu).
+        await supabase.rpc('increment_stats', {
+          p_user_id: userId,
+          p_location_id: locationId ?? null,
+          p_name: p.name,
+          p_partidas: 1,
+          p_wins: venceu ? 1 : 0,
+        });
         // Log vitória para destaque semanal
         if (venceu) {
           supabase.from('stat_logs').insert({ stat_type: 'wins', value: 1, user_id: userId, location_id: locationId ?? null }).then(() => {});
@@ -2582,6 +2633,35 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                   clearNotification(id);
                   setShowNotificationsPanel(false);
                 }
+                if (actionType === 'request_location') {
+                  setShowNotificationsPanel(false);
+                  (async () => {
+                    let state: PermissionState | 'unknown' = 'unknown';
+                    try {
+                      if (navigator.permissions?.query) {
+                        const res = await navigator.permissions.query({ name: 'geolocation' as PermissionName });
+                        state = res.state;
+                      }
+                    } catch { /* ignore */ }
+
+                    if (state === 'denied') {
+                      // Navegador já bloqueou — não dá pra re-pedir via JS.
+                      // Mostramos instruções e removemos a notificação antiga.
+                      clearNotification(id);
+                      const ua = navigator.userAgent.toLowerCase();
+                      const isiOS = /iphone|ipad|ipod/.test(ua);
+                      const tip = isiOS
+                        ? 'Abra Ajustes > Privacidade e Segurança > Serviços de Localização > Safari/Navegador e permita o acesso. Depois recarregue a página.'
+                        : 'Abra o cadeado/ícone ao lado da URL (ou Configurações do site) e libere a Localização. Depois recarregue a página.';
+                      addNotification(tip, 'info', { silent: true });
+                    } else {
+                      // 'prompt' ou 'granted' ou desconhecido: tenta novamente,
+                      // o navegador abrirá o diálogo de permissão se necessário.
+                      retryLocation();
+                      clearNotification(id);
+                    }
+                  })();
+                }
               }}
             />
           </>
@@ -2966,6 +3046,30 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                     </button>
                   </>
                 ) : null}
+                {personaOwnsTenant && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.assign('/dashboard');
+                      setHeaderMenuOpen(false);
+                    }}
+                    className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700')}
+                  >
+                    Painel de gestão
+                  </button>
+                )}
+                {personaIsSuperAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.assign('/admin');
+                      setHeaderMenuOpen(false);
+                    }}
+                    className={cn('w-full text-left px-3 py-2 rounded-lg text-sm font-semibold', darkMode ? 'hover:bg-slate-800 text-red-300' : 'hover:bg-slate-100 text-red-600')}
+                  >
+                    Super Admin
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -3123,30 +3227,6 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                     Permita o acesso para entrar na fila.
                   </p>
                 </div>
-              </div>
-            )}
-            {!isAdminMode && !hasAdminAccess && !locationLoading && locationError && (
-              <div
-                className={cn(
-                  'mb-4 p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center gap-3',
-                  darkMode ? 'bg-red-500/10 border-red-500/20' : 'bg-red-50 border-red-200'
-                )}
-              >
-                <MapPin className={cn('w-6 h-6 shrink-0', darkMode ? 'text-red-400' : 'text-red-600')} />
-                <div className="flex-1">
-                  <p className={cn('font-medium', darkMode ? 'text-red-200' : 'text-red-800')}>Fora do local</p>
-                  <p className={cn('text-sm', darkMode ? 'text-red-300' : 'text-red-600')}>{locationError}</p>
-                </div>
-                <button
-                  onClick={retryLocation}
-                  className={cn(
-                    'px-4 py-2 rounded-xl font-semibold text-sm flex items-center gap-2 shrink-0',
-                    darkMode ? 'bg-red-500/20 text-red-300 hover:bg-red-500/30' : 'bg-red-100 text-red-700 hover:bg-red-200'
-                  )}
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  Tentar novamente
-                </button>
               </div>
             )}
             {!canSeeList ? (
@@ -3592,7 +3672,18 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                 </h2>
               </div>
 
-              <DndContext sensors={dndSensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <DndContext
+                sensors={dndSensors}
+                collisionDetection={closestCenter}
+                onDragStart={() => {
+                  // Haptic feedback pra sinalizar ao usuário que o longpress
+                  // foi detectado e o drag começou.
+                  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                    try { navigator.vibrate(15); } catch { /* ignore */ }
+                  }
+                }}
+                onDragEnd={handleDragEnd}
+              >
                 <SortableContext items={waitingList.map((p) => p.id)} strategy={verticalListSortingStrategy}>
                   <div className="flex flex-col gap-2 sm:gap-3">
                     {waitingList.map((player, index) => (
@@ -4132,27 +4223,17 @@ function SortableWaitingCard({ player, index, darkMode, isAdminMode, canManagePl
       ref={setNodeRef}
       style={style}
       className={cn(
-        'w-full border p-2 sm:p-4 rounded-xl flex items-center justify-between group transition-colors duration-300',
+        'w-full border p-2 sm:p-4 rounded-xl flex items-center justify-between group transition-colors duration-300 overflow-hidden',
         darkMode ? 'bg-slate-900/50 border-slate-800' : 'bg-white border-slate-200 shadow-sm',
-        isDragging && 'shadow-xl ring-2 ring-orange-500/40 scale-[1.03]'
+        isDragging && 'shadow-xl ring-2 ring-orange-500/40 scale-[1.03]',
       )}
     >
-      {canManagePlayers && (
-        <div
-          className={cn('touch-none shrink-0 p-1 -ml-1 mr-1 cursor-grab active:cursor-grabbing', darkMode ? 'text-slate-600' : 'text-slate-300')}
-          {...attributes}
-          {...listeners}
-        >
-          <GripVertical className="w-4 h-4" />
-        </div>
-      )}
       <div
         className={cn(
           'flex items-center gap-2 overflow-hidden flex-1 min-w-0 min-h-[44px] py-2 -my-2 pr-2',
           onPlayerClick && 'cursor-pointer active:opacity-80'
         )}
         onClick={() => onPlayerClick?.(player)}
-        style={onPlayerClick ? { touchAction: 'manipulation' } : undefined}
       >
         <span className={cn('text-[10px] sm:text-xs font-mono w-4 shrink-0', darkMode ? 'text-slate-500' : 'text-slate-400')}>
           #{index + 1}
@@ -4179,12 +4260,30 @@ function SortableWaitingCard({ player, index, darkMode, isAdminMode, canManagePl
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(player.id); }}
           className={cn(
-            'sm:opacity-0 group-hover:opacity-100 transition-all p-1 shrink-0',
+            'sm:opacity-0 group-hover:opacity-100 transition-all p-1 shrink-0 mr-1',
             darkMode ? 'text-slate-600 hover:text-red-400' : 'text-slate-300 hover:text-red-500'
           )}
         >
           <Trash2 className="w-3 h-3 sm:w-4 h-4" />
         </button>
+      )}
+      {canManagePlayers && (
+        // Alça de arrasto dedicada: 40px de largura, altura total do card.
+        // touch-action: none só aqui — scroll livre no resto do card.
+        <div
+          {...attributes}
+          {...listeners}
+          style={{ touchAction: 'none' }}
+          className={cn(
+            'self-stretch -my-2 sm:-my-4 -mr-2 sm:-mr-4 w-10 flex items-center justify-center cursor-grab active:cursor-grabbing transition-colors shrink-0',
+            darkMode
+              ? 'bg-slate-800/70 hover:bg-slate-700 text-slate-500'
+              : 'bg-slate-100 hover:bg-slate-200 text-slate-400',
+          )}
+          aria-label="Arrastar para reordenar"
+        >
+          <GripVertical className="w-4 h-4" />
+        </div>
       )}
     </div>
   );
