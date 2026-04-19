@@ -2668,9 +2668,13 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         )}
       </AnimatePresence>
 
-      {/* Toast de notificação (auto-dismiss) */}
+      {/* Toast de notificação (auto-dismiss).
+          Atualizações de PWA nunca viram toast — só o ponto laranja no
+          sino chama atenção, pra evitar que sobreponha a UI ao abrir a
+          página. Guarda-chuva caso bundles antigos chamem addNotification
+          sem o flag `silent`. */}
       <AnimatePresence>
-        {visibleToast && (
+        {visibleToast && visibleToast.action?.type !== 'pwa_reload' && (
           <motion.div
             initial={{ opacity: 0, y: -20, x: '-50%' }}
             animate={{ opacity: 1, y: 0, x: '-50%' }}
