@@ -54,7 +54,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       setNotifications((prev) => [n, ...prev].slice(0, 100));
       setHasUnread(true);
 
-      if (options?.silent) return;
+      // Notificações de atualização do PWA NUNCA viram toast — só o ponto
+      // laranja no sino. Evita a mensagem invadir a UI em refreshes ou
+      // quando bundles legados esquecem o flag `silent`.
+      const isPwaReload = options?.action?.type === 'pwa_reload';
+      if (options?.silent || isPwaReload) return;
 
       setVisibleToast(n);
       const showFor = options?.showToastForMs ?? 5000;
