@@ -30,6 +30,10 @@ export interface PerfilDetalheData {
   clutch_points: number;
   assists: number;
   rebounds: number;
+  shot_1_miss?: number;
+  shot_2_miss?: number;
+  shot_3_miss?: number;
+  turnovers?: number;
   avatar_url?: string | null;
 }
 
@@ -52,15 +56,20 @@ interface PerfilDetalheProps {
 type PerfMode = 'total' | 'perGame';
 
 function computePlayerScore(d: PerfilDetalheData): string {
-  return (
+  const acertos =
     (d.points ?? 0) * 1.0 +
     (d.assists ?? 0) * 1.5 +
     (d.rebounds ?? 0) * 1.2 +
     (d.blocks ?? 0) * 1.5 +
     (d.steals ?? 0) * 1.3 +
     (d.clutch_points ?? 0) * 2.0 +
-    (d.wins ?? 0) * 3.0
-  ).toFixed(1);
+    (d.wins ?? 0) * 3.0;
+  const erros =
+    (d.shot_1_miss ?? 0) * 0.4 +
+    (d.shot_2_miss ?? 0) * 0.8 +
+    (d.shot_3_miss ?? 0) * 1.2 +
+    (d.turnovers ?? 0) * 1.0;
+  return Math.max(0, acertos - erros).toFixed(1);
 }
 
 function getStatListValue(data: PerfilDetalheData, key: keyof PerfilDetalheData, mode: PerfMode): string {

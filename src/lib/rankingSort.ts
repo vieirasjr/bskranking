@@ -21,6 +21,10 @@ export interface StatsSortable {
   clutch_points?: number;
   assists?: number;
   rebounds?: number;
+  shot_1_miss?: number;
+  shot_2_miss?: number;
+  shot_3_miss?: number;
+  turnovers?: number;
 }
 
 export const SKILL_LABELS: Record<SortKey, string> = {
@@ -46,15 +50,20 @@ export const RANK_SORT_OPTIONS: { key: SortKey; label: string }[] = [
 ];
 
 export function calculateHighlightScore(p: StatsSortable): number {
-  return (
+  const acertos =
     (p.points ?? 0) * 1.0 +
     (p.assists ?? 0) * 1.5 +
     (p.rebounds ?? 0) * 1.2 +
     (p.blocks ?? 0) * 1.5 +
     (p.steals ?? 0) * 1.3 +
     (p.clutch_points ?? 0) * 2.0 +
-    (p.wins ?? 0) * 3.0
-  );
+    (p.wins ?? 0) * 3.0;
+  const erros =
+    (p.shot_1_miss ?? 0) * 0.4 +
+    (p.shot_2_miss ?? 0) * 0.8 +
+    (p.shot_3_miss ?? 0) * 1.2 +
+    (p.turnovers ?? 0) * 1.0;
+  return Math.max(0, acertos - erros);
 }
 
 export function getStatValue(player: StatsSortable, key: SortKey): number {

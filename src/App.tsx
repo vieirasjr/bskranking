@@ -211,6 +211,10 @@ interface PlayerStats {
   clutch_points: number;
   assists: number;
   rebounds: number;
+  shot_1_miss?: number;
+  shot_2_miss?: number;
+  shot_3_miss?: number;
+  turnovers?: number;
   hot_streak_since?: string | null;
 }
 
@@ -502,6 +506,11 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     for (const s of allStats) {
       if (!s.user_id) continue;
       const existing = byUserId.get(s.user_id);
+      type StatsWithMisses = PlayerStats & {
+        shot_1_miss?: number; shot_2_miss?: number;
+        shot_3_miss?: number; turnovers?: number;
+      };
+      const sm = s as StatsWithMisses;
       if (!existing) {
         byUserId.set(s.user_id, {
           ...s,
@@ -513,13 +522,18 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           clutch_points: s.clutch_points ?? 0,
           assists: s.assists ?? 0,
           rebounds: s.rebounds ?? 0,
-        });
+          shot_1_miss: sm.shot_1_miss ?? 0,
+          shot_2_miss: sm.shot_2_miss ?? 0,
+          shot_3_miss: sm.shot_3_miss ?? 0,
+          turnovers: sm.turnovers ?? 0,
+        } as PlayerStats);
       } else {
         // Manter o hot_streak_since mais recente entre linhas duplicadas
         const latestStreak = [existing.hot_streak_since, s.hot_streak_since]
           .filter(Boolean)
           .sort()
           .pop() ?? null;
+        const em = existing as StatsWithMisses;
         byUserId.set(s.user_id, {
           ...existing,
           partidas: (existing.partidas ?? 0) + (s.partidas ?? 0),
@@ -529,8 +543,12 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           steals: (existing.steals ?? 0) + (s.steals ?? 0),
           clutch_points: (existing.clutch_points ?? 0) + (s.clutch_points ?? 0),
           assists: (existing.assists ?? 0) + (s.assists ?? 0),
+          shot_1_miss: (em.shot_1_miss ?? 0) + (sm.shot_1_miss ?? 0),
+          shot_2_miss: (em.shot_2_miss ?? 0) + (sm.shot_2_miss ?? 0),
+          shot_3_miss: (em.shot_3_miss ?? 0) + (sm.shot_3_miss ?? 0),
+          turnovers: (em.turnovers ?? 0) + (sm.turnovers ?? 0),
           hot_streak_since: latestStreak,
-        });
+        } as PlayerStats);
       }
     }
     setStats(Array.from(byUserId.values()));
@@ -589,6 +607,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
       setMatchPlayerStats({});
+      setMissedAttempts({});
       setShowWinnerModal(null);
       return;
     }
@@ -991,6 +1010,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
             id: sessionId,
             is_started: true,
             started_at: now,
+            ended_at: null,
             current_partida_sessao_id: partidaSessao?.id,
             ...(locationId ? { location_id: locationId } : {}),
           });
@@ -1222,6 +1242,13 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     type: 'START_MATCH' | 'END_MATCH' | 'ADMIN_ACTIVATE' | 'CLEAR_MOCK';
   } | null>(null);
   const [statsModalPlayer, setStatsModalPlayer] = useState<Player | null>(null);
+  const [statsModalTab, setStatsModalTab] = useState<'acertos' | 'erradas'>('acertos');
+  // Frontend-only: contadores de tentativas erradas por jogador.
+  // Não persistem no banco — apenas visuais, pra usar depois em
+  // cálculos de eficiência (acertos vs erros).
+  const [missedAttempts, setMissedAttempts] = useState<
+    Record<string, { shot_1: number; shot_2: number; shot_3: number; turnover: number }>
+  >({});
   const [registeringStatLabel, setRegisteringStatLabel] = useState<string | null>(null);
   const isRegisteringStatRef = useRef(false);
   const [matchPlayerStats, setMatchPlayerStats] = useState<
@@ -1254,8 +1281,73 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     if (!statsModalPlayer) {
       setRegisteringStatLabel(null);
       isRegisteringStatRef.current = false;
+      // Volta a aba padrão ao fechar, sem apagar o contador de erros
+      // (pra o admin poder reabrir o mesmo jogador e continuar).
+      setStatsModalTab('acertos');
     }
   }, [statsModalPlayer]);
+
+  const adjustMissedAttempt = async (
+    playerId: string,
+    key: 'shot_1' | 'shot_2' | 'shot_3' | 'turnover',
+    delta: number,
+  ) => {
+    // Otimista na UI
+    setMissedAttempts((prev) => {
+      const cur = prev[playerId] ?? { shot_1: 0, shot_2: 0, shot_3: 0, turnover: 0 };
+      return {
+        ...prev,
+        [playerId]: { ...cur, [key]: Math.max(0, (cur[key] ?? 0) + delta) },
+      };
+    });
+
+    // Persistência: só faz sentido pra jogadores cadastrados (com user_id).
+    const player = players.find((p) => p.id === playerId);
+    const userId = player?.user_id;
+    if (!userId) return;
+
+    const rpcKey = ({
+      shot_1: 'p_shot_1_miss',
+      shot_2: 'p_shot_2_miss',
+      shot_3: 'p_shot_3_miss',
+      turnover: 'p_turnovers',
+    } as const)[key];
+
+    // Log temporal pro gráfico de Evolução (stat_logs)
+    const statType = ({
+      shot_1: 'shot_1_miss',
+      shot_2: 'shot_2_miss',
+      shot_3: 'shot_3_miss',
+      turnover: 'turnovers',
+    } as const)[key];
+    supabase.from('stat_logs').insert({
+      stat_type: statType,
+      value: delta,
+      user_id: userId,
+      location_id: locationId ?? null,
+    }).then(() => {});
+
+    const { error } = await supabase.rpc('increment_stats', {
+      p_user_id: userId,
+      p_location_id: locationId ?? null,
+      p_name: player.name,
+      [rpcKey]: delta,
+    });
+    if (error) {
+      console.error('increment_stats (miss) failed:', error);
+      // Rollback otimista
+      setMissedAttempts((prev) => {
+        const cur = prev[playerId] ?? { shot_1: 0, shot_2: 0, shot_3: 0, turnover: 0 };
+        return {
+          ...prev,
+          [playerId]: { ...cur, [key]: Math.max(0, (cur[key] ?? 0) - delta) },
+        };
+      });
+      addNotification('Erro ao registrar tentativa.', 'error', { showToastForMs: 3500 });
+      return;
+    }
+    fetchStats();
+  };
 
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     const { active, over } = event;
@@ -1960,6 +2052,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
       setMatchPlayerStats({});
+      setMissedAttempts({});
 
       const suspendSnapshot: Record<string, SuspendedInfo> = { ...suspendedPlayers };
 
@@ -2139,6 +2232,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
             id: sessionId,
             is_started: true,
             started_at: new Date().toISOString(),
+            ended_at: null,
             current_partida_sessao_id: partidaSessao?.id,
             controlled_by: user?.id ?? null,
             control_requested_by: null,
@@ -2174,6 +2268,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         await supabase.from('session').update({
           is_started: false,
           started_at: null,
+          ended_at: null,
           current_partida_sessao_id: null,
           controlled_by: null,
           control_requested_by: null,
@@ -2200,6 +2295,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           .from('session')
           .update({
             is_started: false,
+            ended_at: new Date().toISOString(),
             current_partida_sessao_id: null,
             controlled_by: null,
             control_requested_by: null,
@@ -2355,6 +2451,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           id: sessionRowId,
           is_started: true,
           started_at: new Date().toISOString(),
+          ended_at: null,
           current_partida_sessao_id: partidaSessao?.id,
           ...(locationId ? { location_id: locationId } : {}),
         });
@@ -2363,6 +2460,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
       } else {
         await supabase.from('session').update({
           is_started: false,
+          ended_at: new Date().toISOString(),
           current_partida_sessao_id: null,
           controlled_by: null,
           control_requested_by: null,
@@ -2374,6 +2472,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
       setTeam1MatchPoints(0);
       setTeam2MatchPoints(0);
       setMatchPlayerStats({});
+      setMissedAttempts({});
       await fetchPlayers();
       await fetchSession();
     } catch (err) {
@@ -2776,6 +2875,66 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                 </div>
               ) : (
                 <>
+                  {/* Tabs Acertos/Erradas — só pra jogadores cadastrados.
+                      Visitante (sem user_id) não tem como persistir erros,
+                      então mostramos direto a aba de acertos sem abas. */}
+                  {statsModalPlayer.user_id && (
+                    <div
+                      className={cn(
+                        'inline-flex rounded-xl p-1 gap-0.5 w-full',
+                        darkMode ? 'bg-slate-800' : 'bg-slate-100',
+                      )}
+                      role="tablist"
+                    >
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={statsModalTab === 'acertos'}
+                        onClick={() => setStatsModalTab('acertos')}
+                        className={cn(
+                          'flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all',
+                          statsModalTab === 'acertos'
+                            ? darkMode
+                              ? 'bg-slate-700 text-white shadow'
+                              : 'bg-white text-slate-900 shadow-sm'
+                            : darkMode
+                              ? 'text-slate-400 hover:text-slate-200'
+                              : 'text-slate-500 hover:text-slate-800',
+                        )}
+                      >
+                        Acertos
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={statsModalTab === 'erradas'}
+                        onClick={() => setStatsModalTab('erradas')}
+                        className={cn(
+                          'flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all',
+                          statsModalTab === 'erradas'
+                            ? darkMode
+                              ? 'bg-slate-700 text-white shadow'
+                              : 'bg-white text-slate-900 shadow-sm'
+                            : darkMode
+                              ? 'text-slate-400 hover:text-slate-200'
+                              : 'text-slate-500 hover:text-slate-800',
+                        )}
+                      >
+                        Erradas
+                      </button>
+                    </div>
+                  )}
+
+                  {statsModalPlayer.user_id && statsModalTab === 'erradas' ? (
+                    <ErradasTab
+                      player={statsModalPlayer}
+                      darkMode={darkMode}
+                      isAdminMode={isAdminMode}
+                      missedAttempts={missedAttempts}
+                      onAdjust={adjustMissedAttempt}
+                    />
+                  ) : (
+                    <>
                   {/* Resumo de desempenho na partida atual */}
                   {(() => {
                     const mStats = matchPlayerStats[statsModalPlayer.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
@@ -2877,6 +3036,8 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                       +3 pts
                     </StatButton>
                   </div>
+                    </>
+                  )}
 
                 </>
               )}
@@ -3188,6 +3349,10 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                         clutch_points: stat.clutch_points,
                         assists: stat.assists ?? 0,
                         rebounds: stat.rebounds ?? 0,
+                        shot_1_miss: (stat as { shot_1_miss?: number }).shot_1_miss ?? 0,
+                        shot_2_miss: (stat as { shot_2_miss?: number }).shot_2_miss ?? 0,
+                        shot_3_miss: (stat as { shot_3_miss?: number }).shot_3_miss ?? 0,
+                        turnovers: (stat as { turnovers?: number }).turnovers ?? 0,
                         avatar_url: stat.user_id ? userAvatars[stat.user_id] ?? null : null,
                       }}
                       darkMode={darkMode}
@@ -3206,6 +3371,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                   onProfileClick={(stat) => setSelectedProfileId(stat.user_id ?? stat.id)}
                   userProfile={userProfile}
                   isGuest={isGuest}
+                  isMatchStarted={isMatchStarted}
                   locationSlug={locationSlug}
                   locationId={locationId}
                 />
@@ -4232,6 +4398,24 @@ function SortableWaitingCard({ player, index, darkMode, isAdminMode, canManagePl
         isDragging && 'shadow-xl ring-2 ring-orange-500/40 scale-[1.03]',
       )}
     >
+      {canManagePlayers && (
+        // Alça de arrasto dedicada à ESQUERDA: 40px de largura, altura total
+        // do card. touch-action: none só aqui — scroll livre no resto.
+        <div
+          {...attributes}
+          {...listeners}
+          style={{ touchAction: 'none' }}
+          className={cn(
+            'self-stretch -my-2 sm:-my-4 -ml-2 sm:-ml-4 mr-2 w-10 flex items-center justify-center cursor-grab active:cursor-grabbing transition-colors shrink-0',
+            darkMode
+              ? 'bg-slate-800/70 hover:bg-slate-700 text-slate-500'
+              : 'bg-slate-100 hover:bg-slate-200 text-slate-400',
+          )}
+          aria-label="Arrastar para reordenar"
+        >
+          <GripVertical className="w-4 h-4" />
+        </div>
+      )}
       <div
         className={cn(
           'flex items-center gap-2 overflow-hidden flex-1 min-w-0 min-h-[44px] py-2 -my-2 pr-2',
@@ -4264,30 +4448,12 @@ function SortableWaitingCard({ player, index, darkMode, isAdminMode, canManagePl
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(player.id); }}
           className={cn(
-            'sm:opacity-0 group-hover:opacity-100 transition-all p-1 shrink-0 mr-1',
+            'sm:opacity-0 group-hover:opacity-100 transition-all p-1 shrink-0',
             darkMode ? 'text-slate-600 hover:text-red-400' : 'text-slate-300 hover:text-red-500'
           )}
         >
           <Trash2 className="w-3 h-3 sm:w-4 h-4" />
         </button>
-      )}
-      {canManagePlayers && (
-        // Alça de arrasto dedicada: 40px de largura, altura total do card.
-        // touch-action: none só aqui — scroll livre no resto do card.
-        <div
-          {...attributes}
-          {...listeners}
-          style={{ touchAction: 'none' }}
-          className={cn(
-            'self-stretch -my-2 sm:-my-4 -mr-2 sm:-mr-4 w-10 flex items-center justify-center cursor-grab active:cursor-grabbing transition-colors shrink-0',
-            darkMode
-              ? 'bg-slate-800/70 hover:bg-slate-700 text-slate-500'
-              : 'bg-slate-100 hover:bg-slate-200 text-slate-400',
-          )}
-          aria-label="Arrastar para reordenar"
-        >
-          <GripVertical className="w-4 h-4" />
-        </div>
       )}
     </div>
   );
@@ -4576,6 +4742,84 @@ function StatButton({ onClick, disabled, className, children }: StatButtonProps)
   );
 }
 
+/* ── Aba de tentativas erradas (frontend-only, sem persistência) ─────── */
+interface ErradasTabProps {
+  player: Player;
+  darkMode: boolean;
+  isAdminMode: boolean;
+  missedAttempts: Record<string, { shot_1: number; shot_2: number; shot_3: number; turnover: number }>;
+  onAdjust: (playerId: string, key: 'shot_1' | 'shot_2' | 'shot_3' | 'turnover', delta: number) => void;
+}
+
+const MISSED_ROWS: { key: 'shot_1' | 'shot_2' | 'shot_3' | 'turnover'; label: string; emoji: string }[] = [
+  { key: 'shot_1',   label: 'Arremesso de 1 errado', emoji: '🎯' },
+  { key: 'shot_2',   label: 'Arremesso de 2 errado', emoji: '🏀' },
+  { key: 'shot_3',   label: 'Arremesso de 3 errado', emoji: '🎲' },
+  { key: 'turnover', label: 'Turnover',         emoji: '🔄' },
+];
+
+function ErradasTab({ player, darkMode, isAdminMode, missedAttempts, onAdjust }: ErradasTabProps) {
+  const m = missedAttempts[player.id] ?? { shot_1: 0, shot_2: 0, shot_3: 0, turnover: 0 };
+  const total = m.shot_1 + m.shot_2 + m.shot_3 + m.turnover;
+
+  return (
+    <div className={cn('rounded-xl p-3 space-y-2', darkMode ? 'bg-slate-800/60' : 'bg-slate-50')}>
+      <div className="flex items-center justify-between">
+        <p className={cn('text-xs font-bold uppercase tracking-wider', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+          Tentativas erradas
+        </p>
+        <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full', darkMode ? 'bg-slate-900 text-slate-400' : 'bg-white text-slate-500')}>
+          Total {total}
+        </span>
+      </div>
+
+      {MISSED_ROWS.map(({ key, label, emoji }) => {
+        const value = m[key];
+        return (
+          <div key={key} className="flex items-center justify-between">
+            <span className={cn('text-sm flex items-center gap-1.5', darkMode ? 'text-slate-300' : 'text-slate-700')}>
+              <span>{emoji}</span> {label}
+            </span>
+            <div className="flex items-center gap-1.5">
+              {isAdminMode && (
+                <button
+                  type="button"
+                  onClick={() => onAdjust(player.id, key, -1)}
+                  disabled={value <= 0}
+                  className={cn(
+                    'w-8 h-8 rounded-lg flex items-center justify-center text-base font-bold transition-all',
+                    value <= 0 ? 'opacity-30 cursor-not-allowed' : '',
+                    darkMode ? 'bg-slate-700 text-slate-300 hover:bg-slate-600' : 'bg-slate-200 text-slate-600 hover:bg-slate-300',
+                  )}
+                  style={{ touchAction: 'manipulation' }}
+                >−</button>
+              )}
+              <span className={cn('w-10 text-center text-lg font-black tabular-nums', darkMode ? 'text-white' : 'text-slate-900')}>
+                {value}
+              </span>
+              {isAdminMode && (
+                <button
+                  type="button"
+                  onClick={() => onAdjust(player.id, key, 1)}
+                  className={cn(
+                    'w-8 h-8 rounded-lg flex items-center justify-center text-base font-bold transition-all',
+                    darkMode ? 'bg-red-500/15 text-red-300 hover:bg-red-500/25' : 'bg-red-50 text-red-600 hover:bg-red-100',
+                  )}
+                  style={{ touchAction: 'manipulation' }}
+                >+</button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      <p className={cn('text-[11px] pt-1 border-t mt-2', darkMode ? 'text-slate-500 border-slate-700' : 'text-slate-400 border-slate-200')}>
+        Dados locais — usados na eficiência (acertos vs tentativas).
+      </p>
+    </div>
+  );
+}
+
 function BasketballTabIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
@@ -4641,15 +4885,20 @@ function getWeekRangeLabel(): string {
 }
 
 function calculateHighlightScore(p: PlayerStats): number {
-  return (
+  const acertos =
     (p.points ?? 0) * 1.0 +
     (p.assists ?? 0) * 1.5 +
     (p.rebounds ?? 0) * 1.2 +
     (p.blocks ?? 0) * 1.5 +
     (p.steals ?? 0) * 1.3 +
     (p.clutch_points ?? 0) * 2.0 +
-    (p.wins ?? 0) * 3.0
-  );
+    (p.wins ?? 0) * 3.0;
+  const erros =
+    (p.shot_1_miss ?? 0) * 0.4 +
+    (p.shot_2_miss ?? 0) * 0.8 +
+    (p.shot_3_miss ?? 0) * 1.2 +
+    (p.turnovers ?? 0) * 1.0;
+  return Math.max(0, acertos - erros);
 }
 
 function getStatValue(player: PlayerStats, key: SortKey): number {
@@ -4687,6 +4936,7 @@ interface RankingViewProps {
   onProfileClick: (stat: PlayerStats) => void;
   userProfile: { id: string; display_name: string | null; avatar_url: string | null } | null;
   isGuest: boolean;
+  isMatchStarted: boolean;
   locationSlug?: string;
   locationId?: string;
 }
@@ -4851,14 +5101,19 @@ function RankPodiumItem({
   );
 }
 
-function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest, locationSlug, locationId }: RankingViewProps) {
+function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest, isMatchStarted, locationSlug, locationId }: RankingViewProps) {
   const [showQrModal, setShowQrModal] = useState(false);
   const [showHighlightModal, setShowHighlightModal] = useState(false);
   const [weeklyHighlight, setWeeklyHighlight] = useState<WeeklyHighlight | null>(null);
 
-  // Busca destaque da semana anterior via RPC (seg-dom)
+  // Destaque persiste entre sessões: RPC retorna o líder da sessão ATIVA
+  // ou da última encerrada. Re-fetch a cada mudança de estado da sessão
+  // (inicia/encerra) e quando novos stats chegam na ativa.
   useEffect(() => {
-    if (!locationId) return;
+    if (!locationId) {
+      setWeeklyHighlight(null);
+      return;
+    }
     let cancelled = false;
     supabase.rpc('get_weekly_highlight', { p_location_id: locationId }).then(({ data }) => {
       if (cancelled) return;
@@ -4866,7 +5121,7 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
       setWeeklyHighlight(rows && rows.length > 0 ? rows[0] : null);
     });
     return () => { cancelled = true; };
-  }, [locationId]);
+  }, [locationId, isMatchStarted, stats]);
 
   // Constrói um PlayerStats a partir do destaque semanal para reaproveitar o card
   const highlightPlayer = useMemo<PlayerStats | null>(() => {

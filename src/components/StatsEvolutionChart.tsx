@@ -13,7 +13,10 @@ function cn(...inputs: unknown[]) {
 
 /* ── Tipos ──────────────────────────────────────────────────────── */
 
-type StatType = 'points' | 'assists' | 'rebounds' | 'blocks' | 'steals' | 'clutch_points' | 'wins' | 'efficiency';
+type StatType =
+  | 'points' | 'assists' | 'rebounds' | 'blocks' | 'steals' | 'clutch_points' | 'wins'
+  | 'shot_1_miss' | 'shot_2_miss' | 'shot_3_miss' | 'turnovers'
+  | 'efficiency';
 
 interface TimeRange {
   label: string;
@@ -41,11 +44,19 @@ const STAT_OPTIONS: { key: StatType; label: string; color: string }[] = [
   { key: 'blocks',        label: 'Tocos',        color: '#3b82f6' },
   { key: 'steals',        label: 'Roubos',       color: '#8b5cf6' },
   { key: 'clutch_points', label: 'Decisivos',    color: '#f43f5e' },
+  { key: 'shot_1_miss',   label: 'Arr. 1 errado', color: '#fb7185' },
+  { key: 'shot_2_miss',   label: 'Arr. 2 errado', color: '#f87171' },
+  { key: 'shot_3_miss',   label: 'Arr. 3 errado', color: '#ef4444' },
+  { key: 'turnovers',     label: 'Turnovers',     color: '#dc2626' },
 ];
 
+// Pesos da eficiência — mesma fórmula do PerfilDetalhe e do ranking:
+//   acertos - erros_ponderados
+// Aplicada sobre o acumulado até cada bucket da timeline.
 const EFF_WEIGHTS: Record<string, number> = {
   points: 1.0, assists: 1.5, rebounds: 1.2, blocks: 1.5,
   steals: 1.3, clutch_points: 2.0, wins: 3.0,
+  shot_1_miss: -0.4, shot_2_miss: -0.8, shot_3_miss: -1.2, turnovers: -1.0,
 };
 
 /* ── Helpers ────────────────────────────────────────────────────── */
@@ -208,14 +219,15 @@ export default function StatsEvolutionChart({ userId, darkMode }: StatsEvolution
     const running: Record<string, number> = {
       points: 0, assists: 0, rebounds: 0, blocks: 0,
       steals: 0, clutch_points: 0, wins: 0,
+      shot_1_miss: 0, shot_2_miss: 0, shot_3_miss: 0, turnovers: 0,
     };
 
     return buckets.map((bk) => {
       const inc = perBucket[bk] ?? {};
       for (const k of Object.keys(running)) {
-        running[k] += inc[k] ?? 0;
+        running[k] = Math.max(0, running[k] + (inc[k] ?? 0));
       }
-      const eff = Object.entries(EFF_WEIGHTS).reduce(
+      const rawEff = Object.entries(EFF_WEIGHTS).reduce(
         (sum, [k, w]) => sum + (running[k] ?? 0) * w, 0
       );
       return {
@@ -228,7 +240,11 @@ export default function StatsEvolutionChart({ userId, darkMode }: StatsEvolution
         steals: running.steals,
         clutch_points: running.clutch_points,
         wins: running.wins,
-        efficiency: Math.round(eff * 10) / 10,
+        shot_1_miss: running.shot_1_miss,
+        shot_2_miss: running.shot_2_miss,
+        shot_3_miss: running.shot_3_miss,
+        turnovers: running.turnovers,
+        efficiency: Math.round(Math.max(0, rawEff) * 10) / 10,
       };
     });
   }, [rawLogs, range]);
