@@ -35,6 +35,8 @@ import { supabase } from '../supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { COUNTRIES_PT_SORTED } from '../data/countriesPt';
 import { CountryFlagSvg } from '../components/CountryFlagSvg';
+import ProShareCard, { type ProShareCardData } from '../components/ProShareCard';
+import { appPublicOrigin } from '../lib/publicAppUrl';
 
 function cn(...inputs: unknown[]) {
   return twMerge(clsx(inputs));
@@ -47,6 +49,15 @@ interface SponsorInput {
   name: string;
   logo_url: string;
   link_url: string;
+}
+
+interface SessionOption {
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  team1_points: number;
+  team2_points: number;
+  player_points: unknown;
 }
 
 async function getCroppedBlob(imageSrc: string, cropArea: Area): Promise<Blob> {
@@ -88,6 +99,44 @@ async function getCroppedBlob(imageSrc: string, cropArea: Area): Promise<Blob> {
   });
 }
 
+async function getCroppedRectBlob(imageSrc: string, cropArea: Area, maxWidth = 1920): Promise<Blob> {
+  const image = new Image();
+  image.crossOrigin = 'anonymous';
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = reject;
+    image.src = imageSrc;
+  });
+
+  const cropWidth = Math.max(1, Math.round(cropArea.width));
+  const cropHeight = Math.max(1, Math.round(cropArea.height));
+  const ratio = cropWidth > maxWidth ? maxWidth / cropWidth : 1;
+  const outWidth = Math.max(1, Math.round(cropWidth * ratio));
+  const outHeight = Math.max(1, Math.round(cropHeight * ratio));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = outWidth;
+  canvas.height = outHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Falha ao processar imagem de capa.');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(
+    image,
+    cropArea.x,
+    cropArea.y,
+    cropWidth,
+    cropHeight,
+    0,
+    0,
+    outWidth,
+    outHeight,
+  );
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Falha ao gerar imagem de capa.'))), 'image/webp', 0.86);
+  });
+}
+
 export interface PerfilAtleta {
   id: string;
   auth_id: string;
@@ -111,11 +160,39 @@ export interface PerfilAtleta {
   admin_pin: string | null;
   is_pro?: boolean;
   pro_cover_image_url?: string | null;
+  pro_cover_image_id?: string | null;
   pro_profile_tagline?: string | null;
   pro_athlete_resume?: string | null;
   pro_sponsors?: SponsorInput[] | null;
   created_at: string;
   updated_at: string;
+}
+
+async function convertImageToWebp(file: File, maxWidth = 1600): Promise<Blob> {
+  const image = new Image();
+  const src = URL.createObjectURL(file);
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = reject;
+    image.src = src;
+  });
+
+  const ratio = image.width > maxWidth ? maxWidth / image.width : 1;
+  const width = Math.max(1, Math.round(image.width * ratio));
+  const height = Math.max(1, Math.round(image.height * ratio));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Falha ao processar imagem.');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(image, 0, 0, width, height);
+  URL.revokeObjectURL(src);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Falha ao converter imagem.'))), 'image/webp', 0.86);
+  });
 }
 
 const POSICOES = ['Armador', 'Ala-armador', 'Ala', 'Ala-pivô', 'Pivô'] as const;
@@ -168,11 +245,22 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
   const [adminPin, setAdminPin] = useState<string | null>(null);
   const [proTagline, setProTagline] = useState('');
   const [proCoverImageUrl, setProCoverImageUrl] = useState('');
+  const [proCoverImageId, setProCoverImageId] = useState<string | null>(null);
+  const [uploadingProCover, setUploadingProCover] = useState(false);
+  const [proCoverCropSrc, setProCoverCropSrc] = useState<string | null>(null);
+  const [proCoverCrop, setProCoverCrop] = useState({ x: 0, y: 0 });
+  const [proCoverZoom, setProCoverZoom] = useState(1);
+  const [proCoverCroppedAreaPixels, setProCoverCroppedAreaPixels] = useState<Area | null>(null);
   const [proAthleteResume, setProAthleteResume] = useState('');
   const [proSponsors, setProSponsors] = useState<SponsorInput[]>([
     { name: '', logo_url: '', link_url: '' },
     { name: '', logo_url: '', link_url: '' },
   ]);
+  const [sessionOptions, setSessionOptions] = useState<SessionOption[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [savingCard, setSavingCard] = useState(false);
+  const [cardLinkCopied, setCardLinkCopied] = useState(false);
+  const [lastCardUrl, setLastCardUrl] = useState<string | null>(null);
 
   // Crop state
   const [cropImageSrc, setCropImageSrc] = useState<string | null>(null);
@@ -182,6 +270,10 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
 
   const onCropComplete = useCallback((_: Area, areaPixels: Area) => {
     setCroppedAreaPixels(areaPixels);
+  }, []);
+
+  const onProCoverCropComplete = useCallback((_: Area, areaPixels: Area) => {
+    setProCoverCroppedAreaPixels(areaPixels);
   }, []);
 
   useEffect(() => {
@@ -218,6 +310,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
           setIsPro(Boolean(profile.is_pro));
           setProTagline(profile.pro_profile_tagline ?? '');
           setProCoverImageUrl(profile.pro_cover_image_url ?? '');
+          setProCoverImageId((profile as { pro_cover_image_id?: string | null }).pro_cover_image_id ?? null);
           setProAthleteResume(profile.pro_athlete_resume ?? '');
           const loadedSponsors = Array.isArray(profile.pro_sponsors)
             ? (profile.pro_sponsors as SponsorInput[]).filter((s) => s && typeof s === 'object')
@@ -378,6 +471,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
         avatar_url: avatarUrl,
         pro_profile_tagline: isPro ? (proTagline.trim() || null) : null,
         pro_cover_image_url: isPro ? (proCoverImageUrl.trim() || null) : null,
+        pro_cover_image_id: isPro ? proCoverImageId : null,
         pro_athlete_resume: isPro ? (proAthleteResume.trim() || null) : null,
         pro_sponsors: isPro
           ? proSponsors
@@ -406,6 +500,68 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
     }
   };
 
+  const handleProCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user?.id || !profileId) return;
+    const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+    if (!['jpeg', 'jpg', 'png', 'webp', 'gif'].includes(ext)) {
+      setError('Use imagem JPEG, PNG, WebP ou GIF para a capa.');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Imagem de capa deve ter no máximo 10MB.');
+      e.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setProCoverCropSrc(reader.result as string);
+      setProCoverCrop({ x: 0, y: 0 });
+      setProCoverZoom(1);
+      setProCoverCroppedAreaPixels(null);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleProCoverCropCancel = () => {
+    setProCoverCropSrc(null);
+    setProCoverCroppedAreaPixels(null);
+  };
+
+  const handleProCoverCropConfirm = async () => {
+    if (!proCoverCropSrc || !proCoverCroppedAreaPixels || !user?.id || !profileId) return;
+    setUploadingProCover(true);
+    setError(null);
+    try {
+      const previousCoverId = proCoverImageId;
+      const blob = await getCroppedRectBlob(proCoverCropSrc, proCoverCroppedAreaPixels, 1920);
+      const coverId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const path = `${user.id}/cover/${coverId}.webp`;
+      const { error: uploadError } = await supabase.storage
+        .from('pro-covers')
+        .upload(path, blob, { upsert: true, contentType: 'image/webp' });
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage.from('pro-covers').getPublicUrl(path);
+      const freshUrl = `${publicUrl}?t=${Date.now()}`;
+      setProCoverImageUrl(freshUrl);
+      setProCoverImageId(path);
+
+      if (previousCoverId && previousCoverId !== path) {
+        await supabase.storage.from('pro-covers').remove([previousCoverId]);
+      }
+      setProCoverCropSrc(null);
+      setProCoverCroppedAreaPixels(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao enviar imagem de capa.');
+    } finally {
+      setUploadingProCover(false);
+    }
+  };
+
   const handleRegeneratePin = async () => {
     if (!profileId) return;
     const newPin = String(Math.floor(Math.random() * 10000)).padStart(4, '0');
@@ -414,6 +570,89 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
       .update({ admin_pin: newPin })
       .eq('id', profileId);
     if (!error) setAdminPin(newPin);
+  };
+
+  useEffect(() => {
+    if (!isPro || !profileId) return;
+    let cancelled = false;
+    supabase
+      .from('partida_sessoes')
+      .select('id, started_at, ended_at, team1_points, team2_points, player_points')
+      .order('started_at', { ascending: false })
+      .limit(50)
+      .then(({ data }) => {
+        if (cancelled) return;
+        const rows = ((data ?? []) as SessionOption[]).filter((session) => {
+          const pp = (session.player_points ?? {}) as {
+            team1?: Record<string, { user_id?: string | null }>;
+            team2?: Record<string, { user_id?: string | null }>;
+          };
+          const inTeam1 = Object.values(pp.team1 ?? {}).some((entry) => entry?.user_id === profileId);
+          const inTeam2 = Object.values(pp.team2 ?? {}).some((entry) => entry?.user_id === profileId);
+          return inTeam1 || inTeam2;
+        });
+        setSessionOptions(rows);
+        if (rows.length > 0) setSelectedSessionId((prev) => prev || rows[0].id);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPro, profileId]);
+
+  const selectedSession = sessionOptions.find((s) => s.id === selectedSessionId) ?? null;
+
+  const selectedSessionMetrics = (() => {
+    if (!selectedSession || !profileId) return { partidas: 0, pontos: 0, winRate: 0 };
+    const pp = (selectedSession.player_points ?? {}) as {
+      team1?: Record<string, { points?: number; user_id?: string | null }>;
+      team2?: Record<string, { points?: number; user_id?: string | null }>;
+    };
+    const team1Entries = Object.values(pp.team1 ?? {});
+    const team2Entries = Object.values(pp.team2 ?? {});
+    const team1Player = team1Entries.find((entry) => entry?.user_id === profileId);
+    const team2Player = team2Entries.find((entry) => entry?.user_id === profileId);
+    const pontos = Number(team1Player?.points ?? team2Player?.points ?? 0);
+    let winRate = 0;
+    if (team1Player) {
+      winRate = selectedSession.team1_points > selectedSession.team2_points ? 100 : 0;
+    } else if (team2Player) {
+      winRate = selectedSession.team2_points > selectedSession.team1_points ? 100 : 0;
+    }
+    return { partidas: 1, pontos, winRate };
+  })();
+
+  const cardPreviewData: ProShareCardData = {
+    name: form.display_name.trim() || form.full_name.trim() || 'Atleta',
+    tagline: proTagline.trim() || null,
+    coverUrl: proCoverImageUrl.trim() || null,
+    avatarUrl,
+    stats: selectedSessionMetrics,
+  };
+
+  const handleCreateShareCard = async () => {
+    if (!isPro || !profileId || !selectedSession) return;
+    setSavingCard(true);
+    setError(null);
+    try {
+      const shareSlug = `pro-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
+      const payload = {
+        auth_id: user?.id,
+        basquete_user_id: profileId,
+        session_id: selectedSession.id,
+        title: `Card da sessão ${new Date(selectedSession.started_at).toLocaleDateString('pt-BR')}`,
+        share_slug: shareSlug,
+        status: 'published',
+        snapshot: cardPreviewData,
+      };
+      const { error: insertError } = await supabase.from('pro_cards').insert(payload);
+      if (insertError) throw insertError;
+      const url = `${appPublicOrigin()}/card/${shareSlug}`;
+      setLastCardUrl(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao criar card compartilhável.');
+    } finally {
+      setSavingCard(false);
+    }
   };
 
   if (loading) {
@@ -503,23 +742,31 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
               </span>
             </div>
 
-            <p className={cn('text-sm mb-3', darkMode ? 'text-slate-300' : 'text-slate-600')}>
-              Benefícios: 50% de desconto em camps de treinamento, 50% em uniformes oficiais, 2 fotos profissionais por evento, perfil customizado e currículo de atleta integrado.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-              <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
-                <span className="font-bold text-orange-400">Eventos/camps:</span> 50% OFF
-              </div>
-              <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
-                <span className="font-bold text-orange-400">Uniformes:</span> 50% OFF
-              </div>
-              <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
-                <span className="font-bold text-orange-400">Fotos pró:</span> 2 por evento
-              </div>
-              <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
-                <span className="font-bold text-orange-400">Currículo:</span> integrado ao perfil
-              </div>
-            </div>
+            {!isPro ? (
+              <>
+                <p className={cn('text-sm mb-3', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                  Benefícios: 50% de desconto em camps de treinamento, 50% em uniformes oficiais, 2 fotos profissionais por evento, 1 card oficial por sessão para compartilhar nas suas redes favoritas, perfil customizado e currículo de atleta integrado.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
+                    <span className="font-bold text-orange-400">Eventos/camps:</span> 50% OFF
+                  </div>
+                  <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
+                    <span className="font-bold text-orange-400">Uniformes:</span> 50% OFF
+                  </div>
+                  <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
+                    <span className="font-bold text-orange-400">Fotos pró:</span> 2 por evento
+                  </div>
+                  <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
+                    <span className="font-bold text-orange-400">Currículo:</span> integrado ao perfil
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className={cn('text-sm mb-1', darkMode ? 'text-emerald-300' : 'text-emerald-700')}>
+                Seu Perfil PRÓ está ativo. Use os campos abaixo para personalizar sua capa, currículo, patrocinadores e cards.
+              </p>
+            )}
 
             {!isPro && (
               <div className={cn(
@@ -884,18 +1131,28 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
 
             <div className="space-y-2">
               <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
-                Imagem grande de fundo (URL)
+                Imagem grande de fundo (upload local)
               </label>
-              <input
-                type="url"
-                value={proCoverImageUrl}
-                onChange={(e) => setProCoverImageUrl(e.target.value)}
-                placeholder="https://..."
+              <label
                 className={cn(
-                  'w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50',
-                  darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                  'w-full px-4 py-3 rounded-xl border text-sm cursor-pointer inline-flex items-center justify-between',
+                  darkMode ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-700'
                 )}
-              />
+              >
+                <span>{uploadingProCover ? 'Enviando imagem...' : 'Selecionar imagem da capa'}</span>
+                <Camera className="w-4 h-4" />
+                <input type="file" accept="image/*" className="hidden" onChange={handleProCoverUpload} disabled={uploadingProCover} />
+              </label>
+              {proCoverImageUrl && (
+                <div className={cn('rounded-xl border overflow-hidden', darkMode ? 'border-slate-700' : 'border-slate-200')}>
+                  <img src={proCoverImageUrl} alt="Prévia da capa PRÓ" className="w-full h-36 object-cover" />
+                </div>
+              )}
+              {proCoverImageId && (
+                <p className={cn('text-[11px]', darkMode ? 'text-slate-500' : 'text-slate-500')}>
+                  ID da imagem: {proCoverImageId}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -968,6 +1225,65 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
                   </div>
                 </div>
               ))}
+            </div>
+
+            <div className="space-y-3">
+              <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                Card de compartilhamento
+              </label>
+              <p className={cn('text-xs', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                Selecione uma sessão para gerar seu card compartilhável com slug exclusivo.
+              </p>
+              <select
+                value={selectedSessionId}
+                onChange={(e) => setSelectedSessionId(e.target.value)}
+                className={cn(
+                  'w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50',
+                  darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                )}
+              >
+                {sessionOptions.length === 0 && (
+                  <option value="">Nenhuma sessão elegível encontrada</option>
+                )}
+                {sessionOptions.map((session) => (
+                  <option key={session.id} value={session.id}>
+                    {new Date(session.started_at).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}
+                  </option>
+                ))}
+              </select>
+
+              <ProShareCard data={cardPreviewData} className="border-orange-500/30" />
+
+              <button
+                type="button"
+                onClick={handleCreateShareCard}
+                disabled={savingCard || !selectedSessionId}
+                className="w-full py-3 rounded-xl font-bold bg-orange-500 hover:bg-orange-600 text-white transition-all disabled:opacity-50"
+              >
+                {savingCard ? 'Gerando card...' : 'Gerar card com slug exclusivo'}
+              </button>
+
+              {lastCardUrl && (
+                <div className={cn(
+                  'rounded-xl border px-3 py-2.5',
+                  darkMode ? 'border-slate-700 bg-slate-800/70' : 'border-slate-200 bg-slate-50'
+                )}>
+                  <p className={cn('text-xs mb-2 break-all', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                    {lastCardUrl}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(lastCardUrl);
+                      setCardLinkCopied(true);
+                      setTimeout(() => setCardLinkCopied(false), 1800);
+                    }}
+                    className="px-3 py-2 rounded-lg text-xs font-semibold bg-orange-500 hover:bg-orange-600 text-white"
+                  >
+                    {cardLinkCopied ? 'Link copiado!' : 'Copiar link para compartilhar'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1091,6 +1407,82 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
                 step={0.05}
                 value={zoom}
                 onChange={(e) => setZoom(Number(e.target.value))}
+                className="w-full max-w-xs accent-orange-500"
+              />
+              <ZoomIn className="w-4 h-4 text-white/60 shrink-0" />
+            </div>
+          </motion.div>
+        )}
+        {proCoverCropSrc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[140] flex flex-col bg-black/90 backdrop-blur-sm"
+          >
+            <div className="flex items-center justify-between px-4 py-3">
+              <button
+                type="button"
+                onClick={handleProCoverCropCancel}
+                className="p-2 rounded-full text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+              <span className="text-white font-semibold text-sm flex items-center gap-2">
+                <Crop className="w-4 h-4" /> Recortar capa PRÓ (9:16)
+              </span>
+              <button
+                type="button"
+                onClick={handleProCoverCropConfirm}
+                disabled={uploadingProCover}
+                className={cn(
+                  'px-4 py-2 rounded-xl font-bold text-sm transition-all flex items-center gap-2',
+                  uploadingProCover
+                    ? 'bg-orange-500/50 text-white/70 cursor-wait'
+                    : 'bg-orange-500 hover:bg-orange-600 text-white'
+                )}
+              >
+                {uploadingProCover ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
+                Salvar
+              </button>
+            </div>
+
+            <div className="px-4 pb-2">
+              <p className="text-white/70 text-xs text-center">
+                Arraste a imagem dentro do quadro e use o zoom para preencher toda a área.
+              </p>
+            </div>
+
+            <div className="relative flex-1">
+              <Cropper
+                image={proCoverCropSrc}
+                crop={proCoverCrop}
+                zoom={proCoverZoom}
+                aspect={9 / 16}
+                cropShape="rect"
+                showGrid
+                onCropChange={setProCoverCrop}
+                onZoomChange={setProCoverZoom}
+                onCropComplete={onProCoverCropComplete}
+                minZoom={1}
+                maxZoom={4}
+                objectFit="contain"
+              />
+            </div>
+
+            <div className="flex items-center justify-center gap-3 px-6 py-4">
+              <ZoomOut className="w-4 h-4 text-white/60 shrink-0" />
+              <input
+                type="range"
+                min={1}
+                max={4}
+                step={0.05}
+                value={proCoverZoom}
+                onChange={(e) => setProCoverZoom(Number(e.target.value))}
                 className="w-full max-w-xs accent-orange-500"
               />
               <ZoomIn className="w-4 h-4 text-white/60 shrink-0" />

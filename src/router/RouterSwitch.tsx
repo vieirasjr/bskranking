@@ -18,6 +18,7 @@ import DashboardCheckout from '../pages/dashboard/DashboardCheckout';
 import SuperAdmin from '../pages/SuperAdmin';
 import TorneioInscricaoPage from '../pages/TorneioInscricaoPage';
 import MinhasEquipesPage from '../pages/MinhasEquipesPage';
+import ProCardPublicPage from '../pages/ProCardPublicPage';
 import { TenantProvider } from '../contexts/TenantContext';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -47,7 +48,7 @@ function RedirectToTenant() {
 
 export default function RouterSwitch() {
   return (
-    <Routes future={{ v7_relativeSplatPath: true }}>
+    <Routes>
       {/* Página inicial pública (atletas) */}
       <Route path="/" element={<ExplorarLocaisPage />} />
       <Route path="/landing" element={<LandingPage />} />
@@ -91,6 +92,9 @@ export default function RouterSwitch() {
 
       {/* Minhas equipes (logado) */}
       <Route path="/minhas-equipes" element={<MinhasEquipesPage />} />
+
+      {/* Card compartilhável PRÓ */}
+      <Route path="/card/:slug" element={<ProCardPublicPage />} />
 
       {/* App público de cada local (slug dinâmico) */}
       <Route path="/:slug" element={<LocalApp />} />

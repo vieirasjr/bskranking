@@ -55,11 +55,13 @@ export function GlobalRankCard({
   index,
   sortKey,
   darkMode,
+  onClick,
 }: {
   player: GlobalRankEntry;
   index: number;
   sortKey: SortKey;
   darkMode: boolean;
+  onClick?: () => void;
 }) {
   const rankDisplay = index + 1;
   const showAvatar = !!player.avatarUrl && !!player.user_id;
@@ -70,19 +72,23 @@ export function GlobalRankCard({
   const cityOrState = player.playerCity?.trim() || player.playerState?.trim() || '—';
 
   return (
-    <motion.div
+    <motion.button
+      type="button"
       layout
       layoutId={`global-rank-${player.id}`}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={layoutTransition}
+      onClick={onClick}
+      disabled={!onClick}
       className={cn(
         'w-full p-4 rounded-2xl flex items-center justify-between transition-all text-left',
-        darkMode ? 'bg-slate-900/50 border border-slate-800' : 'bg-white border border-slate-100 shadow-sm'
+        darkMode ? 'bg-slate-900/50 border border-slate-800' : 'bg-white border border-slate-100 shadow-sm',
+        onClick && 'cursor-pointer hover:border-orange-500/40 active:scale-[0.99]',
       )}
     >
       <div className="flex items-center gap-4 min-w-0 flex-1">
-        <div className="relative shrink-0">
+        <div className="relative shrink-0 cursor-pointer" title="Abrir perfil">
           <div
             className={cn(
               'w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs overflow-hidden',
@@ -102,7 +108,9 @@ export function GlobalRankCard({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className={cn('font-bold truncate', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</h3>
+          <h3 className={cn('font-bold truncate cursor-pointer', darkMode ? 'text-white' : 'text-slate-900')} title="Abrir perfil">
+            {player.name}
+          </h3>
           <div className="flex items-center gap-x-1.5 mt-1 min-w-0">
             {topStats.map(({ key, value }, i) => (
               <span key={key} className="flex items-center gap-1.5 shrink-0">
@@ -133,6 +141,6 @@ export function GlobalRankCard({
         </div>
         <ArrowRight className={cn('w-4 h-4 mt-1 mx-auto', darkMode ? 'text-slate-600' : 'text-slate-400')} aria-hidden />
       </div>
-    </motion.div>
+    </motion.button>
   );
 }

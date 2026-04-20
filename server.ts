@@ -522,6 +522,150 @@ async function startServer() {
     }
   });
 
+  // ── Perfil PRO: checkout in-app (layout igual ao tenant) ──
+  app.post("/api/mp/pro/process-payment", async (req, res) => {
+    const auth = await validateJWT(req);
+    if (!auth) return res.status(401).json({ error: "Não autorizado." });
+
+    const { formData } = req.body as {
+      formData?: Record<string, unknown>;
+    };
+    if (!formData) {
+      return res.status(400).json({ error: "Dados inválidos." });
+    }
+
+    const payer = await getPayerInfo(auth.userId);
+    const amount = mpAmount(PRO_PLAN.price);
+    const externalReference = `pro|${auth.userId}|${PRO_PLAN.id}`;
+
+    try {
+      const payment = await mpPayment.create({
+        body: {
+          ...formData,
+          transaction_amount: amount,
+          description: PRO_PLAN.description,
+          external_reference: externalReference,
+          statement_descriptor: "BRASKA",
+          binary_mode: true,
+          installments: 1,
+          payer: {
+            ...(formData.payer as Record<string, unknown> ?? {}),
+            email: ((formData.payer as Record<string, unknown>)?.email as string) || payer.email,
+            first_name: payer.first_name || undefined,
+            last_name: payer.last_name || undefined,
+          },
+          additional_info: {
+            items: [{
+              id: PRO_PLAN.id,
+              title: PRO_PLAN.name,
+              description: PRO_PLAN.description,
+              category_id: "services",
+              quantity: 1,
+              unit_price: amount,
+            }],
+          },
+        },
+        requestOptions: {
+          idempotencyKey: `pro-card-${auth.userId}-${Date.now()}`,
+        },
+      });
+
+      if (payment.status === "approved") {
+        await activateProForUser(auth.userId);
+      }
+
+      const statusDetail = (payment as any).status_detail as string | undefined;
+      return res.json({
+        status: payment.status,
+        status_detail: statusDetail,
+        id: payment.id,
+        message: getPaymentMessage(statusDetail),
+      });
+    } catch (err: unknown) {
+      console.error("MP pro process-payment error:", JSON.stringify(err, null, 2));
+      const mpErr = err as { message?: string; cause?: Array<{ description: string }> };
+      const detail = mpErr.cause?.[0]?.description ?? mpErr.message ?? "Erro ao processar pagamento.";
+      return res.status(502).json({ error: detail });
+    }
+  });
+
+  app.post("/api/mp/pro/create-pix", async (req, res) => {
+    const auth = await validateJWT(req);
+    if (!auth) return res.status(401).json({ error: "Não autorizado." });
+
+    const { payerEmail } = req.body as { payerEmail?: string };
+    const payer = await getPayerInfo(auth.userId);
+    const rawEmail = payerEmail ?? payer.email;
+    const email = rawEmail.endsWith("@testuser.com")
+      ? "comprador@braska.app"
+      : (rawEmail || "comprador@braska.app");
+    const amount = mpAmount(PRO_PLAN.price);
+    const externalReference = `pro|${auth.userId}|${PRO_PLAN.id}`;
+
+    try {
+      const payment = await mpPayment.create({
+        body: {
+          transaction_amount: amount,
+          payment_method_id: "pix",
+          description: PRO_PLAN.description,
+          external_reference: externalReference,
+          statement_descriptor: "BRASKA",
+          payer: {
+            email,
+            first_name: payer.first_name || undefined,
+            last_name: payer.last_name || undefined,
+          },
+          additional_info: {
+            items: [{
+              id: PRO_PLAN.id,
+              title: PRO_PLAN.name,
+              description: PRO_PLAN.description,
+              category_id: "services",
+              quantity: 1,
+              unit_price: amount,
+            }],
+          },
+        },
+        requestOptions: {
+          idempotencyKey: `pro-pix-${auth.userId}-${Date.now()}`,
+        },
+      });
+
+      const txData = (payment as any).point_of_interaction?.transaction_data;
+      return res.json({
+        paymentId: payment.id,
+        status: payment.status,
+        qr_code: txData?.qr_code,
+        qr_code_base64: txData?.qr_code_base64,
+        ticket_url: txData?.ticket_url,
+      });
+    } catch (err: unknown) {
+      console.error("MP pro create-pix error:", JSON.stringify(err, null, 2));
+      const mpErr = err as { message?: string; cause?: Array<{ description: string }> };
+      const detail = mpErr.cause?.[0]?.description ?? mpErr.message ?? "Erro ao gerar PIX.";
+      return res.status(502).json({ error: detail });
+    }
+  });
+
+  app.get("/api/mp/pro/payment-status/:paymentId", async (req, res) => {
+    const auth = await validateJWT(req);
+    if (!auth) return res.status(401).json({ error: "Não autorizado." });
+
+    const { paymentId } = req.params;
+    try {
+      const payment = await mpPayment.get({ id: paymentId });
+      const externalRef = (payment.external_reference as string) ?? "";
+      const [kind, authIdFromRef] = externalRef.split("|");
+      if (payment.status === "approved" && kind === "pro" && authIdFromRef === auth.userId) {
+        await activateProForUser(auth.userId);
+      }
+      return res.json({ status: payment.status, id: payment.id });
+    } catch (err) {
+      console.error("MP pro payment-status error:", err);
+      return res.status(502).json({ error: "Erro ao consultar pagamento." });
+    }
+  });
+
   // ── Perfil PRO: assinatura recorrente (separada do tenant) ──
 
   app.post("/api/mp/pro/create-subscription", async (req, res) => {

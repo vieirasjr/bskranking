@@ -30,7 +30,11 @@ import {
   Crown,
   Dumbbell,
   ChevronRight,
+  ArrowLeft,
+  Download,
+  Radio,
 } from 'lucide-react';
+import { toPng } from 'html-to-image';
 import {
   BASKETBALL_FORMAT_OPTIONS,
   BASKETBALL_FORMAT_LABELS,
@@ -57,6 +61,10 @@ import {
   SKILL_LABELS,
 } from '../lib/rankingSort';
 import { GlobalRankCard, type GlobalRankEntry } from '../components/GlobalRankCard';
+import PerfilDetalhe, { type PerfilDetalheData } from './PerfilDetalhe';
+import EditarPerfil from './EditarPerfil';
+import { ProUpgradeModal } from '../components/ProUpgradeModal';
+import ProShareCard, { type ProShareCardData } from '../components/ProShareCard';
 
 /** Limite de jogadores no rank global. */
 const GLOBAL_RANK_LIMIT = 100;
@@ -99,7 +107,7 @@ import { GlobalPointsListener } from '../components/GlobalPointsListener';
 export default function ExplorarLocaisPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { user, signOut } = useAuth();
+  const { user, session, signOut } = useAuth();
   const [locations, setLocations] = useState<PublicLocationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -116,11 +124,24 @@ export default function ExplorarLocaisPage() {
   const [athleteSuccess, setAthleteSuccess] = useState<string | null>(null);
   const [profileName, setProfileName] = useState<string>('');
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
+  const [profileBasqueteUserId, setProfileBasqueteUserId] = useState<string | null>(null);
   const [profilePlayerCode, setProfilePlayerCode] = useState<string | null>(null);
   const [profileAdminPin, setProfileAdminPin] = useState<string | null>(null);
   const [profileIsAdmin, setProfileIsAdmin] = useState(false);
   const [adminCodeCopied, setAdminCodeCopied] = useState(false);
   const [tenantFirstLocationSlug, setTenantFirstLocationSlug] = useState<string | null>(null);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [showProUpgrade, setShowProUpgrade] = useState(false);
+  const [profileIsPro, setProfileIsPro] = useState(false);
+  const [profileCoverUrl, setProfileCoverUrl] = useState<string | null>(null);
+  const [profileTagline, setProfileTagline] = useState<string | null>(null);
+  const [proCards, setProCards] = useState<Array<{ id: string; title: string | null; created_at: string; share_slug: string | null; snapshot: ProShareCardData | null }>>([]);
+  const [proCardsLoading, setProCardsLoading] = useState(false);
+  const [proCardsAvailable, setProCardsAvailable] = useState(true);
+  const [proCardActionFeedback, setProCardActionFeedback] = useState<string | null>(null);
+  const [submittingProCardId, setSubmittingProCardId] = useState<string | null>(null);
+  const exportCardRef = useRef<HTMLDivElement | null>(null);
+  const [exportCardSnapshot, setExportCardSnapshot] = useState<ProShareCardData | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [qrSheetOpen, setQrSheetOpen] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
@@ -132,6 +153,11 @@ export default function ExplorarLocaisPage() {
   });
   const [globalRank, setGlobalRank] = useState<GlobalRankEntry[]>([]);
   const [globalRankSort, setGlobalRankSort] = useState<SortKey>('efficiency');
+  const [showGlobalRankSearch, setShowGlobalRankSearch] = useState(false);
+  const [globalRankSearch, setGlobalRankSearch] = useState('');
+  const globalRankSearchRef = useRef<HTMLInputElement | null>(null);
+  const [selectedGlobalProfile, setSelectedGlobalProfile] = useState<PerfilDetalheData | null>(null);
+  const [loadingGlobalProfile, setLoadingGlobalProfile] = useState(false);
   const [globalEvents, setGlobalEvents] = useState<Array<{ id: string; title: string; event_date: string; event_time: string | null; modality: string; type: string; status: string; kind: 'evento' | 'torneio'; slug?: string; logo_url?: string | null; is_paid?: boolean; price_brl?: number | null }>>([]);
   const [globalRankLoading, setGlobalRankLoading] = useState(false);
   const [globalEventsLoading, setGlobalEventsLoading] = useState(false);
@@ -139,10 +165,14 @@ export default function ExplorarLocaisPage() {
     id: string; name: string; slug: string; start_date: string;
     modality: string; logo_url: string | null; is_paid: boolean; price_brl: number | null;
   }>>([]);
-  const [globalTab, setGlobalTab] = useState<'inicio' | 'rank' | 'eventos' | 'perfil'>('inicio');
+  const [globalTab, setGlobalTab] = useState<'inicio' | 'rank' | 'eventos' | 'perfil' | 'atleta'>('inicio');
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [showInicioSearchControls, setShowInicioSearchControls] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
+  const highlightedProCard = proCards[0] ?? null;
+  const highlightedProCardShareUrl = highlightedProCard?.share_slug
+    ? `${appPublicOrigin()}/card/${highlightedProCard.share_slug}`
+    : null;
   const [isAppInstalled, setIsAppInstalled] = useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
   const appShareLink = `${appPublicOrigin()}/`;
@@ -192,7 +222,7 @@ export default function ExplorarLocaisPage() {
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'rank' || tab === 'eventos' || tab === 'perfil' || tab === 'inicio') {
+    if (tab === 'rank' || tab === 'eventos' || tab === 'perfil' || tab === 'inicio' || tab === 'atleta') {
       setGlobalTab(tab);
     }
   }, [searchParams]);
@@ -243,6 +273,7 @@ export default function ExplorarLocaisPage() {
       setProfileName('');
       setProfileAvatarUrl(null);
       setProfilePlayerCode(null);
+      setProfileBasqueteUserId(null);
       return;
     }
     const fallbackName =
@@ -255,15 +286,19 @@ export default function ExplorarLocaisPage() {
     let cancelled = false;
     supabase
       .from('basquete_users')
-      .select('display_name, avatar_url, player_code, admin_pin')
+      .select('id, display_name, avatar_url, player_code, admin_pin, is_pro, pro_cover_image_url, pro_profile_tagline')
       .eq('auth_id', user.id)
       .maybeSingle()
       .then(({ data }) => {
         if (cancelled || !data) return;
+        setProfileBasqueteUserId((data as { id?: string | null }).id ?? null);
         if (data.display_name?.trim()) setProfileName(data.display_name.trim());
         setProfileAvatarUrl(data.avatar_url ?? null);
         setProfilePlayerCode(data.player_code ?? null);
         setProfileAdminPin((data as { admin_pin?: string | null }).admin_pin ?? null);
+        setProfileIsPro(Boolean((data as { is_pro?: boolean }).is_pro));
+        setProfileCoverUrl((data as { pro_cover_image_url?: string | null }).pro_cover_image_url ?? null);
+        setProfileTagline((data as { pro_profile_tagline?: string | null }).pro_profile_tagline ?? null);
       });
 
     // Verifica se é admin: dono de tenant OU co-admin em tenant_admins.
@@ -295,6 +330,40 @@ export default function ExplorarLocaisPage() {
       cancelled = true;
     };
   }, [user]);
+
+  useEffect(() => {
+    if (!user || !profileIsPro) {
+      setProCards([]);
+      return;
+    }
+    let cancelled = false;
+    setProCardsLoading(true);
+    setProCardsAvailable(true);
+    supabase
+      .from('pro_cards')
+      .select('id, title, created_at, share_slug, snapshot')
+      .eq('auth_id', user.id)
+      .in('status', ['approved', 'published'])
+      .order('created_at', { ascending: false })
+      .limit(20)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          // Se tabela/relação ainda não existir, não quebra a UI.
+          if ((error as { code?: string }).code === '42P01') {
+            setProCardsAvailable(false);
+            setProCards([]);
+          }
+          setProCardsLoading(false);
+          return;
+        }
+        setProCards((data ?? []) as Array<{ id: string; title: string | null; created_at: string; share_slug: string | null; snapshot: ProShareCardData | null }>);
+        setProCardsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, profileIsPro]);
 
   useEffect(() => {
     const prevBodyGutter = document.body.style.scrollbarGutter;
@@ -394,6 +463,7 @@ export default function ExplorarLocaisPage() {
   };
 
   const openGlobalRank = async () => {
+    setSelectedGlobalProfile(null);
     setGlobalTab('rank');
     setGlobalRankLoading(true);
     try {
@@ -434,10 +504,51 @@ export default function ExplorarLocaisPage() {
     }
   };
 
-  const sortedGlobalRank = useMemo(
-    () => sortStatsByKey(globalRank, globalRankSort),
-    [globalRank, globalRankSort]
-  );
+  const openGlobalProfile = async (entry: GlobalRankEntry) => {
+    if (!entry.user_id) return;
+    setLoadingGlobalProfile(true);
+    // Agrega todas as linhas de `stats` do atleta (pode ter várias por tenant)
+    // pra conseguir `partidas` e os contadores completos (inclusive misses).
+    const { data } = await supabase
+      .from('stats')
+      .select('*')
+      .eq('user_id', entry.user_id);
+    type StatRow = {
+      partidas?: number; wins?: number; points?: number; blocks?: number;
+      steals?: number; clutch_points?: number; assists?: number; rebounds?: number;
+      shot_1_miss?: number; shot_2_miss?: number; shot_3_miss?: number; turnovers?: number;
+    };
+    const rows = (data ?? []) as StatRow[];
+    const sum = (k: keyof StatRow) => rows.reduce((acc, r) => acc + (Number(r[k]) || 0), 0);
+    setSelectedGlobalProfile({
+      id: entry.id,
+      user_id: entry.user_id,
+      name: entry.name,
+      partidas: sum('partidas'),
+      wins: sum('wins'),
+      points: sum('points'),
+      blocks: sum('blocks'),
+      steals: sum('steals'),
+      clutch_points: sum('clutch_points'),
+      assists: sum('assists'),
+      rebounds: sum('rebounds'),
+      shot_1_miss: sum('shot_1_miss'),
+      shot_2_miss: sum('shot_2_miss'),
+      shot_3_miss: sum('shot_3_miss'),
+      turnovers: sum('turnovers'),
+      avatar_url: entry.avatarUrl,
+    });
+    setGlobalTab('atleta');
+    setLoadingGlobalProfile(false);
+  };
+
+  const globalRankSearchActive = globalRankSearch.trim().length >= 3;
+  const sortedGlobalRank = useMemo(() => {
+    const base = globalRankSearchActive
+      ? globalRank.filter((p) => (p.name ?? '').toLowerCase().includes(globalRankSearch.trim().toLowerCase()))
+      : globalRank;
+    return sortStatsByKey(base, globalRankSort);
+  }, [globalRank, globalRankSort, globalRankSearch, globalRankSearchActive]);
 
   const openGlobalEvents = async () => {
     setGlobalTab('eventos');
@@ -537,6 +648,145 @@ export default function ExplorarLocaisPage() {
       return;
     }
     setShowInstallModal(true);
+  };
+
+  const openOwnGlobalProfile = async () => {
+    if (!user) return;
+    setHeaderMenuOpen(false);
+    setEditingProfile(false);
+
+    const existing = globalRank.find((entry) => entry.user_id === user.id);
+    if (existing) {
+      await openGlobalProfile(existing);
+      return;
+    }
+
+    setLoadingGlobalProfile(true);
+    try {
+      const { data: ownProfile } = await supabase
+        .from('basquete_users')
+        .select('id, display_name, avatar_url')
+        .eq('auth_id', user.id)
+        .maybeSingle();
+
+      const ownUserId = (ownProfile as { id?: string | null } | null)?.id ?? null;
+      if (!ownUserId) {
+        setGlobalTab('perfil');
+        return;
+      }
+
+      const { data: ownStats } = await supabase
+        .from('stats')
+        .select('*')
+        .eq('user_id', ownUserId);
+
+      type StatRow = {
+        partidas?: number; wins?: number; points?: number; blocks?: number;
+        steals?: number; clutch_points?: number; assists?: number; rebounds?: number;
+        shot_1_miss?: number; shot_2_miss?: number; shot_3_miss?: number; turnovers?: number;
+      };
+      const rows = (ownStats ?? []) as StatRow[];
+      const sum = (k: keyof StatRow) => rows.reduce((acc, r) => acc + (Number(r[k]) || 0), 0);
+
+      setSelectedGlobalProfile({
+        id: ownUserId,
+        user_id: ownUserId,
+        name: (ownProfile as { display_name?: string | null } | null)?.display_name?.trim() || profileName || 'Atleta',
+        partidas: sum('partidas'),
+        wins: sum('wins'),
+        points: sum('points'),
+        blocks: sum('blocks'),
+        steals: sum('steals'),
+        clutch_points: sum('clutch_points'),
+        assists: sum('assists'),
+        rebounds: sum('rebounds'),
+        shot_1_miss: sum('shot_1_miss'),
+        shot_2_miss: sum('shot_2_miss'),
+        shot_3_miss: sum('shot_3_miss'),
+        turnovers: sum('turnovers'),
+        avatar_url: (ownProfile as { avatar_url?: string | null } | null)?.avatar_url ?? profileAvatarUrl ?? null,
+      });
+      setGlobalTab('atleta');
+    } finally {
+      setLoadingGlobalProfile(false);
+    }
+  };
+
+  const requestAppPublication = async (cardId: string) => {
+    if (!user) return;
+    if (!profileBasqueteUserId) {
+      setProCardActionFeedback('Não encontramos seu perfil de atleta para abrir a solicitação.');
+      window.setTimeout(() => setProCardActionFeedback(null), 2200);
+      return;
+    }
+    setSubmittingProCardId(cardId);
+    setProCardActionFeedback(null);
+    try {
+      const targetCard = proCards.find((card) => card.id === cardId);
+      const { error } = await supabase
+        .from('pro_card_publication_requests')
+        .insert({
+          card_id: cardId,
+          auth_id: user.id,
+          basquete_user_id: profileBasqueteUserId,
+          status: 'pending',
+        });
+      if (error) throw error;
+      setProCardActionFeedback(
+        targetCard?.title
+          ? `Solicitação enviada para publicação do card "${targetCard.title}".`
+          : 'Solicitação enviada para publicação nas redes oficiais do app.'
+      );
+    } catch {
+      setProCardActionFeedback('Não foi possível enviar a solicitação agora.');
+    } finally {
+      setSubmittingProCardId(null);
+      window.setTimeout(() => setProCardActionFeedback(null), 2200);
+    }
+  };
+
+  const shareProCard = async (shareUrl: string) => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: 'Meu card PRÓ - Braska',
+          text: 'Confira meu card de performance na Braska.',
+          url: shareUrl,
+        });
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        setProCardActionFeedback('Link do card copiado para compartilhar.');
+        window.setTimeout(() => setProCardActionFeedback(null), 1800);
+      }
+    } catch {
+      // cancelado ou indisponível
+    }
+  };
+
+  const saveProCardLocally = async (snapshot: ProShareCardData | null, fallbackSlug: string | null) => {
+    if (!snapshot) {
+      setProCardActionFeedback('Não há imagem de card disponível para salvar.');
+      window.setTimeout(() => setProCardActionFeedback(null), 2000);
+      return;
+    }
+    try {
+      setExportCardSnapshot(snapshot);
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      if (!exportCardRef.current) throw new Error('Card não renderizado');
+      const dataUrl = await toPng(exportCardRef.current, { cacheBust: true, pixelRatio: 2 });
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `braska-card-${fallbackSlug ?? Date.now().toString()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setProCardActionFeedback('Imagem do card salva no aparelho.');
+    } catch {
+      setProCardActionFeedback('Não foi possível gerar a imagem agora.');
+    } finally {
+      window.setTimeout(() => setProCardActionFeedback(null), 2000);
+    }
   };
 
   const handleInstallApp = async () => {
@@ -683,9 +933,22 @@ export default function ExplorarLocaisPage() {
   return (
     <div className={`min-h-screen pb-24 ${darkMode ? 'bg-[#07090f] text-white' : 'bg-slate-50 text-slate-900'}`}>
       <GlobalPointsListener />
+      {globalTab !== 'atleta' && (
       <header className={`sticky top-0 z-30 border-b backdrop-blur-xl ${darkMode ? 'border-slate-800/80 bg-[#07090f]/92' : 'border-slate-200 bg-white/92'}`}>
         <div className="max-w-5xl mx-auto px-4 pt-4 pb-3 sm:pt-5 sm:pb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+          <button
+            type="button"
+            onClick={openOwnGlobalProfile}
+            disabled={!user}
+            className={`flex items-center gap-2 min-w-0 rounded-xl px-1.5 py-1 text-left transition-colors ${
+              user
+                ? darkMode
+                  ? 'hover:bg-slate-800/70'
+                  : 'hover:bg-slate-100'
+                : 'cursor-default'
+            }`}
+            title={user ? 'Abrir meu perfil' : undefined}
+          >
             {user && (
               <>
                 {profileAvatarUrl ? (
@@ -701,22 +964,34 @@ export default function ExplorarLocaisPage() {
                 </div>
               </>
             )}
-          </div>
+          </button>
           <div className="justify-self-center" />
           <div className="justify-self-end relative">
             {user && (
               <>
                 <div className="flex items-center gap-1.5">
-                  {globalTab === 'inicio' && (
+                  {(globalTab === 'inicio' || globalTab === 'rank') && (
                     <button
                       type="button"
                       onClick={() => {
-                        setShowInicioSearchControls((v) => {
+                        if (globalTab === 'inicio') {
+                          setShowInicioSearchControls((v) => {
+                            const next = !v;
+                            if (next) {
+                              window.requestAnimationFrame(() => searchInputRef.current?.focus());
+                            } else {
+                              searchInputRef.current?.blur();
+                            }
+                            return next;
+                          });
+                          return;
+                        }
+                        setShowGlobalRankSearch((v) => {
                           const next = !v;
                           if (next) {
-                            window.requestAnimationFrame(() => searchInputRef.current?.focus());
+                            window.requestAnimationFrame(() => globalRankSearchRef.current?.focus());
                           } else {
-                            searchInputRef.current?.blur();
+                            setGlobalRankSearch('');
                           }
                           return next;
                         });
@@ -724,7 +999,11 @@ export default function ExplorarLocaisPage() {
                       className={`inline-flex items-center justify-center w-10 h-10 rounded-xl transition-colors ${
                         darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-700 hover:text-slate-900'
                       }`}
-                      aria-label={showInicioSearchControls ? 'Fechar busca' : 'Abrir busca'}
+                      aria-label={
+                        globalTab === 'inicio'
+                          ? (showInicioSearchControls ? 'Fechar busca' : 'Abrir busca')
+                          : (showGlobalRankSearch ? 'Fechar busca do rank' : 'Buscar jogador no rank')
+                      }
                     >
                       <Search className="w-5 h-5" />
                     </button>
@@ -880,32 +1159,81 @@ export default function ExplorarLocaisPage() {
                 </button>
               </div>
               {/* Mesmo estilo dos filtros do ranking no tenant (RankingView) */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
-                {RANK_SORT_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.key}
-                    type="button"
-                    onClick={() => setGlobalRankSort(opt.key)}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border shrink-0 ${
-                      globalRankSort === opt.key
-                        ? 'bg-orange-500 text-white border-orange-500 shadow-lg shadow-orange-500/20'
-                        : darkMode
-                          ? 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700'
-                          : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+              <div className="flex items-center gap-2">
+                <div className="flex-1 flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
+                  {RANK_SORT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setGlobalRankSort(opt.key)}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border shrink-0 ${
+                        globalRankSort === opt.key
+                          ? 'bg-orange-500 text-white border-orange-500 shadow-lg shadow-orange-500/20'
+                          : darkMode
+                            ? 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700'
+                            : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
+
+              <AnimatePresence initial={false}>
+                {showGlobalRankSearch && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="relative">
+                      <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`} />
+                      <input
+                        ref={globalRankSearchRef}
+                        type="search"
+                        value={globalRankSearch}
+                        onChange={(e) => setGlobalRankSearch(e.target.value)}
+                        placeholder="Buscar por nome (mín. 3 letras)..."
+                        className={`w-full pl-10 pr-10 py-2.5 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50 ${
+                          darkMode ? 'bg-slate-900 border border-slate-700 text-white placeholder-slate-500' : 'bg-white border border-slate-300 text-slate-900 placeholder-slate-400'
+                        }`}
+                      />
+                      {globalRankSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setGlobalRankSearch('')}
+                          aria-label="Limpar busca"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-400 hover:text-white"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    {globalRankSearch.trim().length > 0 && globalRankSearch.trim().length < 3 && (
+                      <p className={`text-[11px] mt-1.5 px-1 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                        Digite pelo menos 3 letras para filtrar.
+                      </p>
+                    )}
+                    {globalRankSearchActive && (
+                      <p className={`text-[11px] mt-1.5 px-1 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                        {sortedGlobalRank.length} resultado{sortedGlobalRank.length !== 1 ? 's' : ''}
+                      </p>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         )}
 
         {(globalTab === 'eventos' || globalTab === 'perfil') && <div className="h-3 sm:h-4" aria-hidden />}
       </header>
+      )}
 
-      <main className="max-w-5xl mx-auto px-4 pt-4 sm:pt-6 space-y-10">
+      <main className="max-w-5xl mx-auto px-4 pt-0 sm:pt-6 space-y-10">
         {globalTab === 'inicio' && (loading ? (
           <div className="flex justify-center py-24">
             <div className="w-10 h-10 border-2 border-[#ff8a4c] border-t-transparent rounded-full animate-spin" />
@@ -1136,13 +1464,26 @@ export default function ExplorarLocaisPage() {
           )}
         </>))}
 
-        {globalTab === 'rank' && (
+        {globalTab === 'atleta' && selectedGlobalProfile && (
+          <section className="space-y-4">
+            <PerfilDetalhe
+              data={selectedGlobalProfile}
+              darkMode={darkMode}
+              onBack={() => {
+                setSelectedGlobalProfile(null);
+                setGlobalTab('rank');
+              }}
+            />
+          </section>
+        )}
+
+        {globalTab === 'rank' && !selectedGlobalProfile && (
           <section className="space-y-5">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h2 className={`text-xl font-black tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Rank global</h2>
               <span className="text-xs text-slate-500">Top {GLOBAL_RANK_LIMIT} · {SKILL_LABELS[globalRankSort]}</span>
             </div>
-            {globalRankLoading ? (
+            {globalRankLoading || loadingGlobalProfile ? (
               <div className="py-16 flex justify-center">
                 <div className="w-9 h-9 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
               </div>
@@ -1157,6 +1498,7 @@ export default function ExplorarLocaisPage() {
                     index={idx}
                     sortKey={globalRankSort}
                     darkMode={darkMode}
+                    onClick={a.user_id ? () => openGlobalProfile(a) : undefined}
                   />
                 ))}
               </div>
@@ -1228,8 +1570,83 @@ export default function ExplorarLocaisPage() {
                 <p className={`text-sm ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>Faça login para acessar seu perfil global.</p>
                 <button onClick={openLogin} className="mt-3 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold">Entrar</button>
               </div>
+            ) : editingProfile ? (
+              <div className="space-y-4">
+                <EditarPerfil
+                  darkMode={darkMode}
+                  onBack={() => setEditingProfile(false)}
+                  hasAdminAccess={profileIsAdmin}
+                  onSaved={() => {
+                    setEditingProfile(false);
+                    // refresh rápido dos campos refletidos no resumo do perfil global
+                    supabase
+                      .from('basquete_users')
+                      .select('id, display_name, avatar_url, player_code, admin_pin, is_pro, pro_cover_image_url, pro_profile_tagline')
+                      .eq('auth_id', user.id)
+                      .maybeSingle()
+                      .then(({ data }) => {
+                        if (!data) return;
+                        setProfileBasqueteUserId((data as { id?: string | null }).id ?? null);
+                        if (data.display_name?.trim()) setProfileName(data.display_name.trim());
+                        setProfileAvatarUrl(data.avatar_url ?? null);
+                        setProfilePlayerCode(data.player_code ?? null);
+                        setProfileAdminPin((data as { admin_pin?: string | null }).admin_pin ?? null);
+                        setProfileIsPro(Boolean((data as { is_pro?: boolean }).is_pro));
+                        setProfileCoverUrl((data as { pro_cover_image_url?: string | null }).pro_cover_image_url ?? null);
+                        setProfileTagline((data as { pro_profile_tagline?: string | null }).pro_profile_tagline ?? null);
+                      });
+                  }}
+                />
+              </div>
             ) : (
-              <div className={`rounded-2xl border p-5 ${darkMode ? 'border-slate-700 bg-slate-900/70' : 'border-slate-200 bg-white'}`}>
+              <div className={`rounded-2xl border p-5 space-y-4 ${darkMode ? 'border-slate-700 bg-slate-900/70' : 'border-slate-200 bg-white'}`}>
+                {profileIsPro && profileCoverUrl && (
+                  <div className="relative h-28 rounded-xl overflow-hidden border border-orange-500/20">
+                    <img src={profileCoverUrl} alt="" className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/75 to-transparent" />
+                    <span className="absolute left-3 bottom-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-orange-500/80 text-white">
+                      <Crown className="w-3 h-3" /> PRÓ
+                    </span>
+                    <div className="absolute right-2.5 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={!highlightedProCard || submittingProCardId === highlightedProCard.id}
+                        onClick={() => highlightedProCard && requestAppPublication(highlightedProCard.id)}
+                        className={`w-9 h-9 rounded-full border text-white flex items-center justify-center transition-all bg-black/10 backdrop-blur-sm ${
+                          darkMode ? 'border-white/35 hover:bg-white/15' : 'border-white/80 hover:bg-white/20'
+                        } ${(!highlightedProCard || submittingProCardId === highlightedProCard.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title="Publicar card"
+                        aria-label="Publicar card"
+                      >
+                        <Radio className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!highlightedProCardShareUrl}
+                        onClick={() => highlightedProCardShareUrl && void shareProCard(highlightedProCardShareUrl)}
+                        className={`w-9 h-9 rounded-full border text-white flex items-center justify-center transition-all bg-black/10 backdrop-blur-sm ${
+                          darkMode ? 'border-white/35 hover:bg-white/15' : 'border-white/80 hover:bg-white/20'
+                        } ${!highlightedProCardShareUrl ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title="Compartilhar nas redes"
+                        aria-label="Compartilhar nas redes"
+                      >
+                        <Share2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!highlightedProCard?.snapshot}
+                        onClick={() => void saveProCardLocally(highlightedProCard?.snapshot ?? null, highlightedProCard?.share_slug ?? null)}
+                        className={`w-9 h-9 rounded-full border text-white flex items-center justify-center transition-all bg-black/10 backdrop-blur-sm ${
+                          darkMode ? 'border-white/35 hover:bg-white/15' : 'border-white/80 hover:bg-white/20'
+                        } ${!highlightedProCard?.snapshot ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title="Salvar card"
+                        aria-label="Salvar card"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-center gap-3">
                   {profileAvatarUrl ? (
                     <img src={profileAvatarUrl} alt={profileName} className={`w-12 h-12 rounded-full object-cover border ${darkMode ? 'border-slate-600' : 'border-slate-200'}`} />
@@ -1241,8 +1658,18 @@ export default function ExplorarLocaisPage() {
                   <div className="min-w-0 flex-1">
                     <p className={`font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{profileName}</p>
                     <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Perfil global</p>
+                    {profileIsPro && (
+                      <span className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-orange-500/15 border border-orange-500/30 text-orange-400">
+                        <Crown className="w-3 h-3" /> PRÓ
+                      </span>
+                    )}
                   </div>
                 </div>
+                {profileIsPro && profileTagline && (
+                  <p className={`text-xs leading-relaxed ${darkMode ? 'text-orange-200/90' : 'text-orange-700'}`}>
+                    {profileTagline}
+                  </p>
+                )}
 
                 {(profilePlayerCode || (profileIsAdmin && profileAdminPin)) && (
                   <div className={`mt-4 grid gap-2 ${profileIsAdmin && profileAdminPin && profilePlayerCode ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
@@ -1309,11 +1736,110 @@ export default function ExplorarLocaisPage() {
 
                 <button
                   type="button"
+                  onClick={() => setEditingProfile(true)}
+                  className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${darkMode ? 'bg-slate-800 text-white hover:bg-slate-700 border border-slate-700' : 'bg-slate-100 text-slate-800 border border-slate-200 hover:bg-slate-200'}`}
+                >
+                  Editar perfil
+                </button>
+                {!profileIsPro && (
+                  <button
+                    type="button"
+                    onClick={() => setShowProUpgrade(true)}
+                    className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${darkMode ? 'bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30' : 'bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100'}`}
+                  >
+                    <Crown className="w-4 h-4" />
+                    Conheça os benefícios do PRÓ
+                  </button>
+                )}
+
+                <button
+                  type="button"
                   onClick={() => navigate('/minhas-equipes')}
-                  className={`mt-4 w-full py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${darkMode ? 'bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30' : 'bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100'}`}
+                  className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${darkMode ? 'bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30' : 'bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100'}`}
                 >
                   Minhas Equipes
                 </button>
+
+                {profileIsPro && (
+                  <div className={`rounded-xl border p-3 ${darkMode ? 'border-slate-700 bg-slate-800/60' : 'border-slate-200 bg-slate-50'}`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className={`text-xs font-bold uppercase tracking-widest ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Cards publicados
+                      </p>
+                      <span className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>{proCards.length}</span>
+                    </div>
+                    {proCardsLoading ? (
+                      <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Carregando cards...</p>
+                    ) : !proCardsAvailable ? (
+                      <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        O módulo de cards ainda não está habilitado neste ambiente.
+                      </p>
+                    ) : proCards.length === 0 ? (
+                      <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Você ainda não possui cards publicados.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {proCards.map((card) => {
+                          const shareUrl = card.share_slug ? `${appPublicOrigin()}/card/${card.share_slug}` : null;
+                          return (
+                            <div key={card.id} className={`rounded-lg border p-2.5 ${darkMode ? 'border-slate-700 bg-slate-900/50' : 'border-slate-200 bg-white'}`}>
+                              <p className={`text-xs font-semibold ${darkMode ? 'text-white' : 'text-slate-900'}`}>
+                                {card.title?.trim() || 'Card de performance'}
+                              </p>
+                              <p className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-500'}`}>
+                                {new Date(card.created_at).toLocaleDateString('pt-BR')}
+                              </p>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => requestAppPublication(card.id)}
+                                  disabled={submittingProCardId === card.id}
+                                  className={`text-[11px] font-semibold px-2 py-1 rounded-md border ${
+                                    darkMode
+                                      ? 'border-orange-500/30 text-orange-300 hover:bg-orange-500/10'
+                                      : 'border-orange-200 text-orange-700 hover:bg-orange-50'
+                                  } disabled:opacity-50`}
+                                >
+                                  {submittingProCardId === card.id ? 'Enviando...' : 'Publicar card'}
+                                </button>
+                                {shareUrl && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void shareProCard(shareUrl)}
+                                    className={`text-[11px] font-semibold px-2 py-1 rounded-md border ${
+                                      darkMode
+                                        ? 'border-sky-500/30 text-sky-300 hover:bg-sky-500/10'
+                                        : 'border-sky-200 text-sky-700 hover:bg-sky-50'
+                                    }`}
+                                  >
+                                    Compartilhar nas redes
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => void saveProCardLocally(card.snapshot, card.share_slug)}
+                                  className={`text-[11px] font-semibold px-2 py-1 rounded-md border ${
+                                    darkMode
+                                      ? 'border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10'
+                                      : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+                                  }`}
+                                >
+                                  Salvar
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {proCardActionFeedback && (
+                      <p className={`text-[11px] mt-2 ${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                        {proCardActionFeedback}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={handleGlobalSignOut}
@@ -1595,6 +2121,36 @@ export default function ExplorarLocaisPage() {
         )}
       </AnimatePresence>
 
+      <ProUpgradeModal
+        open={showProUpgrade}
+        onClose={() => setShowProUpgrade(false)}
+        onActivated={() => {
+          setShowProUpgrade(false);
+          supabase
+            .from('basquete_users')
+            .select('is_pro, pro_cover_image_url, pro_profile_tagline')
+            .eq('auth_id', user?.id ?? '')
+            .maybeSingle()
+            .then(({ data }) => {
+              if (!data) return;
+              setProfileIsPro(Boolean((data as { is_pro?: boolean }).is_pro));
+              setProfileCoverUrl((data as { pro_cover_image_url?: string | null }).pro_cover_image_url ?? null);
+              setProfileTagline((data as { pro_profile_tagline?: string | null }).pro_profile_tagline ?? null);
+            });
+        }}
+        sessionToken={session?.access_token ?? ''}
+        userEmail={user?.email ?? ''}
+        darkMode={darkMode}
+      />
+      {/* alvo oculto para exportar PNG local do card */}
+      {profileIsPro && exportCardSnapshot && (
+        <div className="fixed -left-[9999px] top-0 pointer-events-none opacity-0">
+          <div ref={exportCardRef} style={{ width: 1080, height: 1920 }}>
+            <ProShareCard data={exportCardSnapshot} format="story" />
+          </div>
+        </div>
+      )}
+
       <AnimatePresence>
         {qrSheetOpen && (
           <motion.div
@@ -1668,7 +2224,10 @@ export default function ExplorarLocaisPage() {
             </button>
             <button
               type="button"
-              onClick={() => setGlobalTab('rank')}
+              onClick={() => {
+                setSelectedGlobalProfile(null);
+                setGlobalTab('rank');
+              }}
               className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${
                 globalTab === 'rank'
                   ? (darkMode ? 'text-orange-400' : 'text-orange-500')

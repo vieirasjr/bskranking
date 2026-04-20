@@ -37,6 +37,8 @@ import {
   Crown,
   Globe,
   Percent,
+  Search,
+  Share2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -66,6 +68,8 @@ import {InstallPWA} from './components/InstallPWA';
 import PerfilDetalhe from './pages/PerfilDetalhe';
 import { NotificationsPanel } from './components/NotificationsPanel';
 import { ProUpgradeModal } from './components/ProUpgradeModal';
+import ProShareCard, { type ProShareCardData } from './components/ProShareCard';
+import { toBlob } from 'html-to-image';
 import { useLocationCheck } from './hooks/useLocationCheck';
 import { useNotifications } from './contexts/NotificationContext';
 import { runPwaReload } from './pwaUpdateController';
@@ -305,7 +309,16 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
   const [editingProfile, setEditingProfile] = useState(false);
   const [showProUpgrade, setShowProUpgrade] = useState(false);
   const [proNotice, setProNotice] = useState<string | null>(null);
-  const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null; player_code: string | null; admin_pin: string | null; is_pro: boolean } | null>(null);
+  const [userProfile, setUserProfile] = useState<{
+    id: string;
+    display_name: string | null;
+    avatar_url: string | null;
+    player_code: string | null;
+    admin_pin: string | null;
+    is_pro: boolean;
+    pro_cover_image_url: string | null;
+    pro_profile_tagline: string | null;
+  } | null>(null);
   const [adminAddName, setAdminAddName] = useState('');
   const [adminUserSuggestions, setAdminUserSuggestions] = useState<RegisteredUserSuggestion[]>([]);
   const [showAdminSuggestions, setShowAdminSuggestions] = useState(false);
@@ -333,6 +346,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
   const canManageSessionPlayers = isAdminMode && (!isMatchStarted || !hasActiveController || isSessionController);
   const [venueModalityLabel, setVenueModalityLabel] = useState('Basquete 5x5');
   const [showHeaderQrModal, setShowHeaderQrModal] = useState(false);
+  const [rankingSearchToggleNonce, setRankingSearchToggleNonce] = useState(0);
   const adminSuggestionsRef = useRef<HTMLDivElement | null>(null);
   const { isWithinRadius, isLoading: locationLoading, error: locationError, retry: retryLocation } = useLocationCheck(
     activeTab === 'lista' && !isAdminMode && !hasAdminAccess && !!venueCoords,
@@ -344,6 +358,13 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
   const canAddToList = isAdminMode || (isWithinRadius === true && isMatchStarted);
   const canUseQueueInput = !isAdminMode || canManageSessionPlayers;
   const headerQrUrl = locationSlug ? `${window.location.origin}/${locationSlug}` : null;
+  const isProfileDetailOpen = activeTab === 'inicio' && !!selectedProfileId;
+  const openLoggedUserProfile = () => {
+    if (!userProfile?.id) return;
+    setActiveTab('inicio');
+    setSelectedProfileId(userProfile.id);
+    setHeaderMenuOpen(false);
+  };
 
   const profileComplete = !!(userProfile?.display_name?.trim() && userProfile?.avatar_url);
 
@@ -847,7 +868,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     }
     let { data } = await supabase
       .from('basquete_users')
-      .select('id, display_name, avatar_url, player_code, admin_pin, is_pro')
+      .select('id, display_name, avatar_url, player_code, admin_pin, is_pro, pro_cover_image_url, pro_profile_tagline')
       .eq('auth_id', user.id)
       .maybeSingle();
     if (!data) {
@@ -862,12 +883,22 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           },
           { onConflict: 'email', ignoreDuplicates: false }
         )
-        .select('id, display_name, avatar_url, player_code, admin_pin, is_pro')
+        .select('id, display_name, avatar_url, player_code, admin_pin, is_pro, pro_cover_image_url, pro_profile_tagline')
         .single();
       if (upserted) data = upserted;
       else {
-        const { data: byAuth } = await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code, admin_pin, is_pro').eq('auth_id', user.id).maybeSingle();
-        const { data: byEmail } = user?.email ? await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code, admin_pin, is_pro').eq('email', user.email).maybeSingle() : { data: null };
+        const { data: byAuth } = await supabase
+          .from('basquete_users')
+          .select('id, display_name, avatar_url, player_code, admin_pin, is_pro, pro_cover_image_url, pro_profile_tagline')
+          .eq('auth_id', user.id)
+          .maybeSingle();
+        const { data: byEmail } = user?.email
+          ? await supabase
+              .from('basquete_users')
+              .select('id, display_name, avatar_url, player_code, admin_pin, is_pro, pro_cover_image_url, pro_profile_tagline')
+              .eq('email', user.email)
+              .maybeSingle()
+          : { data: null };
         data = byAuth ?? byEmail ?? undefined;
       }
     }
@@ -889,7 +920,20 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         // PIN generation failed silently — will retry next login
       }
     }
-    setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url, player_code: data.player_code ?? null, admin_pin: data.admin_pin ?? null, is_pro: Boolean(data.is_pro) } : null);
+    setUserProfile(
+      data
+        ? {
+            id: data.id,
+            display_name: data.display_name,
+            avatar_url: data.avatar_url,
+            player_code: data.player_code ?? null,
+            admin_pin: data.admin_pin ?? null,
+            is_pro: Boolean(data.is_pro),
+            pro_cover_image_url: (data as { pro_cover_image_url?: string | null }).pro_cover_image_url ?? null,
+            pro_profile_tagline: (data as { pro_profile_tagline?: string | null }).pro_profile_tagline ?? null,
+          }
+        : null
+    );
   }, [user?.id, user?.email, user?.user_metadata, hasAdminAccess]);
 
   useEffect(() => {
@@ -3095,6 +3139,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
       </AnimatePresence>
 
       {/* Header */}
+      {!isProfileDetailOpen && (
       <header
         className={cn(
           'border-b backdrop-blur-md sticky top-0 transition-colors duration-300',
@@ -3103,7 +3148,20 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         )}
       >
         <div className="max-w-5xl mx-auto px-4 py-3 sm:py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={openLoggedUserProfile}
+            disabled={!userProfile?.id}
+            className={cn(
+              'flex items-center gap-2 rounded-xl px-1.5 py-1 text-left transition-colors',
+              userProfile?.id
+                ? darkMode
+                  ? 'hover:bg-slate-800/70'
+                  : 'hover:bg-slate-100'
+                : 'cursor-default'
+            )}
+            title={userProfile?.id ? 'Abrir meu perfil' : undefined}
+          >
             {userProfile?.avatar_url ? (
               <img
                 src={userProfile.avatar_url}
@@ -3125,14 +3183,23 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                 Visitante
               </span>
             )}
-            {userProfile?.display_name && (
-              <span className={cn('text-xl font-bold truncate max-w-[180px]', darkMode ? 'text-white' : 'text-slate-900')}>
-                {userProfile.display_name}
-              </span>
-            )}
-          </div>
+          </button>
           <div className="relative">
             <div className="flex items-center gap-2">
+              {activeTab === 'inicio' && !selectedProfileId && (
+                <button
+                  type="button"
+                  onClick={() => setRankingSearchToggleNonce((n) => n + 1)}
+                  className={cn(
+                    'p-2 rounded-xl transition-colors',
+                    darkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'
+                  )}
+                  title="Buscar jogador no ranking"
+                  aria-label="Buscar jogador no ranking"
+                >
+                  <Search className="w-5 h-5" />
+                </button>
+              )}
               <button
                 onClick={() => setDarkMode(!darkMode)}
                 className={cn(
@@ -3295,7 +3362,8 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           </div>
         </div>
       </header>
-      {headerMenuOpen && (
+      )}
+      {!isProfileDetailOpen && headerMenuOpen && (
         <button
           type="button"
           className="fixed inset-0 z-[25] cursor-default"
@@ -3348,7 +3416,12 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         )}
       </AnimatePresence>
 
-      <main className="max-w-5xl mx-auto px-2 sm:px-4 py-6 sm:py-10 space-y-6 sm:space-y-8 pb-40">
+      <main
+        className={cn(
+          'max-w-5xl mx-auto px-2 sm:px-4 space-y-6 sm:space-y-8 pb-40',
+          isProfileDetailOpen ? 'pt-0 sm:pt-0' : 'py-6 sm:py-10'
+        )}
+      >
         {!isGuest && !profileComplete && user && activeTab === 'perfil' && (
           <div className="space-y-6">
             <EditarPerfil
@@ -3402,6 +3475,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                   darkMode={darkMode}
                   sortKey={sortKey}
                   onSortChange={setSortKey}
+                  searchToggleNonce={rankingSearchToggleNonce}
                   userAvatars={userAvatars}
                   onProfileClick={(stat) => setSelectedProfileId(stat.user_id ?? stat.id)}
                   userProfile={userProfile}
@@ -3409,6 +3483,8 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                   isMatchStarted={isMatchStarted}
                   locationSlug={locationSlug}
                   locationId={locationId}
+                  authUserId={user?.id ?? null}
+                  onRequestProUpgrade={() => setShowProUpgrade(true)}
                 />
                 </motion.div>
               )}
@@ -4340,7 +4416,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                             Conheça os benefícios do PRÓ
                           </p>
                           <p className={cn('text-xs mt-1', darkMode ? 'text-slate-300' : 'text-slate-600')}>
-                            R$ 9,90/mês · mais visibilidade · descontos exclusivos
+                            R$ 9,90/mês · mais visibilidade · 1 card por sessão
                           </p>
                         </div>
                         <Crown className="w-5 h-5 text-orange-400 shrink-0" />
@@ -4995,10 +5071,10 @@ function formatStatValue(player: PlayerStats, key: SortKey): string {
   return String((player[key] as number) ?? 0);
 }
 
-interface WeeklyHighlight {
-  user_id: string;
-  name: string;
-  avatar_url: string | null;
+interface UserSessionEfficiencyCardRow {
+  window_start_ts: string;
+  window_end_ts: string;
+  source_mode: string;
   points: number;
   assists: number;
   rebounds: number;
@@ -5006,9 +5082,12 @@ interface WeeklyHighlight {
   steals: number;
   clutch_points: number;
   wins: number;
+  shot_1_miss: number;
+  shot_2_miss: number;
+  shot_3_miss: number;
+  turnovers: number;
   efficiency: number;
-  week_start: string;
-  week_end: string;
+  partidas: number;
 }
 
 interface RankingViewProps {
@@ -5016,13 +5095,23 @@ interface RankingViewProps {
   darkMode: boolean;
   sortKey: SortKey;
   onSortChange: (key: SortKey) => void;
+  searchToggleNonce: number;
   userAvatars: Record<string, string>;
   onProfileClick: (stat: PlayerStats) => void;
-  userProfile: { id: string; display_name: string | null; avatar_url: string | null } | null;
+  userProfile: {
+    id: string;
+    display_name: string | null;
+    avatar_url: string | null;
+    is_pro: boolean;
+    pro_cover_image_url: string | null;
+    pro_profile_tagline: string | null;
+  } | null;
   isGuest: boolean;
   isMatchStarted: boolean;
   locationSlug?: string;
   locationId?: string;
+  authUserId: string | null;
+  onRequestProUpgrade: () => void;
 }
 
 const layoutTransition = { type: 'spring' as const, stiffness: 350, damping: 30 };
@@ -5159,7 +5248,17 @@ function RankPodiumItem({
         )}
       </button>
       <div className="text-center">
-        <p className={cn('font-bold truncate max-w-[80px] sm:max-w-[100px]', size === 'lg' ? 'text-sm sm:text-base' : 'text-xs sm:text-sm', darkMode ? 'text-white' : 'text-slate-900')}>{player.name}</p>
+        <p
+          onClick={onClick}
+          className={cn(
+            'font-bold truncate max-w-[80px] sm:max-w-[100px] cursor-pointer hover:opacity-90',
+            size === 'lg' ? 'text-sm sm:text-base' : 'text-xs sm:text-sm',
+            darkMode ? 'text-white' : 'text-slate-900'
+          )}
+          title="Abrir perfil"
+        >
+          {player.name}
+        </p>
         <p className="text-orange-500 font-black mt-0.5" style={{ fontSize: size === 'lg' ? '1.125rem' : size === 'md' ? '0.875rem' : '0.75rem' }}>{formatStatValue(player, sortKey)}</p>
         <p className={cn('text-[9px] uppercase tracking-wider font-bold mt-0.5', darkMode ? 'text-slate-600' : 'text-slate-500')}>{SKILL_LABELS[sortKey]}</p>
       </div>
@@ -5185,66 +5284,117 @@ function RankPodiumItem({
   );
 }
 
-function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onProfileClick, userProfile, isGuest, isMatchStarted, locationSlug, locationId }: RankingViewProps) {
+function RankingView({
+  stats,
+  darkMode,
+  sortKey,
+  onSortChange,
+  searchToggleNonce,
+  userAvatars,
+  onProfileClick,
+  userProfile,
+  isGuest,
+  isMatchStarted,
+  locationSlug,
+  locationId,
+  authUserId,
+  onRequestProUpgrade,
+}: RankingViewProps) {
   const [showQrModal, setShowQrModal] = useState(false);
   const [showHighlightModal, setShowHighlightModal] = useState(false);
-  const [weeklyHighlight, setWeeklyHighlight] = useState<WeeklyHighlight | null>(null);
+  const [userSessionCard, setUserSessionCard] = useState<UserSessionEfficiencyCardRow | null>(null);
+  const [showEfficiencyShareModal, setShowEfficiencyShareModal] = useState(false);
+  const [efficiencyShareFormat, setEfficiencyShareFormat] = useState<'feed' | 'story'>('story');
+  const [efficiencyShareBusy, setEfficiencyShareBusy] = useState(false);
+  const [efficiencyExportSnapshot, setEfficiencyExportSnapshot] = useState<ProShareCardData | null>(null);
+  const efficiencyExportRef = useRef<HTMLDivElement | null>(null);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Destaque persiste entre sessões: RPC retorna o líder da sessão ATIVA
-  // ou da última encerrada. Re-fetch a cada mudança de estado da sessão
-  // (inicia/encerra) e quando novos stats chegam na ativa.
+  // Card "sua eficiência": última janela com registros (sessão do local ou último dia com logs).
   useEffect(() => {
-    if (!locationId) {
-      setWeeklyHighlight(null);
+    if (!locationId || isGuest || !userProfile?.id) {
+      setUserSessionCard(null);
       return;
     }
     let cancelled = false;
-    supabase.rpc('get_weekly_highlight', { p_location_id: locationId }).then(({ data }) => {
-      if (cancelled) return;
-      const rows = data as WeeklyHighlight[] | null;
-      setWeeklyHighlight(rows && rows.length > 0 ? rows[0] : null);
-    });
-    return () => { cancelled = true; };
-  }, [locationId, isMatchStarted, stats]);
-
-  // Constrói um PlayerStats a partir do destaque semanal para reaproveitar o card
-  const highlightPlayer = useMemo<PlayerStats | null>(() => {
-    if (!weeklyHighlight) return null;
-    // Encontra o stat acumulado para pegar o id correto
-    const stat = stats.find((s) => s.user_id === weeklyHighlight.user_id);
-    return {
-      id: stat?.id ?? weeklyHighlight.user_id,
-      name: weeklyHighlight.name,
-      points: weeklyHighlight.points,
-      wins: weeklyHighlight.wins,
-      blocks: weeklyHighlight.blocks,
-      steals: weeklyHighlight.steals,
-      clutch_points: weeklyHighlight.clutch_points,
-      assists: weeklyHighlight.assists,
-      rebounds: weeklyHighlight.rebounds,
-      user_id: weeklyHighlight.user_id,
-      partidas: stat?.partidas ?? 0,
+    supabase
+      .rpc('get_user_session_efficiency_card', { p_location_id: locationId, p_user_id: userProfile.id })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          setUserSessionCard(null);
+          return;
+        }
+        const rows = data as Record<string, unknown>[] | null;
+        if (!rows?.length) {
+          setUserSessionCard(null);
+          return;
+        }
+        const r = rows[0];
+        setUserSessionCard({
+          window_start_ts: String(r.window_start_ts),
+          window_end_ts: String(r.window_end_ts),
+          source_mode: String(r.source_mode ?? ''),
+          points: Number(r.points ?? 0),
+          assists: Number(r.assists ?? 0),
+          rebounds: Number(r.rebounds ?? 0),
+          blocks: Number(r.blocks ?? 0),
+          steals: Number(r.steals ?? 0),
+          clutch_points: Number(r.clutch_points ?? 0),
+          wins: Number(r.wins ?? 0),
+          shot_1_miss: Number(r.shot_1_miss ?? 0),
+          shot_2_miss: Number(r.shot_2_miss ?? 0),
+          shot_3_miss: Number(r.shot_3_miss ?? 0),
+          turnovers: Number(r.turnovers ?? 0),
+          efficiency: Number(r.efficiency ?? 0),
+          partidas: Number(r.partidas ?? 0),
+        });
+      });
+    return () => {
+      cancelled = true;
     };
-  }, [weeklyHighlight, stats]);
+  }, [locationId, isGuest, userProfile?.id, isMatchStarted, stats]);
 
-  const highlightScore = weeklyHighlight?.efficiency ?? 0;
-  const highlightAvatarUrl = weeklyHighlight?.avatar_url ?? (highlightPlayer?.user_id ? userAvatars[highlightPlayer.user_id] : undefined);
-  const weekLabel = weeklyHighlight
+  const highlightPlayer = useMemo<PlayerStats | null>(() => {
+    if (!userSessionCard || !userProfile?.id) return null;
+    const stat = stats.find((s) => s.user_id === userProfile.id);
+    const u = userSessionCard;
+    return {
+      id: stat?.id ?? userProfile.id,
+      name: userProfile.display_name?.trim() || 'Você',
+      points: u.points,
+      wins: u.wins,
+      blocks: u.blocks,
+      steals: u.steals,
+      clutch_points: u.clutch_points,
+      assists: u.assists,
+      rebounds: u.rebounds,
+      shot_1_miss: u.shot_1_miss,
+      shot_2_miss: u.shot_2_miss,
+      shot_3_miss: u.shot_3_miss,
+      turnovers: u.turnovers,
+      user_id: userProfile.id,
+      partidas: Math.max(u.partidas, u.wins, 1),
+    };
+  }, [userSessionCard, userProfile, stats]);
+
+  const highlightScore = userSessionCard?.efficiency ?? 0;
+  const highlightAvatarUrl = userProfile?.avatar_url ?? (highlightPlayer?.user_id ? userAvatars[highlightPlayer.user_id] : undefined);
+  const weekLabel = userSessionCard
     ? (() => {
         const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-        const ws = new Date(weeklyHighlight.week_start + 'T00:00:00');
-        const we = new Date(weeklyHighlight.week_end + 'T00:00:00');
+        const ws = new Date(userSessionCard.window_start_ts);
+        const we = new Date(userSessionCard.window_end_ts);
         const fmt = (d: Date) => `${d.getDate().toString().padStart(2, '0')} ${months[d.getMonth()]}`;
-        return `${fmt(ws)} - ${fmt(we)} ${we.getFullYear()}`;
+        if (userSessionCard.source_mode === 'last_day') {
+          return `${fmt(ws)} ${ws.getFullYear()} · último dia com registros`;
+        }
+        return `${fmt(ws)} – ${fmt(we)} ${we.getFullYear()}`;
       })()
     : getWeekRangeLabel();
-  const isHighlightCurrentUser =
-    !isGuest &&
-    !!userProfile?.id &&
-    !!highlightPlayer?.user_id &&
-    userProfile.id === highlightPlayer.user_id;
-  const congratsName =
-    userProfile?.display_name?.trim() || highlightPlayer?.name?.trim() || 'Atleta';
+  const congratsName = userProfile?.display_name?.trim() || highlightPlayer?.name?.trim() || 'Atleta';
 
   const highlightStatBars = useMemo(() => {
     if (!highlightPlayer) return [];
@@ -5264,8 +5414,98 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
     });
   }, [highlightPlayer, stats]);
 
+  const buildEfficiencyShareSnapshot = useCallback(
+    (format: 'feed' | 'story'): ProShareCardData | null => {
+      if (!userSessionCard || !userProfile) return null;
+      const u = userSessionCard;
+      const partidas = Math.max(u.partidas, u.wins, 1);
+      const winRatePct = partidas > 0 ? Math.min(100, Math.max(0, Math.round((u.wins / partidas) * 100))) : 0;
+      const eff = Math.max(0, Math.round(u.efficiency * 10) / 10);
+      const extras: Array<{ label: string; value: number | string }> = [
+        { label: 'Eficiência', value: eff },
+        { label: 'Assistências', value: u.assists },
+        { label: 'Rebotes', value: u.rebounds },
+      ].filter((x) => (typeof x.value === 'number' ? x.value > 0 : String(x.value).trim().length > 0));
+      return {
+        name: userProfile.display_name?.trim() || 'Atleta',
+        tagline: userProfile.pro_profile_tagline?.trim() || null,
+        coverUrl: userProfile.pro_cover_image_url?.trim() || null,
+        avatarUrl: userProfile.avatar_url ?? null,
+        stats: { partidas, pontos: u.points, winRate: winRatePct },
+        extraStats: extras,
+        renderFormat: format,
+      };
+    },
+    [userSessionCard, userProfile]
+  );
+
+  const runEfficiencyShare = useCallback(async () => {
+    if (!userProfile?.is_pro || !authUserId || !userSessionCard) return;
+    const snap = buildEfficiencyShareSnapshot(efficiencyShareFormat);
+    if (!snap) return;
+    setEfficiencyShareBusy(true);
+    try {
+      const shareSlug = `pro-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
+      const { data: inserted, error } = await supabase
+        .from('pro_cards')
+        .insert({
+          auth_id: authUserId,
+          basquete_user_id: userProfile.id,
+          session_id: null,
+          title: `Sua sessão · ${new Date(userSessionCard.window_start_ts).toLocaleDateString('pt-BR')}`,
+          share_slug: shareSlug,
+          status: 'published',
+          snapshot: snap,
+        })
+        .select('id, share_slug, snapshot')
+        .single();
+      if (error || !inserted) throw error ?? new Error('insert');
+      const created = inserted as { share_slug: string | null; snapshot: ProShareCardData | null };
+      const shareUrl = `${window.location.origin}/card/${created.share_slug}`;
+      setEfficiencyExportSnapshot(created.snapshot ?? snap);
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      await new Promise<void>((r) => {
+        window.setTimeout(() => r(), 80);
+      });
+      const shareBlob = efficiencyExportRef.current ? await toBlob(efficiencyExportRef.current, { cacheBust: true, pixelRatio: 2 }) : null;
+      const shareFile = shareBlob
+        ? new File([shareBlob], `braska-card-${created.share_slug ?? 'share'}.png`, { type: 'image/png' })
+        : null;
+      if (navigator.share) {
+        if (shareFile && (!navigator.canShare || navigator.canShare({ files: [shareFile] }))) {
+          await navigator.share({
+            title: 'Meu card PRÓ - Braska',
+            text: 'Confira meu card de performance na Braska.',
+            files: [shareFile],
+          });
+        } else {
+          await navigator.share({
+            title: 'Meu card PRÓ - Braska',
+            text: 'Confira meu card de performance na Braska.',
+            url: shareUrl,
+          });
+        }
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+      }
+      setShowEfficiencyShareModal(false);
+    } catch {
+      // cancelado ou falha silenciosa
+    } finally {
+      setEfficiencyShareBusy(false);
+      setEfficiencyExportSnapshot(null);
+    }
+  }, [
+    authUserId,
+    userProfile,
+    userSessionCard,
+    efficiencyShareFormat,
+    buildEfficiencyShareSnapshot,
+  ]);
+
   useEffect(() => {
-    if (!showHighlightModal) return;
+    if (!showHighlightModal && !showEfficiencyShareModal) return;
     const html = document.documentElement;
     const body = document.body;
     const prevHtml = html.style.overflow;
@@ -5276,16 +5516,40 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
       html.style.overflow = prevHtml;
       body.style.overflow = prevBody;
     };
-  }, [showHighlightModal]);
+  }, [showHighlightModal, showEfficiencyShareModal]);
+
+  useEffect(() => {
+    if (!searchToggleNonce) return;
+    setShowSearch((v) => {
+      const next = !v;
+      if (next) {
+        window.requestAnimationFrame(() => searchInputRef.current?.focus());
+      } else {
+        setSearchQuery('');
+      }
+      return next;
+    });
+  }, [searchToggleNonce]);
 
   const qrUrl = locationSlug ? `${window.location.origin}/${locationSlug}` : null;
+
+  // Busca: filtra por nome quando o usuário digita >= 3 caracteres.
+  // Abaixo disso, mantém a lista completa pra não cortar resultados em
+  // pesquisas curtas/ambíguas.
+  const searchActive = searchQuery.trim().length >= 3;
+  const filteredStats = useMemo(() => {
+    if (!searchActive) return stats;
+    const q = searchQuery.trim().toLowerCase();
+    return stats.filter((s) => (s.name ?? '').toLowerCase().includes(q));
+  }, [stats, searchQuery, searchActive]);
+
   const sortedStats = useMemo(() => {
-    return [...stats].sort((a, b) => {
+    return [...filteredStats].sort((a, b) => {
       const diff = getStatValue(b, sortKey) - getStatValue(a, sortKey);
       if (diff !== 0) return diff;
       return (b.points ?? 0) - (a.points ?? 0);
     });
-  }, [stats, sortKey]);
+  }, [filteredStats, sortKey]);
 
   // Há algum jogador com valor > 0 para o filtro atual?
   const hasAnyData = useMemo(
@@ -5377,35 +5641,81 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
           from { width: 0%; }
         }
       `}</style>
-      <div className="flex flex-col gap-4">
-
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
-          {filterOptions.map((opt) => (
-            <button
-              key={opt.key}
-              onClick={() => onSortChange(opt.key)}
-              className={cn(
-                'px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border',
-                sortKey === opt.key
-                  ? 'bg-orange-500 text-white border-orange-500 shadow-lg shadow-orange-500/20'
-                  : darkMode ? 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700' : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'
-              )}
-            >
-              {opt.label}
-            </button>
-          ))}
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center gap-2">
+          <div className="flex-1 flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
+            {filterOptions.map((opt) => (
+              <button
+                key={opt.key}
+                onClick={() => onSortChange(opt.key)}
+                className={cn(
+                  'px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider whitespace-nowrap transition-all border',
+                  sortKey === opt.key
+                    ? 'bg-orange-500 text-white border-orange-500 shadow-lg shadow-orange-500/20'
+                    : darkMode ? 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700' : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
+
+        <AnimatePresence initial={false}>
+          {showSearch && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="overflow-hidden"
+            >
+              <div className="relative">
+                <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4', darkMode ? 'text-slate-500' : 'text-slate-400')} />
+                <input
+                  ref={searchInputRef}
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Buscar por nome (mín. 3 letras)..."
+                  className={cn(
+                    'w-full pl-10 pr-10 py-2.5 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50',
+                    darkMode ? 'bg-slate-900 border border-slate-700 text-white placeholder-slate-500' : 'bg-white border border-slate-300 text-slate-900 placeholder-slate-400',
+                  )}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    aria-label="Limpar busca"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              {searchQuery.trim().length > 0 && searchQuery.trim().length < 3 && (
+                <p className={cn('text-[11px] mt-1.5 px-1', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+                  Digite pelo menos 3 letras para filtrar.
+                </p>
+              )}
+              {searchActive && (
+                <p className={cn('text-[11px] mt-1.5 px-1', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+                  {sortedStats.length} resultado{sortedStats.length !== 1 ? 's' : ''}
+                </p>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Destaque da Rodada Card */}
+      {/* Sua eficiência (última sessão com registros no local) */}
       {highlightPlayer && (
-        <motion.button
-          type="button"
+        <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.15, type: 'spring', stiffness: 300, damping: 25 }}
-          onClick={() => setShowHighlightModal(true)}
-          className="w-full relative overflow-hidden rounded-2xl p-4 shadow-lg group cursor-pointer text-left"
+          className="w-full relative overflow-hidden rounded-2xl shadow-lg group"
           style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #f97316 50%, #ef4444 100%)' }}
         >
           <div className="absolute -top-8 -right-8 w-28 h-28 rounded-full bg-white/10" />
@@ -5413,36 +5723,76 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
           <div className="absolute top-3 right-14 w-3 h-3 rounded-full bg-white/15" />
           <div className="absolute bottom-6 right-6 w-2 h-2 rounded-full bg-white/20" />
 
-          <div className="relative flex items-center gap-4">
-            <div className="relative shrink-0">
-              <div className="w-16 h-16 rounded-full overflow-hidden ring-2 ring-white/30 shadow-lg">
-                {highlightAvatarUrl ? (
-                  <img src={highlightAvatarUrl} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full bg-white/20 flex items-center justify-center">
-                    <User className="w-7 h-7 text-white/70" />
-                  </div>
-                )}
+          <button
+            type="button"
+            onClick={() => setShowHighlightModal(true)}
+            className="w-full text-left p-4 pr-[5.5rem] cursor-pointer"
+          >
+            <div className="relative flex items-center gap-4">
+              <div
+                className="relative shrink-0 cursor-pointer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onProfileClick(highlightPlayer);
+                }}
+                title="Abrir perfil"
+              >
+                <div className="w-16 h-16 rounded-full overflow-hidden ring-2 ring-white/30 shadow-lg">
+                  {highlightAvatarUrl ? (
+                    <img src={highlightAvatarUrl} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full bg-white/20 flex items-center justify-center">
+                      <User className="w-7 h-7 text-white/70" />
+                    </div>
+                  )}
+                </div>
+                <div className="absolute -top-2 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-white/20 ring-1 ring-white/40">
+                  <Percent className="w-4 h-4 text-white" />
+                </div>
               </div>
-              <div className="absolute -top-3 -right-1" style={{ animation: 'crown-glow 2s ease-in-out infinite' }}>
-                <Crown className="w-6 h-6 text-yellow-300" style={{ filter: 'drop-shadow(0 0 6px rgba(251, 191, 36, 0.9))' }} />
+
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">Sua eficiência</p>
+                <p
+                  className="text-lg font-black text-white truncate mt-0.5 cursor-pointer hover:opacity-90"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onProfileClick(highlightPlayer);
+                  }}
+                  title="Abrir perfil"
+                >
+                  {highlightPlayer.name}
+                </p>
+                <p className="text-[11px] text-white/75 mt-0.5 truncate">{weekLabel}</p>
+                <p className="text-xs text-white/80 mt-1">
+                  {highlightPlayer.points} pts · {highlightPlayer.assists} ast · {highlightPlayer.rebounds} reb
+                </p>
+              </div>
+
+              <div className="flex flex-col items-center gap-1 shrink-0 pr-1">
+                <span className="text-2xl font-black text-white leading-none">{highlightScore.toFixed(1)}</span>
+                <span className="text-[9px] font-bold uppercase tracking-wider text-white/50">Score</span>
               </div>
             </div>
+          </button>
 
-            <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">Destaque da Rodada</p>
-              <p className="text-lg font-black text-white truncate mt-0.5">{highlightPlayer.name}</p>
-              <p className="text-xs text-white/80 mt-1">
-                {highlightPlayer.points} pts · {highlightPlayer.assists} ast · {highlightPlayer.rebounds} reb
-              </p>
-            </div>
-
-            <div className="flex flex-col items-center gap-1 shrink-0">
-              <span className="text-2xl font-black text-white leading-none">{highlightScore.toFixed(1)}</span>
-              <span className="text-[9px] font-bold uppercase tracking-wider text-white/50">Score</span>
-            </div>
-          </div>
-        </motion.button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              if (userProfile?.is_pro) {
+                setEfficiencyShareFormat('story');
+                setShowEfficiencyShareModal(true);
+              } else {
+                onRequestProUpgrade();
+              }
+            }}
+            className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-0.5 rounded-xl bg-black/25 px-2.5 py-2 text-white ring-1 ring-white/25 backdrop-blur-sm transition hover:bg-black/35 active:scale-[0.98]"
+          >
+            <Share2 className="w-5 h-5" />
+            <span className="text-[9px] font-bold uppercase tracking-wide leading-none">Compart.</span>
+          </button>
+        </motion.div>
       )}
 
       <>
@@ -5625,14 +5975,14 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
                     animate={{ scale: 1, rotate: 0 }}
                     transition={{ delay: 0.2, type: 'spring', stiffness: 400, damping: 15 }}
                   >
-                    <Crown
+                    <Percent
                       className="w-7 h-7 text-yellow-300 mx-auto mb-0.5"
                       style={{ filter: 'drop-shadow(0 0 8px rgba(251, 191, 36, 0.7))' }}
                     />
                   </motion.div>
 
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/70 mb-0">Destaque da Rodada</p>
-                  <p className="text-[10px] text-white/50 mb-2">{weekLabel}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/70 mb-0">Sua eficiência</p>
+                  <p className="text-[10px] text-white/50 mb-2 text-center px-2">{weekLabel}</p>
 
                   <motion.div
                     className="relative"
@@ -5663,18 +6013,16 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
                 </div>
               </div>
 
-              {isHighlightCurrentUser && (
-                <div
-                  className={cn(
-                    'shrink-0 px-4 py-3 border-b text-center text-sm leading-snug',
-                    darkMode ? 'bg-orange-500/10 border-orange-500/20 text-orange-100' : 'bg-orange-50 border-orange-100 text-slate-800'
-                  )}
-                >
-                  <p>
-                    Parabéns, <span className="font-bold">{congratsName}</span>, você está construindo um currículo incrível.
-                  </p>
-                </div>
-              )}
+              <div
+                className={cn(
+                  'shrink-0 px-4 py-3 border-b text-center text-sm leading-snug',
+                  darkMode ? 'bg-orange-500/10 border-orange-500/20 text-orange-100' : 'bg-orange-50 border-orange-100 text-slate-800'
+                )}
+              >
+                <p>
+                  Parabéns, <span className="font-bold">{congratsName}</span>, você está construindo um currículo incrível.
+                </p>
+              </div>
 
               {/* Stats: única área com scroll; cabeçalho do modal permanece fixo */}
               <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
@@ -5731,6 +6079,138 @@ function RankingView({ stats, darkMode, sortKey, onSortChange, userAvatars, onPr
           </motion.div>
         )}
       </AnimatePresence>
+
+      <AnimatePresence>
+        {showEfficiencyShareModal && userSessionCard && userProfile?.is_pro && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[105] flex items-center justify-center px-4 pt-6 pb-[calc(1.5rem+3.5rem+env(safe-area-inset-bottom,0px))] bg-black/70 backdrop-blur-md overflow-hidden overscroll-none"
+            onClick={() => !efficiencyShareBusy && setShowEfficiencyShareModal(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 16 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                'rounded-3xl w-full max-w-md max-h-[min(90dvh,calc(100dvh-2rem))] flex flex-col overflow-hidden shadow-2xl border',
+                darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
+              )}
+            >
+              <div className="flex items-center justify-between gap-2 px-4 pt-3 pb-2 shrink-0">
+                <h3 className={cn('text-sm font-black', darkMode ? 'text-white' : 'text-slate-900')}>Compartilhar card PRÓ</h3>
+                <button
+                  type="button"
+                  disabled={efficiencyShareBusy}
+                  onClick={() => setShowEfficiencyShareModal(false)}
+                  className={cn('p-1.5 rounded-full transition-colors', darkMode ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500')}
+                  aria-label="Fechar"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className={cn('text-[11px] px-4 pb-2', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                Pré-visualização do que será enviado ao compartilhamento nativo.
+              </p>
+              <div className="px-4 pb-2">
+                <p className={cn('text-[11px] font-semibold mb-1.5', darkMode ? 'text-slate-300' : 'text-slate-600')}>Formato</p>
+                <div className={cn('inline-flex rounded-xl p-1 gap-1 border', darkMode ? 'border-slate-700 bg-slate-800/50' : 'border-slate-200 bg-slate-50')}>
+                  <button
+                    type="button"
+                    onClick={() => setEfficiencyShareFormat('feed')}
+                    className={cn(
+                      'px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
+                      efficiencyShareFormat === 'feed'
+                        ? 'bg-orange-500 text-white'
+                        : darkMode
+                          ? 'text-slate-300 hover:bg-slate-700'
+                          : 'text-slate-600 hover:bg-slate-100'
+                    )}
+                  >
+                    Feed
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEfficiencyShareFormat('story')}
+                    className={cn(
+                      'px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors',
+                      efficiencyShareFormat === 'story'
+                        ? 'bg-orange-500 text-white'
+                        : darkMode
+                          ? 'text-slate-300 hover:bg-slate-700'
+                          : 'text-slate-600 hover:bg-slate-100'
+                    )}
+                  >
+                    Stories
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pb-4">
+                <div
+                  className="mx-auto overflow-hidden rounded-2xl border border-white/10 shadow-xl"
+                  style={{
+                    width: '100%',
+                    maxWidth: 280,
+                    aspectRatio: efficiencyShareFormat === 'feed' ? '1080 / 1350' : '1080 / 1920',
+                  }}
+                >
+                  {buildEfficiencyShareSnapshot(efficiencyShareFormat) && (
+                    <div
+                      className="origin-top-left"
+                      style={{
+                        width: 1080,
+                        height: efficiencyShareFormat === 'feed' ? 1350 : 1920,
+                        transform: `scale(${260 / 1080})`,
+                        transformOrigin: 'top left',
+                      }}
+                    >
+                      <ProShareCard data={buildEfficiencyShareSnapshot(efficiencyShareFormat)!} format={efficiencyShareFormat} />
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className={cn('shrink-0 flex gap-2 p-4 border-t', darkMode ? 'border-slate-800' : 'border-slate-100')}>
+                <button
+                  type="button"
+                  disabled={efficiencyShareBusy}
+                  onClick={() => setShowEfficiencyShareModal(false)}
+                  className={cn(
+                    'flex-1 py-2.5 rounded-xl text-sm font-semibold',
+                    darkMode ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  )}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={efficiencyShareBusy}
+                  onClick={() => void runEfficiencyShare()}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-50"
+                >
+                  {efficiencyShareBusy ? 'Gerando…' : 'Compartilhar'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {userProfile?.is_pro && efficiencyExportSnapshot && (
+        <div className="fixed -left-[9999px] top-0 pointer-events-none opacity-0">
+          <div
+            ref={efficiencyExportRef}
+            style={{
+              width: 1080,
+              height: efficiencyShareFormat === 'feed' ? 1350 : 1920,
+            }}
+          >
+            <ProShareCard data={efficiencyExportSnapshot} format={efficiencyShareFormat} />
+          </div>
+        </div>
+      )}
 
       {/* QR Code Modal */}
       <AnimatePresence>
