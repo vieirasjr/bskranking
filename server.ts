@@ -59,6 +59,12 @@ const PLAN_PRICES: Record<string, number> = {
   enterprise: 200,
   avulso: 50,
 };
+const PRO_PLAN = {
+  id: "perfil_pro_mensal",
+  name: "Braska - Perfil PRO",
+  description: "Assinatura Perfil PRO: perfil customizado, currículo integrado, descontos exclusivos e selo PRÓ.",
+  price: 9.9,
+} as const;
 // Garante que o valor enviado ao MP tenha no máximo 2 casas decimais
 // (evita artefatos de floating-point como 36.90000000000000035527…)
 function mpAmount(price: number): number {
@@ -95,6 +101,44 @@ const MP_STATUS_MESSAGES: Record<string, string> = {
 function getPaymentMessage(statusDetail?: string): string {
   if (!statusDetail) return "Erro ao processar pagamento.";
   return MP_STATUS_MESSAGES[statusDetail] ?? "Pagamento não aprovado. Tente outro método de pagamento.";
+}
+
+function toValidPublicBackUrl(candidate?: string): string | undefined {
+  if (!candidate) return undefined;
+  try {
+    const url = new URL(candidate);
+    const isHttp = url.protocol === "http:" || url.protocol === "https:";
+    const isLocalHost =
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "0.0.0.0";
+    if (!isHttp || isLocalHost) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+async function activateProForUser(authUserId: string) {
+  await getSupabaseAdmin()
+    .from("basquete_users")
+    .update({
+      is_pro: true,
+      pro_subscription_status: "authorized",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("auth_id", authUserId);
+}
+
+async function disableProForUser(authUserId: string, nextStatus: string) {
+  await getSupabaseAdmin()
+    .from("basquete_users")
+    .update({
+      is_pro: false,
+      pro_subscription_status: nextStatus,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("auth_id", authUserId);
 }
 
 // Busca dados do usuário no Supabase para enviar ao MP
@@ -478,6 +522,97 @@ async function startServer() {
     }
   });
 
+  // ── Perfil PRO: assinatura recorrente (separada do tenant) ──
+
+  app.post("/api/mp/pro/create-subscription", async (req, res) => {
+    const auth = await validateJWT(req);
+    if (!auth) return res.status(401).json({ error: "Não autorizado." });
+
+    const { returnUrl } = req.body as { returnUrl?: string };
+    const envBaseUrl = process.env.APP_BASE_URL;
+    const safeReturnUrl = toValidPublicBackUrl(returnUrl) ?? toValidPublicBackUrl(envBaseUrl);
+    const payer = await getPayerInfo(auth.userId);
+
+    try {
+      const mpPreApproval = new (await import("mercadopago")).PreApproval(mpClient);
+      const result = await mpPreApproval.create({
+        body: {
+          reason: `${PRO_PLAN.name} - assinatura mensal`,
+          external_reference: `pro|${auth.userId}|${PRO_PLAN.id}`,
+          payer_email: payer.email,
+          ...(safeReturnUrl ? { back_url: safeReturnUrl } : {}),
+          auto_recurring: {
+            frequency: 1,
+            frequency_type: "months",
+            transaction_amount: mpAmount(PRO_PLAN.price),
+            currency_id: "BRL",
+          },
+          status: "pending",
+        },
+      });
+
+      await getSupabaseAdmin()
+        .from("basquete_users")
+        .update({
+          pro_subscription_id: String(result.id ?? ""),
+          pro_subscription_status: String(result.status ?? "pending"),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("auth_id", auth.userId);
+
+      return res.json({
+        id: result.id,
+        init_point: result.init_point,
+        status: result.status,
+      });
+    } catch (err: unknown) {
+      console.error("MP pro create-subscription error:", JSON.stringify(err, null, 2));
+      const mpErr = err as { message?: string; cause?: Array<{ description: string }> };
+      const detail = mpErr.cause?.[0]?.description ?? mpErr.message ?? "Erro ao criar assinatura recorrente.";
+      return res.status(502).json({ error: detail });
+    }
+  });
+
+  app.get("/api/mp/pro/subscription-status/:subscriptionId", async (req, res) => {
+    const auth = await validateJWT(req);
+    if (!auth) return res.status(401).json({ error: "Não autorizado." });
+    const { subscriptionId } = req.params;
+
+    try {
+      const mpPreApproval = new (await import("mercadopago")).PreApproval(mpClient);
+      const preApproval = await mpPreApproval.get({ id: subscriptionId });
+      const externalRef = (preApproval.external_reference as string) ?? "";
+      const [kind, refAuthId] = externalRef.split("|");
+
+      if (kind !== "pro" || refAuthId !== auth.userId) {
+        return res.status(403).json({ error: "Assinatura não pertence ao usuário autenticado." });
+      }
+
+      const status = String(preApproval.status ?? "unknown");
+      if (status === "authorized") {
+        await activateProForUser(auth.userId);
+      } else if (status === "cancelled" || status === "paused") {
+        await disableProForUser(auth.userId, status);
+      } else {
+        await getSupabaseAdmin()
+          .from("basquete_users")
+          .update({
+            pro_subscription_status: status,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("auth_id", auth.userId);
+      }
+
+      return res.json({
+        id: preApproval.id,
+        status,
+      });
+    } catch (err) {
+      console.error("MP pro subscription-status error:", err);
+      return res.status(502).json({ error: "Erro ao consultar assinatura PRÓ." });
+    }
+  });
+
   // ── POST /api/mp/simulate-pix/:paymentId (sandbox only) ─
   app.post("/api/mp/simulate-pix/:paymentId", async (req, res) => {
     if (!MP_ACCESS_TOKEN.startsWith("TEST-")) {
@@ -598,18 +733,56 @@ async function startServer() {
 
     try {
       // MP envia type/data.id tanto no body quanto na query string — usa os dois
-      const type: string = req.body?.type ?? req.query.type;
+      const type: string = req.body?.type ?? req.query.type ?? req.query.topic;
       const paymentId: string = req.body?.data?.id ?? req.query["data.id"];
+      const preapprovalId: string = req.body?.data?.id ?? req.query["preapproval_id"] ?? req.query.id;
 
       console.log(`Webhook recebido: type=${type} paymentId=${paymentId}`);
+
+      if ((type === "preapproval" || type === "subscription_preapproval") && preapprovalId) {
+        const mpPreApproval = new (await import("mercadopago")).PreApproval(mpClient);
+        const preApproval = await mpPreApproval.get({ id: String(preapprovalId) });
+        const externalRef = (preApproval.external_reference as string) ?? "";
+        const [kind, authUserId] = externalRef.split("|");
+        if (kind === "pro" && authUserId) {
+          const subStatus = String(preApproval.status ?? "unknown");
+          if (subStatus === "authorized") {
+            await activateProForUser(authUserId);
+          } else if (subStatus === "cancelled" || subStatus === "paused") {
+            await disableProForUser(authUserId, subStatus);
+          } else {
+            await getSupabaseAdmin()
+              .from("basquete_users")
+              .update({
+                pro_subscription_status: subStatus,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("auth_id", authUserId);
+          }
+          console.log(`Webhook preapproval: auth_id=${authUserId} status=${subStatus}`);
+        }
+        return;
+      }
 
       if (type === "payment" && paymentId) {
         // Consulta pagamento via SDK oficial
         const payment = await mpPayment.get({ id: paymentId });
 
         const externalRef = (payment.external_reference as string) ?? "";
-        const [tenantId, planId] = externalRef.split("|");
-        if (!tenantId) { console.log("Webhook: external_reference vazio, ignorando."); return; }
+        const [refA, refB, refC] = externalRef.split("|");
+        if (!refA) { console.log("Webhook: external_reference vazio, ignorando."); return; }
+
+        // Fluxo separado do Perfil PRO (não interfere no tenant)
+        if (refA === "pro" && refB) {
+          if (payment.status === "approved") {
+            await activateProForUser(refB);
+            console.log(`Webhook: Perfil PRO ativado para auth_id=${refB} (${refC ?? "sem-plano"})`);
+          }
+          return;
+        }
+
+        const tenantId = refA;
+        const planId = refB;
 
         console.log(`Webhook payment ${paymentId}: status=${payment.status} tenant=${tenantId} plan=${planId}`);
 
@@ -901,7 +1074,7 @@ async function startServer() {
   console.log(`NODE_ENV is: ${process.env.NODE_ENV}`);
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true, allowedHosts: "all" },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: "spa",
     });
     app.use(vite.middlewares);

@@ -157,7 +157,6 @@ export default function ExplorarLocaisPage() {
   }
 
   const MOCK_PRODUCTS: Product[] = [
-    { id: 'mock-1', name: 'Perfil PRO', description: 'Perfil profissional com card exclusivo e compartilhamento no Instagram.', price_brl: 2990, image_url: null, category: 'perfil_pro', is_pro_exclusive: false, is_active: true, stock: 0 },
     { id: 'mock-2', name: 'Camiseta Braska', description: 'Camiseta oficial dry-fit com logo bordado.', price_brl: 8990, image_url: null, category: 'vestuario', is_pro_exclusive: false, is_active: true, stock: 0 },
     { id: 'mock-3', name: 'Munhequeira PRO', description: 'Munhequeira esportiva com absorção de suor. Exclusivo PRO.', price_brl: 3490, image_url: null, category: 'acessorio', is_pro_exclusive: true, is_active: true, stock: 0 },
     { id: 'mock-4', name: 'Shorts Basquete', description: 'Shorts leve e confortável para treinos e jogos.', price_brl: 6990, image_url: null, category: 'vestuario', is_pro_exclusive: false, is_active: true, stock: 0 },
@@ -168,7 +167,9 @@ export default function ExplorarLocaisPage() {
   useEffect(() => {
     supabase.from('products').select('*').eq('is_active', true).order('created_at', { ascending: false })
       .then(({ data }) => {
-        if (data && data.length > 0) setProducts(data as Product[]);
+        if (data && data.length > 0) {
+          setProducts((data as Product[]).filter((p) => p.category !== 'perfil_pro'));
+        }
       });
 
     // Torneios em destaque para o hub inicial

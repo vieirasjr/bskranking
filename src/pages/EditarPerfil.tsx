@@ -22,11 +22,15 @@ import {
   ZoomOut,
   X,
   Crop,
+  Crown,
+  Sparkles,
+  Link2,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import Cropper from 'react-easy-crop';
 import type { Area } from 'react-easy-crop';
+import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { COUNTRIES_PT_SORTED } from '../data/countriesPt';
@@ -37,6 +41,13 @@ function cn(...inputs: unknown[]) {
 }
 
 const AVATAR_MAX_SIZE = 512;
+const PRO_PRICE_BRL = 9.9;
+
+interface SponsorInput {
+  name: string;
+  logo_url: string;
+  link_url: string;
+}
 
 async function getCroppedBlob(imageSrc: string, cropArea: Area): Promise<Blob> {
   const image = new Image();
@@ -98,6 +109,11 @@ export interface PerfilAtleta {
   country_iso: string | null;
   /** PIN de 4 dígitos para ações administrativas. */
   admin_pin: string | null;
+  is_pro?: boolean;
+  pro_cover_image_url?: string | null;
+  pro_profile_tagline?: string | null;
+  pro_athlete_resume?: string | null;
+  pro_sponsors?: SponsorInput[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -123,6 +139,7 @@ interface EditarPerfilProps {
 
 export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, hasAdminAccess }: EditarPerfilProps) {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [loading, setLoading] = useState(true);
@@ -130,6 +147,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
   const [uploadingImage, setUploadingImage] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [isPro, setIsPro] = useState(false);
 
   const [form, setForm] = useState({
     display_name: '',
@@ -148,6 +166,13 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [adminPin, setAdminPin] = useState<string | null>(null);
+  const [proTagline, setProTagline] = useState('');
+  const [proCoverImageUrl, setProCoverImageUrl] = useState('');
+  const [proAthleteResume, setProAthleteResume] = useState('');
+  const [proSponsors, setProSponsors] = useState<SponsorInput[]>([
+    { name: '', logo_url: '', link_url: '' },
+    { name: '', logo_url: '', link_url: '' },
+  ]);
 
   // Crop state
   const [cropImageSrc, setCropImageSrc] = useState<string | null>(null);
@@ -168,7 +193,7 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
       try {
         const { data: profile, error: fetchError } = await supabase
           .from('basquete_users')
-          .select('*')
+          .select('*, is_pro, pro_cover_image_url, pro_profile_tagline, pro_athlete_resume, pro_sponsors')
           .eq('auth_id', user.id)
           .maybeSingle();
 
@@ -190,6 +215,17 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
           }
           setProfileId(profile.id);
           setAdminPin(resolvedAdminPin);
+          setIsPro(Boolean(profile.is_pro));
+          setProTagline(profile.pro_profile_tagline ?? '');
+          setProCoverImageUrl(profile.pro_cover_image_url ?? '');
+          setProAthleteResume(profile.pro_athlete_resume ?? '');
+          const loadedSponsors = Array.isArray(profile.pro_sponsors)
+            ? (profile.pro_sponsors as SponsorInput[]).filter((s) => s && typeof s === 'object')
+            : [];
+          setProSponsors([
+            loadedSponsors[0] ?? { name: '', logo_url: '', link_url: '' },
+            loadedSponsors[1] ?? { name: '', logo_url: '', link_url: '' },
+          ]);
           setForm({
             display_name: profile.display_name ?? '',
             full_name: profile.full_name ?? '',
@@ -340,6 +376,18 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
         state: form.state || null,
         country_iso: form.country_iso.trim() || 'BR',
         avatar_url: avatarUrl,
+        pro_profile_tagline: isPro ? (proTagline.trim() || null) : null,
+        pro_cover_image_url: isPro ? (proCoverImageUrl.trim() || null) : null,
+        pro_athlete_resume: isPro ? (proAthleteResume.trim() || null) : null,
+        pro_sponsors: isPro
+          ? proSponsors
+            .map((s) => ({
+              name: s.name.trim(),
+              logo_url: s.logo_url.trim(),
+              link_url: s.link_url.trim(),
+            }))
+            .filter((s) => s.name || s.logo_url || s.link_url)
+          : [],
         updated_at: new Date().toISOString(),
       };
 
@@ -427,6 +475,67 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
           <p>Perfil salvo com sucesso!</p>
         </div>
       )}
+
+      <div className={cn(
+        'rounded-2xl overflow-hidden border',
+        darkMode ? 'border-orange-500/30 bg-slate-900' : 'border-orange-200 bg-white'
+      )}>
+        <div className="relative p-5 sm:p-6">
+          <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_top_right,_rgba(249,115,22,0.18),_transparent_55%)]" />
+          <div className="relative z-10">
+            <div className="flex items-start justify-between gap-4 mb-3">
+              <div>
+                <p className={cn('text-[11px] uppercase font-black tracking-[0.2em]', darkMode ? 'text-orange-300' : 'text-orange-600')}>
+                  Perfil PRÓ
+                </p>
+                <h3 className={cn('text-lg sm:text-xl font-black mt-1', darkMode ? 'text-white' : 'text-slate-900')}>
+                  Destaque sua carreira de atleta
+                </h3>
+              </div>
+              <span className={cn(
+                'shrink-0 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black',
+                isPro
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-orange-500/15 text-orange-400 border border-orange-500/30'
+              )}>
+                <Crown className="w-3.5 h-3.5" />
+                {isPro ? 'ATIVO' : `R$ ${PRO_PRICE_BRL.toFixed(2).replace('.', ',')}/mês`}
+              </span>
+            </div>
+
+            <p className={cn('text-sm mb-3', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+              Benefícios: 50% de desconto em camps de treinamento, 50% em uniformes oficiais, 2 fotos profissionais por evento, perfil customizado e currículo de atleta integrado.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
+                <span className="font-bold text-orange-400">Eventos/camps:</span> 50% OFF
+              </div>
+              <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
+                <span className="font-bold text-orange-400">Uniformes:</span> 50% OFF
+              </div>
+              <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
+                <span className="font-bold text-orange-400">Fotos pró:</span> 2 por evento
+              </div>
+              <div className={cn('rounded-xl px-3 py-2 border', darkMode ? 'border-slate-700 bg-slate-800/70 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-700')}>
+                <span className="font-bold text-orange-400">Currículo:</span> integrado ao perfil
+              </div>
+            </div>
+
+            {!isPro && (
+              <div className={cn(
+                'mt-4 rounded-xl border px-3 py-2.5 text-xs flex items-start gap-2',
+                darkMode ? 'border-slate-700 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'
+              )}>
+                <Sparkles className="w-4 h-4 mt-0.5 shrink-0 text-orange-400" />
+                <p>
+                  Após a confirmação do pagamento, os campos avançados do Perfil PRÓ serão liberados automaticamente neste formulário.
+                  {searchParams.get('pro') === 'success' ? ' Pagamento recebido! Atualize a página em alguns segundos caso os campos não apareçam imediatamente.' : ''}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Avatar */}
@@ -743,6 +852,125 @@ export default function EditarPerfil({ darkMode, onBack, onSaved, mandatory, has
             </p>
           </div>
         </div>
+
+        {isPro && (
+          <div className={cn(
+            'space-y-6 rounded-2xl border p-4 sm:p-5',
+            darkMode ? 'border-orange-500/25 bg-slate-900/80' : 'border-orange-200 bg-orange-50/40'
+          )}>
+            <div className="flex items-center gap-2">
+              <Crown className="w-4 h-4 text-orange-400" />
+              <h3 className={cn('text-sm font-black uppercase tracking-wider', darkMode ? 'text-orange-300' : 'text-orange-600')}>
+                Campos exclusivos PRÓ
+              </h3>
+            </div>
+
+            <div className="space-y-2">
+              <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                Frase de destaque do perfil
+              </label>
+              <input
+                type="text"
+                value={proTagline}
+                onChange={(e) => setProTagline(e.target.value)}
+                placeholder="Ex: Armador criativo com foco em leitura de jogo"
+                maxLength={120}
+                className={cn(
+                  'w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50',
+                  darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                )}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                Imagem grande de fundo (URL)
+              </label>
+              <input
+                type="url"
+                value={proCoverImageUrl}
+                onChange={(e) => setProCoverImageUrl(e.target.value)}
+                placeholder="https://..."
+                className={cn(
+                  'w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50',
+                  darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                )}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                Currículo do atleta
+              </label>
+              <textarea
+                value={proAthleteResume}
+                onChange={(e) => setProAthleteResume(e.target.value)}
+                placeholder="Clubes, títulos, campings, métricas, metas e histórico esportivo..."
+                rows={5}
+                maxLength={2000}
+                className={cn(
+                  'w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-orange-500/50 resize-none',
+                  darkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                )}
+              />
+              <p className={cn('text-xs text-right', darkMode ? 'text-slate-500' : 'text-slate-400')}>
+                {proAthleteResume.length}/2000
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <label className={cn('block text-sm font-medium', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                Patrocinadores (logo + link)
+              </label>
+              {proSponsors.map((sponsor, idx) => (
+                <div
+                  key={idx}
+                  className={cn(
+                    'rounded-xl border p-3 space-y-2',
+                    darkMode ? 'border-slate-700 bg-slate-800/80' : 'border-slate-200 bg-white'
+                  )}
+                >
+                  <p className={cn('text-xs font-semibold', darkMode ? 'text-slate-400' : 'text-slate-500')}>
+                    Patrocinador {idx + 1}
+                  </p>
+                  <input
+                    type="text"
+                    value={sponsor.name}
+                    onChange={(e) => setProSponsors((prev) => prev.map((item, i) => i === idx ? { ...item, name: e.target.value } : item))}
+                    placeholder="Nome da marca"
+                    className={cn(
+                      'w-full px-3 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50',
+                      darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                    )}
+                  />
+                  <input
+                    type="url"
+                    value={sponsor.logo_url}
+                    onChange={(e) => setProSponsors((prev) => prev.map((item, i) => i === idx ? { ...item, logo_url: e.target.value } : item))}
+                    placeholder="URL da logomarca"
+                    className={cn(
+                      'w-full px-3 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50',
+                      darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                    )}
+                  />
+                  <div className="relative">
+                    <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="url"
+                      value={sponsor.link_url}
+                      onChange={(e) => setProSponsors((prev) => prev.map((item, i) => i === idx ? { ...item, link_url: e.target.value } : item))}
+                      placeholder="URL de redirecionamento"
+                      className={cn(
+                        'w-full pl-10 pr-3 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50',
+                        darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                      )}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {hasAdminAccess && (
           <div className="space-y-2">

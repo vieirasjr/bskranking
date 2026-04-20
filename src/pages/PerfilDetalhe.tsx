@@ -7,6 +7,8 @@ import {
   MapPin,
   Ruler,
   Scale,
+  Crown,
+  Link2,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -45,6 +47,11 @@ interface ProfileExtra {
   weight_kg: number | null;
   city: string | null;
   state: string | null;
+  is_pro: boolean | null;
+  pro_cover_image_url: string | null;
+  pro_profile_tagline: string | null;
+  pro_athlete_resume: string | null;
+  pro_sponsors: Array<{ name?: string; logo_url?: string; link_url?: string }> | null;
 }
 
 interface PerfilDetalheProps {
@@ -100,7 +107,7 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
     if (!data.user_id) return;
     supabase
       .from('basquete_users')
-      .select('position, jersey_number, bio, height_cm, weight_kg, city, state')
+      .select('position, jersey_number, bio, height_cm, weight_kg, city, state, is_pro, pro_cover_image_url, pro_profile_tagline, pro_athlete_resume, pro_sponsors')
       .eq('id', data.user_id)
       .maybeSingle()
       .then(({ data: p }) => { if (p) setExtra(p as ProfileExtra); });
@@ -132,7 +139,9 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
       <div
         className="relative overflow-hidden rounded-3xl"
         style={{
-          background: darkMode
+          background: extra?.is_pro && extra?.pro_cover_image_url
+            ? `linear-gradient(0deg, rgba(2, 6, 23, 0.72), rgba(2, 6, 23, 0.42)), url(${extra.pro_cover_image_url}) center/cover`
+            : darkMode
             ? 'linear-gradient(145deg, #0f172a 0%, #1e293b 50%, #431407 100%)'
             : 'linear-gradient(145deg, #0f172a 0%, #1c1917 50%, #7c2d12 100%)',
         }}
@@ -174,6 +183,12 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
                 <span className="ml-2 text-white/40">#{extra.jersey_number}</span>
               )}
             </p>
+            {extra?.is_pro && (
+              <div className="mb-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-orange-500/20 border border-orange-400/40">
+                <Crown className="w-3.5 h-3.5 text-orange-300" />
+                <span className="text-[10px] font-black tracking-widest text-orange-200 uppercase">PRÓ</span>
+              </div>
+            )}
             <motion.h1
               initial={{ x: -10, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
@@ -203,6 +218,11 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
                   </span>
                 )}
               </div>
+            )}
+            {extra?.is_pro && extra?.pro_profile_tagline && (
+              <p className="text-xs text-orange-100/90 mt-2 max-w-md">
+                {extra.pro_profile_tagline}
+              </p>
             )}
           </div>
         </div>
@@ -432,6 +452,76 @@ export default function PerfilDetalhe({ data, darkMode, onBack }: PerfilDetalheP
           <p className={cn('text-sm leading-relaxed', darkMode ? 'text-slate-400' : 'text-slate-600')}>
             {extra.bio}
           </p>
+        </div>
+      )}
+
+      {extra?.is_pro && extra?.pro_athlete_resume && (
+        <div
+          className={cn(
+            'rounded-2xl border p-5',
+            darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+          )}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <Crown className="w-4 h-4 text-orange-400" />
+            <h2 className={cn('font-bold text-base', darkMode ? 'text-white' : 'text-slate-900')}>
+              Currículo do atleta
+            </h2>
+          </div>
+          <p className={cn('text-sm leading-relaxed whitespace-pre-line', darkMode ? 'text-slate-300' : 'text-slate-700')}>
+            {extra.pro_athlete_resume}
+          </p>
+        </div>
+      )}
+
+      {extra?.is_pro && Array.isArray(extra.pro_sponsors) && extra.pro_sponsors.length > 0 && (
+        <div
+          className={cn(
+            'rounded-2xl border p-5',
+            darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+          )}
+        >
+          <h2 className={cn('font-bold text-base mb-3', darkMode ? 'text-white' : 'text-slate-900')}>
+            Patrocinadores
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {extra.pro_sponsors
+              .filter((s) => s && (s.name || s.logo_url || s.link_url))
+              .slice(0, 4)
+              .map((sponsor, idx) => (
+                <a
+                  key={`${sponsor.name ?? 'sponsor'}-${idx}`}
+                  href={sponsor.link_url || '#'}
+                  target={sponsor.link_url ? '_blank' : undefined}
+                  rel={sponsor.link_url ? 'noopener noreferrer' : undefined}
+                  className={cn(
+                    'rounded-xl border p-3 flex items-center gap-3 transition-colors',
+                    darkMode ? 'bg-slate-800 border-slate-700 hover:border-orange-500/40' : 'bg-slate-50 border-slate-200 hover:border-orange-300'
+                  )}
+                >
+                  <div className={cn(
+                    'w-12 h-12 rounded-lg overflow-hidden flex items-center justify-center border',
+                    darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
+                  )}>
+                    {sponsor.logo_url ? (
+                      <img src={sponsor.logo_url} alt={sponsor.name ?? `Patrocinador ${idx + 1}`} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className={cn('text-[10px] font-bold', darkMode ? 'text-slate-500' : 'text-slate-400')}>LOGO</span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className={cn('text-sm font-semibold truncate', darkMode ? 'text-white' : 'text-slate-900')}>
+                      {sponsor.name || `Patrocinador ${idx + 1}`}
+                    </p>
+                    {sponsor.link_url && (
+                      <p className={cn('text-[11px] inline-flex items-center gap-1 truncate', darkMode ? 'text-orange-300' : 'text-orange-600')}>
+                        <Link2 className="w-3 h-3" /> Visitar
+                      </p>
+                    )}
+                  </div>
+                </a>
+              ))}
+          </div>
         </div>
       )}
     </motion.div>

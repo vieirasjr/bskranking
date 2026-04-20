@@ -65,6 +65,7 @@ import GestaoAdmin from './pages/GestaoAdmin';
 import {InstallPWA} from './components/InstallPWA';
 import PerfilDetalhe from './pages/PerfilDetalhe';
 import { NotificationsPanel } from './components/NotificationsPanel';
+import { ProUpgradeModal } from './components/ProUpgradeModal';
 import { useLocationCheck } from './hooks/useLocationCheck';
 import { useNotifications } from './contexts/NotificationContext';
 import { runPwaReload } from './pwaUpdateController';
@@ -257,7 +258,7 @@ interface AppProps {
 import { GlobalPointsListener } from './components/GlobalPointsListener';
 
 export default function App({ locationId, locationSlug, locationName, venueCoords, isOwner, maxPlayers }: AppProps = {}) {
-  const { user, isGuest, signOut, leaveGuestMode } = useAuth();
+  const { user, session, isGuest, signOut, leaveGuestMode } = useAuth();
   const { notifications, visibleToast, hasUnread, addNotification, dismissToast, markAllRead, clearNotification, clearAll } = useNotifications();
   const isLoggedIn = !!user;
 
@@ -302,7 +303,9 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
   const [showWinnerModal, setShowWinnerModal] = useState<'team1' | 'team2' | null>(null);
   const [isStartingNextMatch, setIsStartingNextMatch] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
-  const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null; player_code: string | null; admin_pin: string | null } | null>(null);
+  const [showProUpgrade, setShowProUpgrade] = useState(false);
+  const [proNotice, setProNotice] = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<{ id: string; display_name: string | null; avatar_url: string | null; player_code: string | null; admin_pin: string | null; is_pro: boolean } | null>(null);
   const [adminAddName, setAdminAddName] = useState('');
   const [adminUserSuggestions, setAdminUserSuggestions] = useState<RegisteredUserSuggestion[]>([]);
   const [showAdminSuggestions, setShowAdminSuggestions] = useState(false);
@@ -844,7 +847,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     }
     let { data } = await supabase
       .from('basquete_users')
-      .select('id, display_name, avatar_url, player_code, admin_pin')
+      .select('id, display_name, avatar_url, player_code, admin_pin, is_pro')
       .eq('auth_id', user.id)
       .maybeSingle();
     if (!data) {
@@ -859,12 +862,12 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           },
           { onConflict: 'email', ignoreDuplicates: false }
         )
-        .select('id, display_name, avatar_url, player_code, admin_pin')
+        .select('id, display_name, avatar_url, player_code, admin_pin, is_pro')
         .single();
       if (upserted) data = upserted;
       else {
-        const { data: byAuth } = await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code, admin_pin').eq('auth_id', user.id).maybeSingle();
-        const { data: byEmail } = user?.email ? await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code, admin_pin').eq('email', user.email).maybeSingle() : { data: null };
+        const { data: byAuth } = await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code, admin_pin, is_pro').eq('auth_id', user.id).maybeSingle();
+        const { data: byEmail } = user?.email ? await supabase.from('basquete_users').select('id, display_name, avatar_url, player_code, admin_pin, is_pro').eq('email', user.email).maybeSingle() : { data: null };
         data = byAuth ?? byEmail ?? undefined;
       }
     }
@@ -886,12 +889,44 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         // PIN generation failed silently — will retry next login
       }
     }
-    setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url, player_code: data.player_code ?? null, admin_pin: data.admin_pin ?? null } : null);
+    setUserProfile(data ? { id: data.id, display_name: data.display_name, avatar_url: data.avatar_url, player_code: data.player_code ?? null, admin_pin: data.admin_pin ?? null, is_pro: Boolean(data.is_pro) } : null);
   }, [user?.id, user?.email, user?.user_metadata, hasAdminAccess]);
 
   useEffect(() => {
     fetchUserProfile();
   }, [fetchUserProfile]);
+
+  useEffect(() => {
+    if (!session?.access_token || !user) return;
+    const params = new URLSearchParams(window.location.search);
+    const proResult = params.get('pro');
+    if (proResult !== 'success') return;
+
+    const syncRecurringPro = async () => {
+      try {
+        const subId = params.get('preapproval_id') ?? params.get('collection_id') ?? params.get('external_reference');
+        if (subId) {
+          await fetch(`/api/mp/pro/subscription-status/${subId}`, {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          });
+        }
+        await fetchUserProfile();
+        setProNotice('Assinatura PRÓ confirmada! Seus benefícios já estão ativos.');
+      } catch {
+        setProNotice('Recebemos seu retorno do pagamento. Atualize em alguns segundos para confirmar o status do PRÓ.');
+      } finally {
+        params.delete('pro');
+        params.delete('preapproval_id');
+        params.delete('collection_id');
+        params.delete('external_reference');
+        const qs = params.toString();
+        const nextUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+        window.history.replaceState({}, '', nextUrl);
+      }
+    };
+
+    syncRecurringPro();
+  }, [session?.access_token, user, fetchUserProfile]);
 
   // Realtime: session
   useEffect(() => {
@@ -4205,6 +4240,14 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
               </>
             ) : (
               <>
+                {proNotice && (
+                  <div className={cn(
+                    'rounded-xl border px-4 py-3 text-sm',
+                    darkMode ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                  )}>
+                    {proNotice}
+                  </div>
+                )}
                 <div className="flex flex-col items-center text-center space-y-4">
                   <div className="relative">
                     <div className="w-24 h-24 bg-gradient-to-tr from-orange-500 to-yellow-400 rounded-full p-1 shadow-xl overflow-hidden">
@@ -4224,6 +4267,11 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                     <h2 className={cn('text-2xl font-bold', darkMode ? 'text-white' : 'text-slate-900')}>
                       {userProfile?.display_name || 'Seu Perfil'}
                     </h2>
+                    {userProfile?.is_pro && (
+                      <span className="mt-1 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-500/15 border border-orange-500/30 text-orange-400 text-xs font-black tracking-widest uppercase">
+                        PRÓ
+                      </span>
+                    )}
                     <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>{user?.email ?? ''}</p>
                     {userProfile?.player_code && (
                       <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-500/15 border border-orange-500/30">
@@ -4273,6 +4321,32 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
 
                 <div className="space-y-3">
                   <h3 className={cn('font-bold px-1', darkMode ? 'text-slate-400' : 'text-slate-600')}>Aplicativo</h3>
+                  {!userProfile?.is_pro && (
+                    <button
+                      onClick={() => setShowProUpgrade(true)}
+                      className={cn(
+                        'w-full rounded-2xl border p-4 text-left transition-colors',
+                        darkMode
+                          ? 'bg-gradient-to-br from-slate-900 to-orange-950/30 border-orange-500/30 hover:border-orange-400'
+                          : 'bg-gradient-to-br from-orange-50 to-white border-orange-200 hover:border-orange-400'
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className={cn('text-[11px] uppercase tracking-[0.2em] font-black', darkMode ? 'text-orange-300' : 'text-orange-600')}>
+                            Perfil PRÓ
+                          </p>
+                          <p className={cn('text-sm mt-1 font-semibold', darkMode ? 'text-white' : 'text-slate-900')}>
+                            Conheça os benefícios do PRÓ
+                          </p>
+                          <p className={cn('text-xs mt-1', darkMode ? 'text-slate-300' : 'text-slate-600')}>
+                            R$ 9,90/mês · mais visibilidade · descontos exclusivos
+                          </p>
+                        </div>
+                        <Crown className="w-5 h-5 text-orange-400 shrink-0" />
+                      </div>
+                    </button>
+                  )}
                   <InstallPWA darkMode={darkMode} />
                   <h3 className={cn('font-bold px-1 pt-2', darkMode ? 'text-slate-400' : 'text-slate-600')}>Configurações</h3>
                   <div
@@ -4347,6 +4421,16 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           />
         )}
       </AnimatePresence>
+      <ProUpgradeModal
+        open={showProUpgrade}
+        onClose={() => setShowProUpgrade(false)}
+        onActivated={() => {
+          fetchUserProfile();
+        }}
+        sessionToken={session?.access_token ?? ''}
+        userEmail={user?.email ?? ''}
+        darkMode={darkMode}
+      />
     </div>
   );
 }

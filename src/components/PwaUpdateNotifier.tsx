@@ -14,7 +14,23 @@ export function PwaUpdateNotifier() {
   const [needRefreshFlag] = needRefresh;
 
   useEffect(() => {
-    setPwaReloadHandler(() => () => updateServiceWorker(true));
+    // Handler chamado pelo botão "Atualizar agora" do painel de notificações.
+    // 1. updateServiceWorker(true) ativa o SW novo e recarrega a página.
+    // 2. Fallback defensivo: se o SW não disparar o reload (update silencioso,
+    //    devtools bloqueando, ausência de waiting), força location.reload().
+    setPwaReloadHandler(async () => {
+      try {
+        await updateServiceWorker(true);
+      } catch (err) {
+        console.error('updateServiceWorker failed:', err);
+      }
+      // Dá 300ms pro SW assumir; se o reload automático não aconteceu,
+      // força manualmente. Em geral o updateServiceWorker(true) já recarrega
+      // antes do setTimeout disparar.
+      setTimeout(() => {
+        window.location.reload();
+      }, 300);
+    });
     return () => setPwaReloadHandler(null);
   }, [updateServiceWorker]);
 
