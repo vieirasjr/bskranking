@@ -39,6 +39,7 @@ import {
   Percent,
   Search,
   Share2,
+  CirclePlay,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -248,6 +249,8 @@ const EVENT_STATUS_LABELS: Record<Evento['status'], string> = { draft: 'Rascunho
 
 type Tab = 'inicio' | 'lista' | 'eventos' | 'perfil';
 type SortKey = 'efficiency' | 'wins' | 'points' | 'blocks' | 'steals' | 'clutch_points' | 'assists' | 'rebounds';
+
+const SAFARI_LOCATION_VIDEO_EMBED_URL = 'https://drive.google.com/file/d/1TfWPMBnZge4prY91vg7kaUhcYfCyJuVW/preview';
 
 
 interface AppProps {
@@ -3524,6 +3527,30 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                     <p className={cn('text-sm', darkMode ? 'text-slate-400' : 'text-slate-500')}>
                       A lista será liberada quando o administrador iniciar a partida.
                     </p>
+                  </div>
+                )}
+                {isWithinRadius !== false && isMatchStarted && locationError && (
+                  <div className={cn('rounded-2xl border p-4 space-y-3', darkMode ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-white')}>
+                    <div className="flex items-start gap-3">
+                      <CirclePlay className={cn('w-6 h-6 shrink-0 mt-0.5', darkMode ? 'text-orange-400' : 'text-orange-600')} />
+                      <div>
+                        <p className={cn('font-semibold text-sm', darkMode ? 'text-white' : 'text-slate-900')}>
+                          Configuração de localização do Safari, como acessar a lista de espera
+                        </p>
+                        <p className={cn('text-xs mt-1', darkMode ? 'text-slate-400' : 'text-slate-600')}>
+                          Se a lista não abrir por permissão de localização, assista ao passo a passo abaixo.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="rounded-xl overflow-hidden border border-slate-700/50 bg-black">
+                      <iframe
+                        title="Configuração de localização do Safari, como acessar a lista de espera"
+                        src={SAFARI_LOCATION_VIDEO_EMBED_URL}
+                        className="w-full aspect-video"
+                        allow="autoplay; fullscreen; picture-in-picture"
+                        allowFullScreen
+                      />
+                    </div>
                   </div>
                 )}
                 {/* Fora do raio geográfico */}
