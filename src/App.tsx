@@ -4413,10 +4413,10 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
                             Perfil PRÓ
                           </p>
                           <p className={cn('text-sm mt-1 font-semibold', darkMode ? 'text-white' : 'text-slate-900')}>
-                            Conheça os benefícios do PRÓ
+                            Conheça os benefícios do PRÓ (Em breve)
                           </p>
                           <p className={cn('text-xs mt-1', darkMode ? 'text-slate-300' : 'text-slate-600')}>
-                            R$ 9,90/mês · mais visibilidade · 1 card por sessão
+                            R$ 9,90/mês · assinatura temporariamente indisponível (Em breve)
                           </p>
                         </div>
                         <Crown className="w-5 h-5 text-orange-400 shrink-0" />
@@ -5088,6 +5088,10 @@ interface UserSessionEfficiencyCardRow {
   turnovers: number;
   efficiency: number;
   partidas: number;
+  subject_user_id: string;
+  subject_display_name: string;
+  subject_avatar_url: string | null;
+  is_fallback: boolean;
 }
 
 interface RankingViewProps {
@@ -5312,7 +5316,7 @@ function RankingView({
   const [searchQuery, setSearchQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Card "sua eficiência": última janela com registros (sessão do local ou último dia com logs).
+  // Card de eficiência: sua sessão → últimas 4 “sessões” (dias com stat_logs) → melhor do local.
   useEffect(() => {
     if (!locationId || isGuest || !userProfile?.id) {
       setUserSessionCard(null);
@@ -5333,6 +5337,8 @@ function RankingView({
           return;
         }
         const r = rows[0];
+        const isFb = Boolean(r.is_fallback);
+        const sid = String(r.subject_user_id ?? userProfile.id);
         setUserSessionCard({
           window_start_ts: String(r.window_start_ts),
           window_end_ts: String(r.window_end_ts),
@@ -5350,6 +5356,10 @@ function RankingView({
           turnovers: Number(r.turnovers ?? 0),
           efficiency: Number(r.efficiency ?? 0),
           partidas: Number(r.partidas ?? 0),
+          subject_user_id: sid,
+          subject_display_name: String(r.subject_display_name ?? userProfile.display_name ?? 'Atleta'),
+          subject_avatar_url: (r.subject_avatar_url as string | null | undefined) ?? null,
+          is_fallback: isFb,
         });
       });
     return () => {
@@ -5359,11 +5369,12 @@ function RankingView({
 
   const highlightPlayer = useMemo<PlayerStats | null>(() => {
     if (!userSessionCard || !userProfile?.id) return null;
-    const stat = stats.find((s) => s.user_id === userProfile.id);
+    const subId = userSessionCard.subject_user_id;
+    const stat = stats.find((s) => s.user_id === subId);
     const u = userSessionCard;
     return {
-      id: stat?.id ?? userProfile.id,
-      name: userProfile.display_name?.trim() || 'Você',
+      id: stat?.id ?? subId,
+      name: u.subject_display_name?.trim() || 'Atleta',
       points: u.points,
       wins: u.wins,
       blocks: u.blocks,
@@ -5375,13 +5386,17 @@ function RankingView({
       shot_2_miss: u.shot_2_miss,
       shot_3_miss: u.shot_3_miss,
       turnovers: u.turnovers,
-      user_id: userProfile.id,
+      user_id: subId,
       partidas: Math.max(u.partidas, u.wins, 1),
     };
   }, [userSessionCard, userProfile, stats]);
 
   const highlightScore = userSessionCard?.efficiency ?? 0;
-  const highlightAvatarUrl = userProfile?.avatar_url ?? (highlightPlayer?.user_id ? userAvatars[highlightPlayer.user_id] : undefined);
+  const cardIsLeaderFallback = Boolean(userSessionCard?.is_fallback);
+  const highlightAvatarUrl =
+    userSessionCard?.subject_avatar_url?.trim() ||
+    (highlightPlayer?.user_id ? userAvatars[highlightPlayer.user_id] : undefined) ||
+    (!cardIsLeaderFallback ? userProfile?.avatar_url ?? undefined : undefined);
   const weekLabel = userSessionCard
     ? (() => {
         const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
@@ -5390,6 +5405,12 @@ function RankingView({
         const fmt = (d: Date) => `${d.getDate().toString().padStart(2, '0')} ${months[d.getMonth()]}`;
         if (userSessionCard.source_mode === 'last_day') {
           return `${fmt(ws)} ${ws.getFullYear()} · último dia com registros`;
+        }
+        if (userSessionCard.source_mode === 'fallback_leader') {
+          return `${fmt(ws)} – ${fmt(we)} ${we.getFullYear()} · melhor nas últimas sessões com dados`;
+        }
+        if (userSessionCard.source_mode === 'four_sessions') {
+          return `${fmt(ws)} – ${fmt(we)} ${we.getFullYear()} · últimas sessões com seus registros`;
         }
         return `${fmt(ws)} – ${fmt(we)} ${we.getFullYear()}`;
       })()
@@ -5416,7 +5437,7 @@ function RankingView({
 
   const buildEfficiencyShareSnapshot = useCallback(
     (format: 'feed' | 'story'): ProShareCardData | null => {
-      if (!userSessionCard || !userProfile) return null;
+      if (!userSessionCard || !userProfile || userSessionCard.is_fallback) return null;
       const u = userSessionCard;
       const partidas = Math.max(u.partidas, u.wins, 1);
       const winRatePct = partidas > 0 ? Math.min(100, Math.max(0, Math.round((u.wins / partidas) * 100))) : 0;
@@ -5440,7 +5461,7 @@ function RankingView({
   );
 
   const runEfficiencyShare = useCallback(async () => {
-    if (!userProfile?.is_pro || !authUserId || !userSessionCard) return;
+    if (!userProfile?.is_pro || !authUserId || !userSessionCard || userSessionCard.is_fallback) return;
     const snap = buildEfficiencyShareSnapshot(efficiencyShareFormat);
     if (!snap) return;
     setEfficiencyShareBusy(true);
@@ -5709,7 +5730,7 @@ function RankingView({
         </AnimatePresence>
       </div>
 
-      {/* Sua eficiência (última sessão com registros no local) */}
+      {/* Eficiência: você (sessão / últimas 4) ou destaque do local */}
       {highlightPlayer && (
         <motion.div
           initial={{ opacity: 0, y: 10 }}
@@ -5726,7 +5747,7 @@ function RankingView({
           <button
             type="button"
             onClick={() => setShowHighlightModal(true)}
-            className="w-full text-left p-4 pr-[5.5rem] cursor-pointer"
+            className={cn('w-full text-left p-4 cursor-pointer', !cardIsLeaderFallback ? 'pr-[5.5rem]' : 'pr-4')}
           >
             <div className="relative flex items-center gap-4">
               <div
@@ -5747,12 +5768,18 @@ function RankingView({
                   )}
                 </div>
                 <div className="absolute -top-2 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-white/20 ring-1 ring-white/40">
-                  <Percent className="w-4 h-4 text-white" />
+                  {cardIsLeaderFallback ? (
+                    <Crown className="w-4 h-4 text-yellow-200" />
+                  ) : (
+                    <Percent className="w-4 h-4 text-white" />
+                  )}
                 </div>
               </div>
 
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">Sua eficiência</p>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-white/60">
+                  {cardIsLeaderFallback ? 'Melhor eficiência no local' : 'Sua eficiência'}
+                </p>
                 <p
                   className="text-lg font-black text-white truncate mt-0.5 cursor-pointer hover:opacity-90"
                   onClick={(e) => {
@@ -5776,22 +5803,24 @@ function RankingView({
             </div>
           </button>
 
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              if (userProfile?.is_pro) {
-                setEfficiencyShareFormat('story');
-                setShowEfficiencyShareModal(true);
-              } else {
-                onRequestProUpgrade();
-              }
-            }}
-            className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-0.5 rounded-xl bg-black/25 px-2.5 py-2 text-white ring-1 ring-white/25 backdrop-blur-sm transition hover:bg-black/35 active:scale-[0.98]"
-          >
-            <Share2 className="w-5 h-5" />
-            <span className="text-[9px] font-bold uppercase tracking-wide leading-none">Compart.</span>
-          </button>
+          {!cardIsLeaderFallback && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                if (userProfile?.is_pro) {
+                  setEfficiencyShareFormat('story');
+                  setShowEfficiencyShareModal(true);
+                } else {
+                  onRequestProUpgrade();
+                }
+              }}
+              className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col items-center gap-0.5 rounded-xl bg-black/25 px-2.5 py-2 text-white ring-1 ring-white/25 backdrop-blur-sm transition hover:bg-black/35 active:scale-[0.98]"
+            >
+              <Share2 className="w-5 h-5" />
+              <span className="text-[9px] font-bold uppercase tracking-wide leading-none">Compart.</span>
+            </button>
+          )}
         </motion.div>
       )}
 
@@ -5975,13 +6004,22 @@ function RankingView({
                     animate={{ scale: 1, rotate: 0 }}
                     transition={{ delay: 0.2, type: 'spring', stiffness: 400, damping: 15 }}
                   >
-                    <Percent
-                      className="w-7 h-7 text-yellow-300 mx-auto mb-0.5"
-                      style={{ filter: 'drop-shadow(0 0 8px rgba(251, 191, 36, 0.7))' }}
-                    />
+                    {cardIsLeaderFallback ? (
+                      <Crown
+                        className="w-7 h-7 text-yellow-300 mx-auto mb-0.5"
+                        style={{ filter: 'drop-shadow(0 0 8px rgba(251, 191, 36, 0.7))' }}
+                      />
+                    ) : (
+                      <Percent
+                        className="w-7 h-7 text-yellow-300 mx-auto mb-0.5"
+                        style={{ filter: 'drop-shadow(0 0 8px rgba(251, 191, 36, 0.7))' }}
+                      />
+                    )}
                   </motion.div>
 
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/70 mb-0">Sua eficiência</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/70 mb-0">
+                    {cardIsLeaderFallback ? 'Melhor eficiência no local' : 'Sua eficiência'}
+                  </p>
                   <p className="text-[10px] text-white/50 mb-2 text-center px-2">{weekLabel}</p>
 
                   <motion.div
@@ -6013,16 +6051,18 @@ function RankingView({
                 </div>
               </div>
 
-              <div
-                className={cn(
-                  'shrink-0 px-4 py-3 border-b text-center text-sm leading-snug',
-                  darkMode ? 'bg-orange-500/10 border-orange-500/20 text-orange-100' : 'bg-orange-50 border-orange-100 text-slate-800'
-                )}
-              >
-                <p>
-                  Parabéns, <span className="font-bold">{congratsName}</span>, você está construindo um currículo incrível.
-                </p>
-              </div>
+              {!cardIsLeaderFallback && (
+                <div
+                  className={cn(
+                    'shrink-0 px-4 py-3 border-b text-center text-sm leading-snug',
+                    darkMode ? 'bg-orange-500/10 border-orange-500/20 text-orange-100' : 'bg-orange-50 border-orange-100 text-slate-800'
+                  )}
+                >
+                  <p>
+                    Parabéns, <span className="font-bold">{congratsName}</span>, você está construindo um currículo incrível.
+                  </p>
+                </div>
+              )}
 
               {/* Stats: única área com scroll; cabeçalho do modal permanece fixo */}
               <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
@@ -6081,7 +6121,7 @@ function RankingView({
       </AnimatePresence>
 
       <AnimatePresence>
-        {showEfficiencyShareModal && userSessionCard && userProfile?.is_pro && (
+        {showEfficiencyShareModal && userSessionCard && userProfile?.is_pro && !userSessionCard.is_fallback && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

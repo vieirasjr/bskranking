@@ -1748,7 +1748,7 @@ export default function ExplorarLocaisPage() {
                     className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center justify-center gap-2 ${darkMode ? 'bg-orange-500/15 text-orange-300 hover:bg-orange-500/25 border border-orange-500/30' : 'bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100'}`}
                   >
                     <Crown className="w-4 h-4" />
-                    Conheça os benefícios do PRÓ
+                    Conheça os benefícios do PRÓ (Em breve)
                   </button>
                 )}
 
