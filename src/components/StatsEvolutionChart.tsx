@@ -52,7 +52,7 @@ const STAT_OPTIONS: { key: StatType; label: string; color: string }[] = [
 
 // Pesos da eficiência — mesma fórmula do PerfilDetalhe e do ranking:
 //   acertos - erros_ponderados
-// Aplicada sobre o acumulado até cada bucket da timeline.
+// Aplicada sobre os totais do dia (cada ponto = um dia com sessão).
 const EFF_WEIGHTS: Record<string, number> = {
   points: 1.0, assists: 1.5, rebounds: 1.2, blocks: 1.5,
   steals: 1.3, clutch_points: 2.0, wins: 3.0,
@@ -61,70 +61,31 @@ const EFF_WEIGHTS: Record<string, number> = {
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
-function bucketKey(date: Date, days: number): string {
-  if (days <= 28) {
-    return date.toISOString().slice(0, 10); // daily
-  }
-  if (days <= 365) {
-    // weekly: ISO week start (Monday)
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    d.setDate(diff);
-    return d.toISOString().slice(0, 10);
-  }
-  // monthly
-  return date.toISOString().slice(0, 7);
+const DAY_TZ = 'America/Sao_Paulo';
+
+type RawLogRow = { stat_type: string; value: number; created_at: string };
+
+/** Chave YYYY-MM-DD no fuso de São Paulo (um bucket = um dia com jogo). */
+function dayKeySaoPaulo(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: DAY_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso));
 }
 
-function bucketLabel(key: string, days: number): string {
-  if (days <= 28) {
-    const d = new Date(key + 'T12:00:00');
-    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-  }
-  if (days <= 365) {
-    const d = new Date(key + 'T12:00:00');
-    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '');
-  }
-  const [y, m] = key.split('-');
-  const months = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  return `${months[Number(m) - 1]}/${y.slice(2)}`;
-}
-
-function generateBuckets(days: number): string[] {
-  const buckets: string[] = [];
-  const now = new Date();
-  const start = new Date(now);
-  start.setDate(start.getDate() - days);
-
-  if (days <= 28) {
-    for (let d = new Date(start); d <= now; d.setDate(d.getDate() + 1)) {
-      buckets.push(d.toISOString().slice(0, 10));
-    }
-  } else if (days <= 365) {
-    const d = new Date(start);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    d.setDate(diff);
-    while (d <= now) {
-      buckets.push(d.toISOString().slice(0, 10));
-      d.setDate(d.getDate() + 7);
-    }
-  } else {
-    const d = new Date(start.getFullYear(), start.getMonth(), 1);
-    while (d <= now) {
-      buckets.push(d.toISOString().slice(0, 7));
-      d.setMonth(d.getMonth() + 1);
-    }
-  }
-  return buckets;
+function dayLabelPt(key: string): string {
+  const [y, m, d] = key.split('-').map(Number);
+  if (!y || !m || !d) return key;
+  return new Date(y, m - 1, d).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 }
 
 /* ── Tooltip customizado ────────────────────────────────────────── */
 
-function CustomTooltip({ active, payload, label, darkMode, days }: {
+function CustomTooltip({ active, payload, label, darkMode }: {
   active?: boolean; payload?: Array<{ dataKey: string; value: number; color: string }>;
-  label?: string; darkMode: boolean; days: number;
+  label?: string; darkMode: boolean;
 }) {
   if (!active || !payload?.length) return null;
   return (
@@ -133,7 +94,7 @@ function CustomTooltip({ active, payload, label, darkMode, days }: {
       darkMode ? 'bg-slate-800/90 border-slate-700 text-white' : 'bg-white/90 border-slate-200 text-slate-900'
     )}>
       <p className={cn('font-semibold mb-1', darkMode ? 'text-slate-400' : 'text-slate-500')}>
-        {label ? bucketLabel(label, days) : ''}
+        {label ?? ''}
       </p>
       {payload.map((p) => {
         const opt = STAT_OPTIONS.find(s => s.key === p.dataKey);
@@ -159,7 +120,7 @@ interface StatsEvolutionChartProps {
 export default function StatsEvolutionChart({ userId, darkMode }: StatsEvolutionChartProps) {
   const [range, setRange] = useState<TimeRange>(TIME_RANGES[0]);
   const [activeStats, setActiveStats] = useState<Set<StatType>>(new Set(['points']));
-  const [rawLogs, setRawLogs] = useState<Array<{ stat_type: string; value: number; created_at: string }>>([]);
+  const [rawLogs, setRawLogs] = useState<RawLogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [chartKey, setChartKey] = useState(0); // force re-mount for animation
 
@@ -200,54 +161,52 @@ export default function StatsEvolutionChart({ userId, darkMode }: StatsEvolution
       });
   }, [userId, range]);
 
-  // Build chart data — usamos totais acumulados (running sum) por bucket.
-  // Isso faz stats esparsas (tocos/roubos/decisivos) permanecerem visíveis
-  // mesmo em períodos com poucos eventos: a área fica estável a partir do
-  // primeiro registro em vez de colapsar em zero no bucket seguinte.
+  // Um ponto por dia em que houve registro (fuso São Paulo). Sem dias “vazios” no eixo.
   const chartData = useMemo(() => {
-    const buckets = generateBuckets(range.days);
-    const perBucket: Record<string, Record<string, number>> = {};
-    for (const b of buckets) perBucket[b] = {};
+    const keys = [
+      'points', 'assists', 'rebounds', 'blocks', 'steals', 'clutch_points', 'wins',
+      'shot_1_miss', 'shot_2_miss', 'shot_3_miss', 'turnovers',
+    ] as const;
 
+    const byDay = new Map<string, RawLogRow[]>();
     for (const log of rawLogs) {
-      const d = new Date(log.created_at);
-      const bk = bucketKey(d, range.days);
-      if (!perBucket[bk]) perBucket[bk] = {};
-      perBucket[bk][log.stat_type] = (perBucket[bk][log.stat_type] ?? 0) + log.value;
+      const dk = dayKeySaoPaulo(log.created_at);
+      const arr = byDay.get(dk);
+      if (arr) arr.push(log);
+      else byDay.set(dk, [log]);
     }
 
-    const running: Record<string, number> = {
-      points: 0, assists: 0, rebounds: 0, blocks: 0,
-      steals: 0, clutch_points: 0, wins: 0,
-      shot_1_miss: 0, shot_2_miss: 0, shot_3_miss: 0, turnovers: 0,
-    };
+    const sortedDays = [...byDay.keys()].sort();
 
-    return buckets.map((bk) => {
-      const inc = perBucket[bk] ?? {};
-      for (const k of Object.keys(running)) {
-        running[k] = Math.max(0, running[k] + (inc[k] ?? 0));
+    return sortedDays.map((dayKey) => {
+      const logs = byDay.get(dayKey) ?? [];
+      const sums: Record<string, number> = {};
+      for (const k of keys) sums[k] = 0;
+      for (const log of logs) {
+        sums[log.stat_type] = (sums[log.stat_type] ?? 0) + log.value;
       }
       const rawEff = Object.entries(EFF_WEIGHTS).reduce(
-        (sum, [k, w]) => sum + (running[k] ?? 0) * w, 0
+        (sum, [k, w]) => sum + (sums[k] ?? 0) * w,
+        0
       );
       return {
-        bucket: bk,
-        label: bucketLabel(bk, range.days),
-        points: running.points,
-        assists: running.assists,
-        rebounds: running.rebounds,
-        blocks: running.blocks,
-        steals: running.steals,
-        clutch_points: running.clutch_points,
-        wins: running.wins,
-        shot_1_miss: running.shot_1_miss,
-        shot_2_miss: running.shot_2_miss,
-        shot_3_miss: running.shot_3_miss,
-        turnovers: running.turnovers,
+        dayKey,
+        label: dayLabelPt(dayKey),
+        points: sums.points ?? 0,
+        assists: sums.assists ?? 0,
+        rebounds: sums.rebounds ?? 0,
+        blocks: sums.blocks ?? 0,
+        steals: sums.steals ?? 0,
+        clutch_points: sums.clutch_points ?? 0,
+        wins: sums.wins ?? 0,
+        shot_1_miss: sums.shot_1_miss ?? 0,
+        shot_2_miss: sums.shot_2_miss ?? 0,
+        shot_3_miss: sums.shot_3_miss ?? 0,
+        turnovers: sums.turnovers ?? 0,
         efficiency: Math.round(Math.max(0, rawEff) * 10) / 10,
       };
     });
-  }, [rawLogs, range]);
+  }, [rawLogs]);
 
   const visibleStats = useMemo(
     () => STAT_OPTIONS.filter(s => activeStats.has(s.key)),
@@ -261,9 +220,14 @@ export default function StatsEvolutionChart({ userId, darkMode }: StatsEvolution
     )}>
       {/* Header */}
       <div className={cn('px-5 pt-5 pb-3', darkMode ? '' : '')}>
-        <h2 className={cn('font-bold text-base mb-3', darkMode ? 'text-white' : 'text-slate-900')}>
-          Evolução
-        </h2>
+        <div className="mb-3">
+          <h2 className={cn('font-bold text-base', darkMode ? 'text-white' : 'text-slate-900')}>
+            Evolução
+          </h2>
+          <p className={cn('text-[11px] mt-1 leading-snug', darkMode ? 'text-slate-500' : 'text-slate-500')}>
+            Só aparecem dias em que houve registro de jogo (fuso horário de São Paulo). Cada ponto soma tudo daquele dia.
+          </p>
+        </div>
 
         {/* Time range selector */}
         <div className="flex flex-wrap gap-1.5 mb-4">
@@ -366,10 +330,10 @@ export default function StatsEvolutionChart({ userId, darkMode }: StatsEvolution
                     tick={{ fontSize: 9, fill: darkMode ? '#475569' : '#94a3b8' }}
                     axisLine={false}
                     tickLine={false}
-                    allowDecimals={false}
+                    allowDecimals
                   />
                   <Tooltip
-                    content={<CustomTooltip darkMode={darkMode} days={range.days} />}
+                    content={<CustomTooltip darkMode={darkMode} />}
                     cursor={{ stroke: darkMode ? '#334155' : '#e2e8f0', strokeDasharray: '4 4' }}
                   />
                   {visibleStats.map(s => (
