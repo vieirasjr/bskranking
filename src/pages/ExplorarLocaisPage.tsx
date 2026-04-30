@@ -65,6 +65,7 @@ import PerfilDetalhe, { type PerfilDetalheData } from './PerfilDetalhe';
 import EditarPerfil from './EditarPerfil';
 import { ProUpgradeModal } from '../components/ProUpgradeModal';
 import ProShareCard, { type ProShareCardData } from '../components/ProShareCard';
+import { BottomNavTabButton } from '../components/BottomNavTabButton';
 
 /** Limite de jogadores no rank global. */
 const GLOBAL_RANK_LIMIT = 100;
@@ -2210,73 +2211,45 @@ export default function ExplorarLocaisPage() {
           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
         >
           <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-around">
-            <button
-              type="button"
+            <BottomNavTabButton
+              active={globalTab === 'inicio'}
               onClick={() => setGlobalTab('inicio')}
-              className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${
-                globalTab === 'inicio'
-                  ? (darkMode ? 'text-orange-400' : 'text-orange-500')
-                  : (darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')
-              }`}
-            >
-              <Home className="w-5 h-5" />
-              <span className="text-[10px] font-bold mt-0.5">Início</span>
-            </button>
-            <button
-              type="button"
+              icon={<Home className="w-5 h-5" />}
+              label="Início"
+              darkMode={darkMode}
+            />
+            <BottomNavTabButton
+              active={globalTab === 'rank'}
               onClick={() => {
                 setSelectedGlobalProfile(null);
                 setGlobalTab('rank');
               }}
-              className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${
-                globalTab === 'rank'
-                  ? (darkMode ? 'text-orange-400' : 'text-orange-500')
-                  : (darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')
-              }`}
-            >
-              <Trophy className="w-5 h-5" />
-              <span className="text-[10px] font-semibold mt-0.5">Rank</span>
-            </button>
-            <button
-              type="button"
+              icon={<Trophy className="w-5 h-5" />}
+              label="Rank"
+              darkMode={darkMode}
+            />
+            <BottomNavTabButton
+              active={globalTab === 'eventos'}
               onClick={() => setGlobalTab('eventos')}
-              className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${
-                globalTab === 'eventos'
-                  ? (darkMode ? 'text-orange-400' : 'text-orange-500')
-                  : (darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')
-              }`}
-            >
-              <Calendar className="w-5 h-5" />
-              <span className="text-[10px] font-semibold mt-0.5">Eventos</span>
-            </button>
-            <button
-              type="button"
+              icon={<Calendar className="w-5 h-5" />}
+              label="Eventos"
+              darkMode={darkMode}
+            />
+            <BottomNavTabButton
+              active={false}
               onClick={() => navigate('/treinos')}
-              className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all relative ${
-                darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              <Dumbbell className="w-5 h-5" />
-              <span className="text-[10px] font-semibold mt-0.5">Treinos</span>
-              <motion.span
-                className="absolute -top-0.5 right-2 w-2 h-2 rounded-full bg-orange-500"
-                animate={{ scale: [1, 1.4, 1], opacity: [0.7, 1, 0.7] }}
-                transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
-                aria-hidden
-              />
-            </button>
-            <button
-              type="button"
+              icon={<Dumbbell className="w-5 h-5" />}
+              label="Treinos"
+              darkMode={darkMode}
+              pulseBadge
+            />
+            <BottomNavTabButton
+              active={globalTab === 'perfil'}
               onClick={() => setGlobalTab('perfil')}
-              className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${
-                globalTab === 'perfil'
-                  ? (darkMode ? 'text-orange-400' : 'text-orange-500')
-                  : (darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')
-              }`}
-            >
-              <User className="w-5 h-5" />
-              <span className="text-[10px] font-semibold mt-0.5">Perfil</span>
-            </button>
+              icon={<User className="w-5 h-5" />}
+              label="Perfil"
+              darkMode={darkMode}
+            />
           </div>
         </nav>
       )}

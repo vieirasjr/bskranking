@@ -70,6 +70,7 @@ import PerfilDetalhe from './pages/PerfilDetalhe';
 import { NotificationsPanel } from './components/NotificationsPanel';
 import { ProUpgradeModal } from './components/ProUpgradeModal';
 import ProShareCard, { type ProShareCardData } from './components/ProShareCard';
+import { BottomNavTabButton } from './components/BottomNavTabButton';
 import { toBlob } from 'html-to-image';
 import { useLocationCheck } from './hooks/useLocationCheck';
 import { useNotifications } from './contexts/NotificationContext';
@@ -4492,19 +4493,18 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         )}
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
-        <div className="max-w-5xl mx-auto px-4 py-2 flex items-end justify-around">
-          <NavButton active={false} onClick={handleGoGlobal} icon={<Globe className="w-5 h-5" />} label="Global" darkMode={darkMode} />
-          <NavButton active={activeTab === 'inicio'} onClick={() => setActiveTab('inicio')} icon={<Home className="w-5 h-5" />} label="Início" darkMode={darkMode} />
-          <NavButton
+        <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-around">
+          <BottomNavTabButton active={false} onClick={handleGoGlobal} icon={<Globe className="w-5 h-5" />} label="Global" darkMode={darkMode} />
+          <BottomNavTabButton active={activeTab === 'inicio'} onClick={() => setActiveTab('inicio')} icon={<Home className="w-5 h-5" />} label="Início" darkMode={darkMode} />
+          <BottomNavTabButton
             active={activeTab === 'lista'}
             onClick={() => setActiveTab('lista')}
-            icon={<BasketballTabIcon className="w-12 h-12" />}
+            icon={<BasketballTabIcon className="w-5 h-5" />}
             label="Lista"
             darkMode={darkMode}
-            featured
           />
-          <NavButton active={activeTab === 'eventos'} onClick={() => setActiveTab('eventos')} icon={<Calendar className="w-5 h-5" />} label="Eventos" darkMode={darkMode} />
-          <NavButton active={activeTab === 'perfil'} onClick={() => setActiveTab('perfil')} icon={<User className="w-5 h-5" />} label="Perfil" darkMode={darkMode} />
+          <BottomNavTabButton active={activeTab === 'eventos'} onClick={() => setActiveTab('eventos')} icon={<Calendar className="w-5 h-5" />} label="Eventos" darkMode={darkMode} />
+          <BottomNavTabButton active={activeTab === 'perfil'} onClick={() => setActiveTab('perfil')} icon={<User className="w-5 h-5" />} label="Perfil" darkMode={darkMode} />
         </div>
       </nav>
 
@@ -5011,50 +5011,10 @@ function BasketballTabIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
       <path
-        fill="#000000"
+        fill="currentColor"
         d="M248.37 41.094c-49.643 1.754-98.788 20.64-137.89 56.656L210.53 197.8c31.283-35.635 45.59-88.686 37.84-156.706zm18.126.107c7.646 71.205-7.793 129.56-43.223 169.345L256 243.27 401.52 97.75c-38.35-35.324-86.358-54.18-135.024-56.55zM97.75 110.48c-36.017 39.102-54.902 88.247-56.656 137.89 68.02 7.75 121.07-6.557 156.707-37.84L97.75 110.48zm316.5 0L268.73 256l32.71 32.71c33.815-30.112 81.05-45.78 138.183-45.11 10.088.118 20.49.753 31.176 1.9-2.37-48.665-21.227-96.672-56.55-135.02zM210.545 223.272c-39.785 35.43-98.14 50.87-169.344 43.223 2.37 48.666 21.226 96.675 56.55 135.025L243.27 256l-32.725-32.727zm225.002 38.27c-51.25.042-92.143 14.29-121.348 39.928l100.05 100.05c36.017-39.102 54.902-88.247 56.656-137.89-12.275-1.4-24.074-2.096-35.36-2.087zM256 268.73L110.48 414.25c38.35 35.324 86.358 54.18 135.024 56.55-7.646-71.205 7.793-129.56 43.223-169.345L256 268.73zm45.47 45.47c-31.283 35.635-45.59 88.686-37.84 156.706 49.643-1.754 98.788-20.64 137.89-56.656L301.47 314.2z"
       />
     </svg>
-  );
-}
-
-interface NavButtonProps {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-  darkMode: boolean;
-  featured?: boolean;
-}
-
-function NavButton({ active, onClick, icon, label, darkMode, featured = false }: NavButtonProps) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all',
-        featured && 'relative -mt-7',
-        featured && (darkMode ? 'text-slate-300' : 'text-slate-700'),
-        !featured &&
-          (active ? 'text-orange-500' : darkMode ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600')
-      )}
-    >
-      <div
-        className={cn(
-          'transition-transform',
-          active && 'scale-110',
-          featured &&
-            'w-14 h-14 rounded-full flex items-center justify-center shadow-xl border-4 text-slate-950',
-          featured && (darkMode ? 'border-slate-900/95' : 'border-white/95'),
-          featured &&
-            'bg-gradient-to-br from-orange-400 to-orange-600 shadow-orange-500/45'
-        )}
-      >
-        {icon}
-      </div>
-      <span className="text-[10px] font-medium">{label}</span>
-      {active && !featured && <motion.div layoutId="nav-indicator" className="w-1 h-1 rounded-full bg-orange-500" />}
-    </button>
   );
 }
 

@@ -5,6 +5,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import RouterSwitch from './router/RouterSwitch';
 import { PwaUpdateNotifier } from './components/PwaUpdateNotifier';
+import TermsGate from './components/TermsGate';
 import './index.css';
 
 createRoot(document.getElementById('root')!).render(
@@ -13,7 +14,9 @@ createRoot(document.getElementById('root')!).render(
       <AuthProvider>
         <NotificationProvider>
           <PwaUpdateNotifier />
-          <RouterSwitch />
+          <TermsGate>
+            <RouterSwitch />
+          </TermsGate>
         </NotificationProvider>
       </AuthProvider>
     </BrowserRouter>
