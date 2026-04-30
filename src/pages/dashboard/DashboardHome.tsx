@@ -1,154 +1,38 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Users, Trophy, ArrowRight, AlertCircle, Clock, UserPlus, Trash2, Shield } from 'lucide-react';
-import { useTenant } from '../../contexts/TenantContext';
-import { useAuth } from '../../contexts/AuthContext';
+import {
+  MapPin,
+  Users,
+  Trophy,
+  ArrowRight,
+  AlertCircle,
+  Clock,
+  UserPlus,
+  Trash2,
+  Settings,
+  Lock,
+  Globe,
+  X,
+} from 'lucide-react';
+import { useTenant, type Location } from '../../contexts/TenantContext';
 import { appPublicHost } from '../../lib/publicAppUrl';
 import { formatAccessTimeRemaining, isTimeLimitedPlan } from '../../lib/planAccess';
 import { supabase } from '../../supabase';
 
-interface TenantAdmin {
+interface LocationAdmin {
   id: string;
   auth_id: string;
   email: string;
   name: string | null;
-  location_id: string | null;
 }
 
-interface GestorGroup {
-  auth_id: string;
-  email: string;
-  name: string | null;
-  rows: TenantAdmin[];
-  allLocations: boolean;
-}
-
-const MAX_GESTORES = 2;
+const MAX_ADMINS_PER_LOCATION = 2;
 
 export default function DashboardHome() {
-  const { tenant, locations, plan, isSubscriptionActive } = useTenant();
-  const { session } = useAuth();
+  const { tenant, locations, plan, isSubscriptionActive, refresh } = useTenant();
   const navigate = useNavigate();
   const [, setTick] = useState(0);
-
-  // Gestores (co-admins por local)
-  const [gestorRows, setGestorRows] = useState<TenantAdmin[]>([]);
-  const [newAdminEmail, setNewAdminEmail] = useState('');
-  const [newAdminName, setNewAdminName] = useState('');
-  const [selectedLocationIds, setSelectedLocationIds] = useState<string[]>([]);
-  const [grantAllLocations, setGrantAllLocations] = useState(false);
-  const [adminLoading, setAdminLoading] = useState(false);
-  const [adminError, setAdminError] = useState<string | null>(null);
-
-  const reloadGestores = async (tenantId: string) => {
-    const { data } = await supabase
-      .from('tenant_admins')
-      .select('id, auth_id, email, name, location_id')
-      .eq('tenant_id', tenantId);
-    setGestorRows((data ?? []) as TenantAdmin[]);
-  };
-
-  useEffect(() => {
-    if (!tenant?.id) return;
-    reloadGestores(tenant.id);
-  }, [tenant?.id]);
-
-  const gestorGroups: GestorGroup[] = (() => {
-    const map = new Map<string, GestorGroup>();
-    for (const row of gestorRows) {
-      const g = map.get(row.auth_id) ?? {
-        auth_id: row.auth_id,
-        email: row.email,
-        name: row.name,
-        rows: [],
-        allLocations: false,
-      };
-      g.rows.push(row);
-      if (row.location_id == null) g.allLocations = true;
-      map.set(row.auth_id, g);
-    }
-    return Array.from(map.values());
-  })();
-
-  const toggleLocation = (id: string) => {
-    setSelectedLocationIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
-  };
-
-  const addGestor = async () => {
-    if (!tenant?.id || !newAdminEmail.trim()) return;
-    if (!grantAllLocations && selectedLocationIds.length === 0) {
-      setAdminError('Selecione ao menos um local ou marque "Todos os locais".');
-      return;
-    }
-    setAdminLoading(true);
-    setAdminError(null);
-    try {
-      const { data: userRow } = await supabase
-        .from('basquete_users')
-        .select('auth_id')
-        .eq('email', newAdminEmail.trim().toLowerCase())
-        .maybeSingle();
-      if (!userRow?.auth_id) {
-        setAdminError('Usuário não encontrado. O email precisa estar cadastrado na plataforma.');
-        return;
-      }
-      if (userRow.auth_id === tenant.owner_auth_id) {
-        setAdminError('Você já é o dono deste tenant.');
-        return;
-      }
-      const alreadyGestor = gestorGroups.some((g) => g.auth_id === userRow.auth_id);
-      if (!alreadyGestor && gestorGroups.length >= MAX_GESTORES) {
-        setAdminError(`Máximo de ${MAX_GESTORES} gestores.`);
-        return;
-      }
-      if (alreadyGestor) {
-        setAdminError('Este usuário já é gestor. Remova-o primeiro para reconfigurar os locais.');
-        return;
-      }
-      const email = newAdminEmail.trim().toLowerCase();
-      const name = newAdminName.trim() || null;
-      const inserts = grantAllLocations
-        ? [{ tenant_id: tenant.id, auth_id: userRow.auth_id, email, name, location_id: null }]
-        : selectedLocationIds.map((location_id) => ({
-            tenant_id: tenant.id,
-            auth_id: userRow.auth_id,
-            email,
-            name,
-            location_id,
-          }));
-      const { error } = await supabase.from('tenant_admins').insert(inserts);
-      if (error) throw error;
-      setNewAdminEmail('');
-      setNewAdminName('');
-      setSelectedLocationIds([]);
-      setGrantAllLocations(false);
-      await reloadGestores(tenant.id);
-    } catch {
-      setAdminError('Erro ao adicionar gestor.');
-    } finally {
-      setAdminLoading(false);
-    }
-  };
-
-  const removeGestorRow = async (rowId: string) => {
-    await supabase.from('tenant_admins').delete().eq('id', rowId);
-    setGestorRows((prev) => prev.filter((r) => r.id !== rowId));
-  };
-
-  const removeGestorEntirely = async (auth_id: string) => {
-    if (!tenant?.id) return;
-    await supabase
-      .from('tenant_admins')
-      .delete()
-      .eq('tenant_id', tenant.id)
-      .eq('auth_id', auth_id);
-    setGestorRows((prev) => prev.filter((r) => r.auth_id !== auth_id));
-  };
-
-  const locationNameById = (id: string) =>
-    locations.find((l) => l.id === id)?.name ?? id.slice(0, 6);
+  const [manageLoc, setManageLoc] = useState<Location | null>(null);
 
   useEffect(() => {
     const id = window.setInterval(() => setTick((n) => n + 1), 60_000);
@@ -276,153 +160,287 @@ export default function DashboardHome() {
           <div className="space-y-3">
             {locations.map((loc) => (
               <div key={loc.id} className="flex items-center justify-between p-4 rounded-2xl border border-slate-800 bg-slate-900">
-                <div>
-                  <p className="font-semibold text-white text-sm">{loc.name}</p>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-white text-sm truncate">{loc.name}</p>
+                    {loc.is_private && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[10px] font-semibold text-slate-400">
+                        <Lock className="w-2.5 h-2.5" /> Privado
+                      </span>
+                    )}
+                  </div>
                   {tenant?.plan_id !== 'entrada' && (
-                    <p className="text-xs text-slate-500 mt-0.5">
+                    <p className="text-xs text-slate-500 mt-0.5 truncate">
                       {appPublicHost()}/{loc.slug}
                     </p>
                   )}
                 </div>
-                <button onClick={() => navigate(`/${loc.slug}`)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all">
-                  <ArrowRight className="w-3 h-3" /> Abrir
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setManageLoc(loc)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all"
+                  >
+                    <Settings className="w-3 h-3" /> Gestão
+                  </button>
+                  <button onClick={() => navigate(`/${loc.slug}`)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all">
+                    <ArrowRight className="w-3 h-3" /> Abrir
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* Gestores */}
-      <div className="mt-8">
-        <div className="flex items-center gap-2 mb-4">
-          <Shield className="w-5 h-5 text-orange-500" />
-          <h2 className="font-bold text-white">Gestores</h2>
-          <span className="text-xs text-slate-500">({gestorGroups.length}/{MAX_GESTORES})</span>
-        </div>
-        <p className="text-xs text-slate-500 mb-4">
-          Gestores podem iniciar sessões, gerenciar partidas, pontuar e encerrar sessões apenas nos locais autorizados. Apenas você (dono) tem acesso a este painel de gestão.
-        </p>
+      {manageLoc && tenant && (
+        <LocationManageModal
+          location={manageLoc}
+          tenantId={tenant.id}
+          ownerAuthId={tenant.owner_auth_id}
+          onClose={() => setManageLoc(null)}
+          onLocationChanged={refresh}
+        />
+      )}
+    </div>
+  );
+}
 
-        {gestorGroups.length > 0 && (
-          <div className="space-y-2 mb-4">
-            {gestorGroups.map((g) => (
-              <div key={g.auth_id} className="p-3 rounded-xl border border-slate-800 bg-slate-900">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-white">{g.name || g.email}</p>
-                    {g.name && <p className="text-xs text-slate-500">{g.email}</p>}
-                  </div>
-                  <button
-                    onClick={() => removeGestorEntirely(g.auth_id)}
-                    className="p-2 rounded-lg hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors"
-                    title="Remover gestor"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {g.allLocations ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-500/10 border border-orange-500/30 text-orange-300 text-xs font-semibold">
-                      Todos os locais
-                    </span>
-                  ) : (
-                    g.rows
-                      .filter((r) => r.location_id)
-                      .map((r) => (
-                        <span
-                          key={r.id}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 text-slate-300 text-xs"
-                        >
-                          {locationNameById(r.location_id!)}
-                          <button
-                            onClick={() => removeGestorRow(r.id)}
-                            className="text-slate-500 hover:text-red-400 ml-0.5"
-                            title="Revogar acesso a este local"
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))
-                  )}
-                </div>
-              </div>
-            ))}
+interface ModalProps {
+  location: Location;
+  tenantId: string;
+  ownerAuthId: string;
+  onClose: () => void;
+  onLocationChanged: () => void;
+}
+
+function LocationManageModal({ location, tenantId, ownerAuthId, onClose, onLocationChanged }: ModalProps) {
+  const [isPrivate, setIsPrivate] = useState<boolean>(location.is_private);
+  const [savingPrivacy, setSavingPrivacy] = useState(false);
+  const [privacyError, setPrivacyError] = useState<string | null>(null);
+
+  const [admins, setAdmins] = useState<LocationAdmin[]>([]);
+  const [loadingAdmins, setLoadingAdmins] = useState(true);
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [newAdminName, setNewAdminName] = useState('');
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
+
+  const reloadAdmins = async () => {
+    setLoadingAdmins(true);
+    const { data } = await supabase
+      .from('tenant_admins')
+      .select('id, auth_id, email, name')
+      .eq('tenant_id', tenantId)
+      .eq('location_id', location.id);
+    setAdmins((data ?? []) as LocationAdmin[]);
+    setLoadingAdmins(false);
+  };
+
+  useEffect(() => {
+    reloadAdmins();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.id, tenantId]);
+
+  const togglePrivacy = async (next: boolean) => {
+    setSavingPrivacy(true);
+    setPrivacyError(null);
+    const { error } = await supabase
+      .from('locations')
+      .update({ is_private: next })
+      .eq('id', location.id);
+    setSavingPrivacy(false);
+    if (error) {
+      setPrivacyError('Não foi possível salvar.');
+      return;
+    }
+    setIsPrivate(next);
+    onLocationChanged();
+  };
+
+  const addAdmin = async () => {
+    if (!newAdminEmail.trim()) return;
+    if (admins.length >= MAX_ADMINS_PER_LOCATION) {
+      setAdminError(`Máximo de ${MAX_ADMINS_PER_LOCATION} administradores por local.`);
+      return;
+    }
+    setAdminLoading(true);
+    setAdminError(null);
+    try {
+      const email = newAdminEmail.trim().toLowerCase();
+      const { data: userRow } = await supabase
+        .from('basquete_users')
+        .select('auth_id')
+        .eq('email', email)
+        .maybeSingle();
+      if (!userRow?.auth_id) {
+        setAdminError('Usuário não encontrado. O email precisa estar cadastrado na plataforma.');
+        return;
+      }
+      if (userRow.auth_id === ownerAuthId) {
+        setAdminError('Você já é o dono deste local.');
+        return;
+      }
+      if (admins.some((a) => a.auth_id === userRow.auth_id)) {
+        setAdminError('Este usuário já é administrador deste local.');
+        return;
+      }
+      const { error } = await supabase.from('tenant_admins').insert({
+        tenant_id: tenantId,
+        auth_id: userRow.auth_id,
+        email,
+        name: newAdminName.trim() || null,
+        location_id: location.id,
+      });
+      if (error) throw error;
+      setNewAdminEmail('');
+      setNewAdminName('');
+      await reloadAdmins();
+    } catch {
+      setAdminError('Erro ao adicionar administrador.');
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const removeAdmin = async (id: string) => {
+    await supabase.from('tenant_admins').delete().eq('id', id);
+    setAdmins((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-slate-950 border border-slate-800"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-5 border-b border-slate-800 sticky top-0 bg-slate-950">
+          <div>
+            <h3 className="font-bold text-white">Gestão do local</h3>
+            <p className="text-xs text-slate-500 mt-0.5">{location.name}</p>
           </div>
-        )}
+          <button
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
 
-        {gestorGroups.length < MAX_GESTORES && (
-          <div className="p-4 rounded-xl border border-dashed border-slate-700 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <input
-                value={newAdminEmail}
-                onChange={(e) => setNewAdminEmail(e.target.value)}
-                placeholder="Email do gestor"
-                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50"
-              />
-              <input
-                value={newAdminName}
-                onChange={(e) => setNewAdminName(e.target.value)}
-                placeholder="Nome (opcional)"
-                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50"
-              />
+        <div className="p-5 space-y-6">
+          {/* Privacidade */}
+          <section>
+            <h4 className="text-sm font-bold text-white mb-3">Visibilidade</h4>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => !savingPrivacy && togglePrivacy(false)}
+                disabled={savingPrivacy}
+                className={`flex flex-col items-start gap-1 p-3 rounded-xl border text-left transition-all ${
+                  !isPrivate
+                    ? 'bg-orange-500/10 border-orange-500/40 text-orange-200'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                }`}
+              >
+                <Globe className="w-4 h-4" />
+                <p className="text-sm font-semibold">Público</p>
+                <p className="text-xs opacity-80">Qualquer pessoa com o link entra.</p>
+              </button>
+              <button
+                onClick={() => !savingPrivacy && togglePrivacy(true)}
+                disabled={savingPrivacy}
+                className={`flex flex-col items-start gap-1 p-3 rounded-xl border text-left transition-all ${
+                  isPrivate
+                    ? 'bg-orange-500/10 border-orange-500/40 text-orange-200'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                }`}
+              >
+                <Lock className="w-4 h-4" />
+                <p className="text-sm font-semibold">Privado</p>
+                <p className="text-xs opacity-80">Só donos, gestores e emails autorizados.</p>
+              </button>
             </div>
-
-            <div>
-              <p className="text-xs font-semibold text-slate-400 mb-2">Locais com acesso</p>
-              <label className="flex items-center gap-2 mb-2 text-sm text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={grantAllLocations}
-                  onChange={(e) => {
-                    setGrantAllLocations(e.target.checked);
-                    if (e.target.checked) setSelectedLocationIds([]);
-                  }}
-                  className="accent-orange-500"
-                />
-                Todos os locais
-              </label>
-              {!grantAllLocations && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {locations.map((loc) => (
-                    <label
-                      key={loc.id}
-                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700 text-sm text-slate-300 cursor-pointer hover:bg-slate-800"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedLocationIds.includes(loc.id)}
-                        onChange={() => toggleLocation(loc.id)}
-                        className="accent-orange-500"
-                      />
-                      {loc.name}
-                    </label>
-                  ))}
-                  {locations.length === 0 && (
-                    <p className="text-xs text-slate-500 col-span-full">
-                      Crie um local primeiro para poder vincular um gestor.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {adminError && (
-              <p className="text-xs text-red-400 flex items-center gap-1.5">
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {adminError}
+            {privacyError && (
+              <p className="text-xs text-red-400 flex items-center gap-1.5 mt-2">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {privacyError}
               </p>
             )}
-            <button
-              onClick={addGestor}
-              disabled={adminLoading || !newAdminEmail.trim() || locations.length === 0}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold transition-all disabled:opacity-50"
-            >
-              <UserPlus className="w-4 h-4" />
-              {adminLoading ? 'Adicionando...' : 'Adicionar gestor'}
-            </button>
-          </div>
-        )}
+          </section>
+
+          {/* Administradores */}
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-bold text-white">Administradores</h4>
+              <span className="text-xs text-slate-500">
+                {admins.length}/{MAX_ADMINS_PER_LOCATION}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              Administradores podem iniciar sessões, gerenciar partidas, pontuar e encerrar sessões neste local.
+            </p>
+
+            {loadingAdmins ? (
+              <p className="text-xs text-slate-500">Carregando...</p>
+            ) : admins.length > 0 ? (
+              <div className="space-y-2 mb-3">
+                {admins.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between p-2.5 rounded-xl border border-slate-800 bg-slate-900"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-white truncate">{a.name || a.email}</p>
+                      {a.name && <p className="text-xs text-slate-500 truncate">{a.email}</p>}
+                    </div>
+                    <button
+                      onClick={() => removeAdmin(a.id)}
+                      className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors shrink-0"
+                      title="Remover"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 mb-3">Nenhum administrador vinculado.</p>
+            )}
+
+            {admins.length < MAX_ADMINS_PER_LOCATION && (
+              <div className="p-3 rounded-xl border border-dashed border-slate-700 space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    value={newAdminEmail}
+                    onChange={(e) => setNewAdminEmail(e.target.value)}
+                    placeholder="Email"
+                    className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50"
+                  />
+                  <input
+                    value={newAdminName}
+                    onChange={(e) => setNewAdminName(e.target.value)}
+                    placeholder="Nome (opcional)"
+                    className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-orange-500/50"
+                  />
+                </div>
+                {adminError && (
+                  <p className="text-xs text-red-400 flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {adminError}
+                  </p>
+                )}
+                <button
+                  onClick={addAdmin}
+                  disabled={adminLoading || !newAdminEmail.trim()}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-sm font-bold transition-all disabled:opacity-50"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  {adminLoading ? 'Adicionando...' : 'Adicionar'}
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );
