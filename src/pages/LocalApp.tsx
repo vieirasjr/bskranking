@@ -49,17 +49,19 @@ export default function LocalApp() {
         const t = (data as { tenant: TenantInfo }).tenant;
         setTenant(t);
 
-        // Verifica se o usuário logado é co-admin deste tenant
+        // Verifica se o usuário logado é gestor deste local específico
+        // (location_id = este local) ou de todos os locais do tenant (location_id IS NULL).
         if (session?.user && t && session.user.id !== t.owner_auth_id) {
-          const loc = data as { tenant_id?: string };
+          const loc = data as { tenant_id?: string; id: string };
           if (loc.tenant_id) {
             const { data: adminRows } = await supabase
               .from('tenant_admins')
-              .select('id')
+              .select('id, location_id')
               .eq('tenant_id', loc.tenant_id)
               .eq('auth_id', session.user.id)
-              .maybeSingle();
-            setIsTenantAdmin(!!adminRows);
+              .or(`location_id.is.null,location_id.eq.${loc.id}`)
+              .limit(1);
+            setIsTenantAdmin((adminRows?.length ?? 0) > 0);
           }
         }
       }
