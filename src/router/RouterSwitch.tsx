@@ -5,6 +5,8 @@ import ExplorarLocaisPage from '../pages/ExplorarLocaisPage';
 import LocaisListPage from '../pages/LocaisListPage';
 import TorneiosListPage from '../pages/TorneiosListPage';
 import TreinosPage from '../pages/TreinosPage';
+import TreinoCursoDetalhePage from '../pages/TreinoCursoDetalhePage';
+import MainExploreLayout from '../layouts/MainExploreLayout';
 import Login from '../pages/Login';
 import CadastroAdmin from '../pages/CadastroAdmin';
 import LocalApp from '../pages/LocalApp';
@@ -49,8 +51,13 @@ function RedirectToTenant() {
 export default function RouterSwitch() {
   return (
     <Routes>
-      {/* Página inicial pública (atletas) */}
-      <Route path="/" element={<ExplorarLocaisPage />} />
+      {/* Hub do atleta — mesma instância de topbar entre /, /treinos e detalhe */}
+      <Route element={<MainExploreLayout />}>
+        <Route path="/" element={<ExplorarLocaisPage />} />
+        <Route path="/treinos" element={<TreinosPage />} />
+        <Route path="/treinos/:slug" element={<TreinoCursoDetalhePage />} />
+      </Route>
+
       <Route path="/landing" element={<LandingPage />} />
 
       {/* Listagem completa de locais (busca + filtros) */}
@@ -60,9 +67,6 @@ export default function RouterSwitch() {
 
       {/* Listagem completa de torneios (busca + filtros) */}
       <Route path="/torneios" element={<TorneiosListPage />} />
-
-      {/* Treinos — em breve */}
-      <Route path="/treinos" element={<TreinosPage />} />
 
       {/* Auth — redireciona para /dashboard se já autenticado */}
       <Route path="/entrar" element={<PublicOnlyRoute><Login /></PublicOnlyRoute>} />

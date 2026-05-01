@@ -137,12 +137,14 @@ export default function TorneioInscricaoPage() {
     supabase
       .from('tournament_matches')
       .select(`
-        id, round, position, team_a_score, team_b_score, winner_id, status,
+        id, round, position, group_label, team_a_score, team_b_score, winner_id, status,
+        next_match_id, next_match_slot,
         team_a:teams!tournament_matches_team_a_id_fkey (id, name, logo_url),
         team_b:teams!tournament_matches_team_b_id_fkey (id, name, logo_url)
       `)
       .eq('tournament_id', t.id)
       .order('round', { ascending: true })
+      .order('group_label', { ascending: true })
       .order('position', { ascending: true })
       .then(({ data }) => {
         setBracketMatches(
@@ -150,12 +152,15 @@ export default function TorneioInscricaoPage() {
             id: m.id,
             round: m.round,
             position: m.position,
+            group_label: m.group_label ?? null,
             team_a: m.team_a as BracketTeam | null,
             team_b: m.team_b as BracketTeam | null,
             team_a_score: m.team_a_score,
             team_b_score: m.team_b_score,
             winner_id: m.winner_id,
             status: m.status,
+            next_match_id: m.next_match_id,
+            next_match_slot: m.next_match_slot,
           }))
         );
       });

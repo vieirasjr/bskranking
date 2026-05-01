@@ -68,12 +68,14 @@ export default function TournamentAdminModal({ tournament, onClose }: Props) {
       supabase
         .from('tournament_matches')
         .select(`
-          id, round, position, team_a_score, team_b_score, winner_id, status,
+          id, round, position, group_label, team_a_score, team_b_score, winner_id, status,
+          next_match_id, next_match_slot,
           team_a:teams!tournament_matches_team_a_id_fkey (id, name, logo_url),
           team_b:teams!tournament_matches_team_b_id_fkey (id, name, logo_url)
         `)
         .eq('tournament_id', tournament.id)
         .order('round', { ascending: true })
+        .order('group_label', { ascending: true })
         .order('position', { ascending: true }),
     ]);
     setTeams(
@@ -87,12 +89,15 @@ export default function TournamentAdminModal({ tournament, onClose }: Props) {
         id: m.id,
         round: m.round,
         position: m.position,
+        group_label: m.group_label ?? null,
         team_a: m.team_a as BracketTeam | null,
         team_b: m.team_b as BracketTeam | null,
         team_a_score: m.team_a_score,
         team_b_score: m.team_b_score,
         winner_id: m.winner_id,
         status: m.status,
+        next_match_id: m.next_match_id,
+        next_match_slot: m.next_match_slot,
       }))
     );
     setLoading(false);
@@ -136,14 +141,16 @@ export default function TournamentAdminModal({ tournament, onClose }: Props) {
     if (iErr) throw new Error(iErr.message);
 
     const byRoundPos = new Map<string, string>();
-    (inserted ?? []).forEach((m: any) => byRoundPos.set(`${m.round}:${m.position}`, m.id));
+    (inserted ?? []).forEach((m: any) => {
+      byRoundPos.set(`${m.round}:${m.position}:${m.group_label ?? ''}`, m.id);
+    });
 
     const updates = generated
       .map((g) => {
         if (g.next_index === undefined) return null;
-        const self = byRoundPos.get(`${g.round}:${g.position}`);
+        const self = byRoundPos.get(`${g.round}:${g.position}:${g.group_label ?? ''}`);
         const nextGen = generated[g.next_index];
-        const next = byRoundPos.get(`${nextGen.round}:${nextGen.position}`);
+        const next = byRoundPos.get(`${nextGen.round}:${nextGen.position}:${nextGen.group_label ?? ''}`);
         if (!self || !next) return null;
         return { id: self, next_match_id: next, next_match_slot: g.next_slot ?? null };
       })
@@ -266,8 +273,8 @@ export default function TournamentAdminModal({ tournament, onClose }: Props) {
   const hasBracket = matches.length > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-sm overflow-y-auto">
-      <div className="w-full max-w-5xl bg-slate-900 border border-slate-700 sm:rounded-2xl shadow-2xl my-0 sm:my-6">
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-900">
+      <div className="w-full h-full flex flex-col bg-slate-900">
         <div className="px-5 pt-5 pb-3 border-b border-slate-800 flex items-start justify-between gap-2">
           <div className="min-w-0">
             <h2 className="font-black text-white text-lg truncate">{tournament.name}</h2>
@@ -283,7 +290,7 @@ export default function TournamentAdminModal({ tournament, onClose }: Props) {
           </button>
         </div>
 
-        <div className="p-5 max-h-[80vh] overflow-y-auto space-y-6">
+        <div className="p-5 flex-1 overflow-y-auto space-y-6">
           {error && (
             <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -531,7 +538,14 @@ function ManualAssignmentUI({
   onSave: () => void;
   saving: boolean;
 }) {
-  const firstRound = matches.filter((m) => m.round === 1).sort((a, b) => a.position - b.position);
+  const firstRound = matches
+    .filter((m) => m.round === 1)
+    .sort((a, b) => {
+      const g = (x: BracketMatch) => x.group_label ?? '';
+      const c = g(a).localeCompare(g(b));
+      if (c !== 0) return c;
+      return a.position - b.position;
+    });
 
   const pickedIds = new Set<string>();
   Object.values(assignments).forEach((v) => {

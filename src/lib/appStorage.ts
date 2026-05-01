@@ -116,6 +116,30 @@ export function migrateLastLocationSlugKey(): void {
   }
 }
 
+const SESSION_EXPLORE_TAB_KEY = 'braska_session_explore_global_tab';
+
+export type StashableExploreTab = 'inicio' | 'rank' | 'eventos' | 'perfil';
+
+/** Ao voltar do fluxo /treinos para `/`, abre esta aba no Explorar. */
+export function stashExploreTabForHomeVisit(tab: StashableExploreTab): void {
+  try {
+    sessionStorage.setItem(SESSION_EXPLORE_TAB_KEY, tab);
+  } catch {
+    /* private mode */
+  }
+}
+
+export function consumeStashedExploreTabForHome(): StashableExploreTab | null {
+  try {
+    const v = sessionStorage.getItem(SESSION_EXPLORE_TAB_KEY);
+    sessionStorage.removeItem(SESSION_EXPLORE_TAB_KEY);
+    if (v === 'inicio' || v === 'rank' || v === 'eventos' || v === 'perfil') return v;
+  } catch {
+    /* */
+  }
+  return null;
+}
+
 /** Remove dados locais do app ao deslogar (novo + legado). */
 export function clearBraskaLocalStorage(): void {
   const keysToRemove: string[] = [];

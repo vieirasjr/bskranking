@@ -40,6 +40,7 @@ import {
   Search,
   Share2,
   CirclePlay,
+  WifiOff,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -80,7 +81,19 @@ import {
   parsePartidaPlayerPoints,
   partidaPlayerPointsToJson,
   totalsFromPlayerPoints,
+  type PartidaPlayerPointsJson,
 } from './lib/partidaPlayerPoints';
+import type { PartidaOfflineSnapshot, PendingStep } from './lib/partidaOfflineSync';
+import {
+  newCompositeId,
+  partidaOfflineClear,
+  partidaOfflineFlush,
+  partidaOfflinePendingCount,
+  partidaOfflinePersist,
+  partidaOfflineRead,
+  partidaOfflineTryStepsPartial,
+  usePartidaConnectivity,
+} from './lib/partidaOfflineSync';
 import {
   consumeInitialTab,
   getAdminModeStored,
@@ -275,6 +288,10 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
   playersRef.current = players;
   /** Em caso de empate no placar ao resetar times, desempate: time que marcou primeiro na partida. */
   const firstScoringTeamRef = useRef<'team1' | 'team2' | null>(null);
+  /** Placar detalhado da partida (espelho local; atualizado a cada marcação e pelo fetch). */
+  const partidaPpRef = useRef<PartidaPlayerPointsJson>(parsePartidaPlayerPoints(null));
+
+  const connectivity = usePartidaConnectivity(supabase);
   const [stats, setStats] = useState<PlayerStats[]>([]);
   const [showNotificationsPanel, setShowNotificationsPanel] = useState(false);
   const shownVisitanteRef = useRef(false);
@@ -348,6 +365,11 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
   const isSessionController = !!user && sessionControlledBy === user.id;
   const hasActiveController = !!sessionControlledBy;
   const canManageSessionPlayers = isAdminMode && (!isMatchStarted || !hasActiveController || isSessionController);
+  const canManageSessionPlayersRef = useRef(canManageSessionPlayers);
+  useEffect(() => {
+    canManageSessionPlayersRef.current = canManageSessionPlayers;
+  }, [canManageSessionPlayers]);
+
   const [venueModalityLabel, setVenueModalityLabel] = useState('Basquete 5x5');
   const [showHeaderQrModal, setShowHeaderQrModal] = useState(false);
   const [rankingSearchToggleNonce, setRankingSearchToggleNonce] = useState(0);
@@ -630,50 +652,108 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     };
   }, [locationId]);
 
-  const fetchPartidaSessao = useCallback(async (partidaSessaoId: string | null) => {
-    if (!partidaSessaoId) {
-      setTeam1MatchPoints(0);
-      setTeam2MatchPoints(0);
-      setMatchPlayerStats({});
-      setMissedAttempts({});
-      setShowWinnerModal(null);
-      return;
-    }
-    const { data, error } = await supabase
-      .from('partida_sessoes')
-      .select('team1_points, team2_points, player_points')
-      .eq('id', partidaSessaoId)
-      .single();
-    if (error || !data) {
-      return;
-    }
-    const t1 = (data.team1_points ?? 0) as number;
-    const t2 = (data.team2_points ?? 0) as number;
-    setTeam1MatchPoints(t1);
-    setTeam2MatchPoints(t2);
-    const parsed = parsePartidaPlayerPoints(data.player_points);
-    setMatchPlayerStats((prev) => {
-      const teamIds = playersRef.current
-        .filter((p) => p.status === 'team1' || p.status === 'team2')
-        .map((p) => p.id);
-      const next: typeof prev = {};
-      for (const pid of teamIds) {
-        const e1 = parsed.team1[pid];
-        const e2 = parsed.team2[pid];
-        const pts = (e1 ?? e2)?.points ?? 0;
-        const base = prev[pid] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
-        next[pid] = { ...base, points: pts };
+  const fetchPartidaSessao = useCallback(
+    async (partidaSessaoId: string | null) => {
+      if (!partidaSessaoId) {
+        setTeam1MatchPoints(0);
+        setTeam2MatchPoints(0);
+        setMatchPlayerStats({});
+        setMissedAttempts({});
+        setShowWinnerModal(null);
+        partidaPpRef.current = parsePartidaPlayerPoints(null);
+        return;
       }
-      return next;
-    });
-    if (t1 >= 12) {
-      setShowWinnerModal('team1');
-    } else if (t2 >= 12) {
-      setShowWinnerModal('team2');
-    } else {
-      setShowWinnerModal(null);
-    }
-  }, []);
+
+      const applyLocalSnapshot = (s: PartidaOfflineSnapshot) => {
+        partidaPpRef.current = {
+          team1: { ...s.playerPoints.team1 },
+          team2: { ...s.playerPoints.team2 },
+        };
+        setTeam1MatchPoints(s.team1MatchPoints);
+        setTeam2MatchPoints(s.team2MatchPoints);
+        setMatchPlayerStats(s.matchPlayerStats);
+        setMissedAttempts(s.missedAttempts);
+        firstScoringTeamRef.current = s.firstScoringTeam;
+        if (s.showWinnerModal === 'team1' || s.showWinnerModal === 'team2') {
+          setShowWinnerModal(s.showWinnerModal);
+        } else {
+          setShowWinnerModal(null);
+        }
+      };
+
+      const { data, error } = await supabase
+        .from('partida_sessoes')
+        .select('team1_points, team2_points, player_points')
+        .eq('id', partidaSessaoId)
+        .single();
+
+      if (error || !data) {
+        const local = partidaOfflineRead(locationId, partidaSessaoId);
+        if (local?.snapshot && canManageSessionPlayersRef.current) {
+          applyLocalSnapshot(local.snapshot);
+        }
+        return;
+      }
+
+      const localStored = partidaOfflineRead(locationId, partidaSessaoId);
+      if (localStored?.unsynced && canManageSessionPlayersRef.current && localStored.snapshot) {
+        applyLocalSnapshot(localStored.snapshot);
+        return;
+      }
+
+      const t1 = (data.team1_points ?? 0) as number;
+      const t2 = (data.team2_points ?? 0) as number;
+      setTeam1MatchPoints(t1);
+      setTeam2MatchPoints(t2);
+      const parsed = parsePartidaPlayerPoints(data.player_points);
+      partidaPpRef.current = {
+        team1: { ...parsed.team1 },
+        team2: { ...parsed.team2 },
+      };
+      setMatchPlayerStats((prev) => {
+        const teamIds = playersRef.current
+          .filter((p) => p.status === 'team1' || p.status === 'team2')
+          .map((p) => p.id);
+        const next: typeof prev = {};
+        for (const pid of teamIds) {
+          const e1 = parsed.team1[pid];
+          const e2 = parsed.team2[pid];
+          const pts = (e1 ?? e2)?.points ?? 0;
+          const base = prev[pid] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+          next[pid] = { ...base, points: pts };
+        }
+        return next;
+      });
+      if (t1 >= 12) {
+        setShowWinnerModal('team1');
+      } else if (t2 >= 12) {
+        setShowWinnerModal('team2');
+      } else {
+        setShowWinnerModal(null);
+      }
+    },
+    [locationId],
+  );
+
+  useEffect(() => {
+    if (!connectivity.online || !connectivity.dbOk) return;
+    if (!currentPartidaSessaoId || !canManageSessionPlayers) return;
+    if (partidaOfflinePendingCount(locationId, currentPartidaSessaoId) === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const r = await partidaOfflineFlush(supabase, locationId, currentPartidaSessaoId);
+      if (cancelled) return;
+      if (r.ok) {
+        fetchPartidaSessao(currentPartidaSessaoId);
+        fetchStats();
+      } else if (r.error) {
+        addNotification(r.error, 'warning', { showToastForMs: 4500 });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [connectivity.online, connectivity.dbOk, currentPartidaSessaoId, canManageSessionPlayers, locationId, fetchPartidaSessao, fetchStats, addNotification]);
 
   useEffect(() => {
     fetchPlayers();
@@ -1338,6 +1418,25 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     Record<string, { points: number; blocks: number; steals: number; assists: number; rebounds: number; clutch_points?: number }>
   >({});
   const [suspendedPlayers, setSuspendedPlayers] = useState<Record<string, SuspendedInfo>>({});
+
+  // Hidrata placar e atributos da partida salvos localmente (gestor, alterações ainda não enviadas ao banco).
+  useEffect(() => {
+    if (!currentPartidaSessaoId || !canManageSessionPlayers) return;
+    const local = partidaOfflineRead(locationId, currentPartidaSessaoId);
+    if (!local?.unsynced || !local.snapshot) return;
+    const s = local.snapshot;
+    partidaPpRef.current = {
+      team1: { ...s.playerPoints.team1 },
+      team2: { ...s.playerPoints.team2 },
+    };
+    setTeam1MatchPoints(s.team1MatchPoints);
+    setTeam2MatchPoints(s.team2MatchPoints);
+    setMatchPlayerStats(s.matchPlayerStats);
+    setMissedAttempts(s.missedAttempts);
+    firstScoringTeamRef.current = s.firstScoringTeam;
+    setShowWinnerModal(s.showWinnerModal);
+  }, [currentPartidaSessaoId, canManageSessionPlayers, locationId]);
+
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
 
@@ -1637,149 +1736,221 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
     }
 
     try {
-      // Atualizar stats (ranking) apenas para jogadores cadastrados
-      if (userId) {
-        // RPC atômica: envia apenas DELTAS. O banco faz soma com
-        // ON CONFLICT, eliminando race entre clientes simultâneos.
-        const isPts = stat === 'points_1' || stat === 'points_2' || stat === 'points_3';
-        const { error: upErr } = await supabase.rpc('increment_stats', {
-          p_user_id: userId,
-          p_location_id: locationId ?? null,
-          p_name: player.name,
-          p_points:   isPts                ? pts : 0,
-          p_blocks:   stat === 'blocks'    ? 1   : 0,
-          p_steals:   stat === 'steals'    ? 1   : 0,
-          p_rebounds: stat === 'rebounds'  ? 1   : 0,
-          p_assists:  stat === 'assists'   ? 1   : 0,
-        });
-        if (upErr) throw upErr;
-        fetchStats();
+      const isPtsStat = stat === 'points_1' || stat === 'points_2' || stat === 'points_3';
+      const matchStatKey = isPtsStat ? 'points' : stat;
+      const deltaStat = isPtsStat ? pts : 1;
+      const currentM = matchPlayerStats[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+      let nextMps: Record<
+        string,
+        { points: number; blocks: number; steals: number; assists: number; rebounds: number; clutch_points?: number }
+      > = {
+        ...matchPlayerStats,
+        [player.id]: {
+          ...currentM,
+          [matchStatKey]: (currentM[matchStatKey as keyof typeof currentM] ?? 0) + deltaStat,
+        },
+      };
+      const prevMatchPts = currentM.points ?? 0;
+      const newMatchPts = matchStatKey === 'points' ? prevMatchPts + deltaStat : prevMatchPts;
 
-        // Log para destaque semanal
-        const logType = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? 'points' : stat;
-        const logValue = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? pts : 1;
-        supabase.from('stat_logs').insert({
-          stat_type: logType,
-          value: logValue,
-          user_id: userId,
-          location_id: locationId ?? null,
-        }).then(() => {});
+      const steps: PendingStep[] = [];
+      const rpcPayload: Record<string, unknown> = {
+        p_user_id: userId,
+        p_location_id: locationId ?? null,
+        p_name: player.name,
+        p_partidas: 0,
+        p_wins: 0,
+        p_points: isPtsStat ? pts : 0,
+        p_blocks: stat === 'blocks' ? 1 : 0,
+        p_steals: stat === 'steals' ? 1 : 0,
+        p_rebounds: stat === 'rebounds' ? 1 : 0,
+        p_assists: stat === 'assists' ? 1 : 0,
+        p_clutch_points: 0,
+        p_shot_1_miss: 0,
+        p_shot_2_miss: 0,
+        p_shot_3_miss: 0,
+        p_turnovers: 0,
+      };
+
+      if (userId) {
+        steps.push({ kind: 'rpc_increment_stats', payload: rpcPayload });
+        const logType = isPtsStat ? 'points' : stat;
+        const logValue = isPtsStat ? pts : 1;
+        steps.push({
+          kind: 'stat_log',
+          payload: {
+            stat_type: logType,
+            value: logValue,
+            user_id: userId,
+            location_id: locationId ?? null,
+          },
+        });
       }
 
-      // Atualizar matchPlayerStats (tracking por partida)
-      const matchStatKey = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? 'points' : stat;
-      const delta = (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') ? pts : 1;
-      const prevMatchPts = matchPlayerStats[player.id]?.points ?? 0;
-      const newMatchPts = matchStatKey === 'points' ? prevMatchPts + delta : prevMatchPts;
-      setMatchPlayerStats((prev) => {
-        const current = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
-        return { ...prev, [player.id]: { ...current, [matchStatKey]: (current[matchStatKey as keyof typeof current] ?? 0) + delta } };
-      });
-
-      // Hot streak: ao atingir 6+ pontos na partida, atualizar hot_streak_since
       if (userId && newMatchPts >= 6 && prevMatchPts < 6) {
-        const existing = stats.find((s) => s.user_id === userId);
-        if (existing) {
-          await supabase.from('stats').update({ hot_streak_since: new Date().toISOString() }).eq('id', existing.id);
+        const existingHs = stats.find((s) => s.user_id === userId);
+        if (existingHs) {
+          steps.push({ kind: 'stats_hot_streak', statsRowId: existingHs.id });
+        }
+      }
+
+      const noNet = !navigator.onLine || !connectivity.dbOk;
+
+      if (!isPtsStat) {
+        setMatchPlayerStats(nextMps);
+        if (!userId) {
+          setStatsModalPlayer(null);
+          return;
+        }
+        if (noNet) {
+          setMatchPlayerStats((p) => ({ ...p, [player.id]: currentM }));
+          addNotification('Sem conexão. Não foi possível registrar no ranking.', 'warning', { showToastForMs: 5000 });
+          setStatsModalPlayer(null);
+          return;
+        }
+        const r = await partidaOfflineTryStepsPartial(supabase, steps);
+        if (r.ok === false) {
+          setMatchPlayerStats((p) => ({ ...p, [player.id]: currentM }));
+          addNotification('Falha ao salvar no ranking. Verifique a conexão.', 'error', { showToastForMs: 5000 });
+        } else {
+          fetchStats();
+        }
+        setStatsModalPlayer(null);
+        return;
+      }
+
+      let partidaId = currentPartidaSessaoId;
+      if (!partidaId && isMatchStarted && team1.length === 5 && team2.length === 5) {
+        if (noNet) {
+          addNotification(
+            'Sem conexão: não é possível criar o registro da partida. Aguarde a internet.',
+            'error',
+            { showToastForMs: 5500 },
+          );
+          setStatsModalPlayer(null);
+          return;
+        }
+        const { data: novaPartida, error: insErr } = await supabase
+          .from('partida_sessoes')
+          .insert(locationId ? { location_id: locationId } : {})
+          .select('id')
+          .single();
+        if (!insErr && novaPartida?.id) {
+          partidaId = novaPartida.id;
+          await supabase.from('session').update({ current_partida_sessao_id: partidaId }).eq('id', locationId ?? 'current');
+          setCurrentPartidaSessaoId(partidaId);
+        }
+      }
+
+      if (!partidaId) {
+        setStatsModalPlayer(null);
+        return;
+      }
+
+      const parsed = partidaPpRef.current;
+      let teamKey: 'team1' | 'team2' | null = null;
+      if (player.status === 'team1' || player.status === 'team2') {
+        teamKey = player.status;
+      } else if (parsed.team1[player.id]) {
+        teamKey = 'team1';
+      } else if (parsed.team2[player.id]) {
+        teamKey = 'team2';
+      }
+
+      if (!teamKey) {
+        setStatsModalPlayer(null);
+        return;
+      }
+
+      const identity = { user_id: player.user_id ?? null, name: player.name };
+      const totalsBefore = totalsFromPlayerPoints(parsed);
+      const t1Before = totalsBefore.t1;
+      const t2Before = totalsBefore.t2;
+      const nextPp = applyPlayerPointsDelta(parsed, teamKey, player.id, pts, identity);
+      const totals = totalsFromPlayerPoints(nextPp);
+      if (t1Before === 0 && t2Before === 0 && pts > 0) {
+        firstScoringTeamRef.current = teamKey;
+      }
+      const decisivePts = decisiveBasketPoints(teamKey, t1Before, t2Before, totals.t1, totals.t2, pts);
+
+      let clutchStep: PendingStep | null = null;
+      if (userId && decisivePts > 0) {
+        const row = stats.find((s) => s.user_id === userId);
+        if (row) {
+          clutchStep = {
+            kind: 'stats_update',
+            statsRowId: row.id,
+            patch: { clutch_points: (row.clutch_points ?? 0) + decisivePts },
+          };
+          const curP = nextMps[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
+          nextMps = {
+            ...nextMps,
+            [player.id]: {
+              ...curP,
+              clutch_points: (curP.clutch_points ?? 0) + decisivePts,
+            },
+          };
+        }
+      }
+
+      const partidaStep: PendingStep = {
+        kind: 'partida_player_points',
+        partidaId,
+        body: partidaPlayerPointsToJson(nextPp),
+      };
+      const pointSteps: PendingStep[] = [...steps];
+      if (clutchStep) pointSteps.push(clutchStep);
+      pointSteps.push(partidaStep);
+
+      partidaPpRef.current = nextPp;
+      setTeam1MatchPoints(totals.t1);
+      setTeam2MatchPoints(totals.t2);
+      let winM: 'team1' | 'team2' | null = null;
+      if (totals.t1 >= 12) winM = 'team1';
+      else if (totals.t2 >= 12) winM = 'team2';
+      setShowWinnerModal(winM);
+      setMatchPlayerStats(nextMps);
+
+      const snap: PartidaOfflineSnapshot = {
+        v: 2,
+        updatedAt: Date.now(),
+        partidaSessaoId: partidaId,
+        locationId: locationId ?? null,
+        team1MatchPoints: totals.t1,
+        team2MatchPoints: totals.t2,
+        firstScoringTeam: firstScoringTeamRef.current,
+        playerPoints: nextPp,
+        matchPlayerStats: nextMps,
+        missedAttempts,
+        showWinnerModal: winM,
+      };
+
+      if (noNet) {
+        partidaOfflinePersist(locationId, snap, [{ id: newCompositeId(), createdAt: Date.now(), steps: pointSteps }]);
+        addNotification(
+          'Sem conexão. Placar salvo neste aparelho; enviaremos quando a internet voltar.',
+          'warning',
+          { showToastForMs: 5500 },
+        );
+      } else {
+        const r = await partidaOfflineTryStepsPartial(supabase, pointSteps);
+        if (r.ok === false) {
+          partidaOfflinePersist(locationId, snap, [{ id: newCompositeId(), createdAt: Date.now(), steps: r.remaining }]);
+          addNotification(
+            'Não foi possível salvar tudo no servidor. Dados guardados aqui; tentaremos de novo.',
+            'warning',
+            { showToastForMs: 6000 },
+          );
+        } else {
+          fetchPartidaSessao(partidaId);
           fetchStats();
         }
       }
 
-      // Pontos: sempre atualiza o placar da partida (visitantes só contam para o jogo)
-      if (stat === 'points_1' || stat === 'points_2' || stat === 'points_3') {
-        let partidaId = currentPartidaSessaoId;
-
-        // Garantir partida_sessao existe (corrige sessão sem current_partida_sessao_id)
-        if (!partidaId && isMatchStarted && (team1.length === 5 && team2.length === 5)) {
-          const { data: novaPartida, error: insErr } = await supabase
-            .from('partida_sessoes')
-            .insert(locationId ? { location_id: locationId } : {})
-            .select('id')
-            .single();
-          if (!insErr && novaPartida?.id) {
-            partidaId = novaPartida.id;
-            await supabase.from('session').update({ current_partida_sessao_id: partidaId }).eq('id', locationId ?? 'current');
-            setCurrentPartidaSessaoId(partidaId);
-          }
-        }
-
-        if (partidaId) {
-          const { data: sessao, error: fetchErr } = await supabase
-            .from('partida_sessoes')
-            .select('team1_points, team2_points, player_points')
-            .eq('id', partidaId)
-            .single();
-          if (fetchErr || !sessao) {
-            addNotification('Erro ao buscar placar da partida.', 'error', { showToastForMs: 5000 });
-            throw new Error('fetch_sessao_failed');
-          }
-          const parsed = parsePartidaPlayerPoints(sessao.player_points);
-          
-          let teamKey: 'team1' | 'team2' | null = null;
-          if (player.status === 'team1' || player.status === 'team2') {
-            teamKey = player.status;
-          } else if (parsed.team1[player.id]) {
-            teamKey = 'team1';
-          } else if (parsed.team2[player.id]) {
-            teamKey = 'team2';
-          }
-
-          if (teamKey) {
-            const identity = { user_id: player.user_id ?? null, name: player.name };
-            const nextPp = applyPlayerPointsDelta(parsed, teamKey, player.id, pts, identity);
-            const totals = totalsFromPlayerPoints(nextPp);
-            const t1Before = (sessao.team1_points ?? 0) as number;
-            const t2Before = (sessao.team2_points ?? 0) as number;
-            if (t1Before === 0 && t2Before === 0 && pts > 0) {
-              firstScoringTeamRef.current = teamKey;
-            }
-            const decisivePts = decisiveBasketPoints(teamKey, t1Before, t2Before, totals.t1, totals.t2, pts);
-            setTeam1MatchPoints(totals.t1);
-            setTeam2MatchPoints(totals.t2);
-            if (totals.t1 >= 12) setShowWinnerModal('team1');
-            else if (totals.t2 >= 12) setShowWinnerModal('team2');
-            const { error: updErr } = await supabase
-              .from('partida_sessoes')
-              .update({ player_points: partidaPlayerPointsToJson(nextPp) })
-              .eq('id', partidaId);
-            if (updErr) {
-              const prevT = totalsFromPlayerPoints(parsed);
-              setTeam1MatchPoints(prevT.t1);
-              setTeam2MatchPoints(prevT.t2);
-              addNotification(updErr.message || 'Erro ao atualizar placar.', 'error', { showToastForMs: 5000 });
-            } else {
-              fetchPartidaSessao(partidaId);
-              if (userId && decisivePts > 0) {
-                const row = stats.find((s) => s.user_id === userId);
-                if (row) {
-                  await supabase
-                    .from('stats')
-                    .update({ clutch_points: (row.clutch_points ?? 0) + decisivePts })
-                    .eq('id', row.id);
-                  fetchStats();
-                }
-                setMatchPlayerStats((prev) => {
-                  const cur = prev[player.id] ?? { points: 0, blocks: 0, steals: 0, assists: 0, rebounds: 0 };
-                  return {
-                    ...prev,
-                    [player.id]: {
-                      ...cur,
-                      clutch_points: (cur.clutch_points ?? 0) + decisivePts,
-                    },
-                  };
-                });
-              }
-            }
-          }
-        }
-      }
       setStatsModalPlayer(null);
     } catch (err: unknown) {
       console.error('Error adding stat:', err);
-      const msg = (err as Error)?.message;
-      if (msg !== 'fetch_sessao_failed') {
-        addNotification('Erro ao registrar estatística.', 'error', { showToastForMs: 5000 });
-      }
+      addNotification('Erro ao registrar estatística.', 'error', { showToastForMs: 5000 });
     } finally {
       isRegisteringStatRef.current = false;
       setRegisteringStatLabel(null);
@@ -2367,11 +2538,13 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
         setPlayers([]);
         await fetchPlayers();
       } else if (showPasswordModal.type === 'END_MATCH') {
-        if (currentPartidaSessaoId) {
+        const endedPartidaId = currentPartidaSessaoId;
+        if (endedPartidaId) {
           await supabase
             .from('partida_sessoes')
             .update({ ended_at: new Date().toISOString() })
-            .eq('id', currentPartidaSessaoId);
+            .eq('id', endedPartidaId);
+          partidaOfflineClear(locationId, endedPartidaId);
         }
 
         await supabase
@@ -2490,6 +2663,7 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
       const oldPartidaId = currentPartidaSessaoId;
       if (oldPartidaId) {
         await supabase.from('partida_sessoes').update({ ended_at: new Date().toISOString() }).eq('id', oldPartidaId);
+        partidaOfflineClear(locationId, oldPartidaId);
       }
 
       setShowWinnerModal(null);
@@ -3366,6 +3540,32 @@ export default function App({ locationId, locationSlug, locationName, venueCoord
           </div>
         </div>
       </header>
+      )}
+      {!isProfileDetailOpen && (!connectivity.online || !connectivity.dbOk) && (
+        <div
+          className={cn(
+            'sticky top-0 z-[12] flex items-center justify-center gap-2 px-3 py-2 text-center text-xs font-bold text-white shadow-md',
+            darkMode ? 'bg-red-900/95 border-b border-red-800' : 'bg-red-600 border-b border-red-700',
+          )}
+          role="status"
+          aria-live="polite"
+        >
+          <WifiOff className="w-4 h-4 shrink-0" aria-hidden />
+          {!connectivity.online
+            ? 'Sem internet — o placar continua neste aparelho e será sincronizado quando voltar a conexão.'
+            : 'Sem conexão com o servidor — verifique a rede; os dados locais serão enviados assim que possível.'}
+        </div>
+      )}
+      {!isProfileDetailOpen && connectivity.online && connectivity.dbOk && canManageSessionPlayers && currentPartidaSessaoId && partidaOfflinePendingCount(locationId, currentPartidaSessaoId) > 0 && (
+        <div
+          className={cn(
+            'sticky top-0 z-[12] flex items-center justify-center gap-2 px-3 py-1.5 text-center text-[11px] font-semibold',
+            darkMode ? 'bg-amber-900/90 text-amber-200 border-b border-amber-800' : 'bg-amber-100 text-amber-900 border-b border-amber-200',
+          )}
+          role="status"
+        >
+          Enviando dados pendentes ao servidor…
+        </div>
       )}
       {!isProfileDetailOpen && headerMenuOpen && (
         <button

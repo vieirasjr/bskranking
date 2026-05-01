@@ -5,10 +5,7 @@ import {
   Calendar,
   Clock,
   Heart,
-  Home,
   Lock,
-  QrCode,
-  ScanLine,
   Share2,
   Shield,
   Smartphone,
@@ -22,13 +19,10 @@ import {
   User,
   X,
   Moon,
-  Menu,
-  LogOut,
   Filter,
   ShoppingBag,
   Star,
   Crown,
-  Dumbbell,
   ChevronRight,
   ArrowLeft,
   Download,
@@ -45,13 +39,13 @@ import {
 import { fetchPublicLocations, matchesLocationSearch, type PublicLocationRow } from '../lib/publicLocations';
 import { supabase } from '../supabase';
 import { useAuth } from '../contexts/AuthContext';
+import { useMainExploreShell } from '../contexts/MainExploreShellContext';
 import {
   INSTALL_MODAL_DISMISS_KEY,
   LAST_LOCATION_SLUG_KEY,
-  getThemeDarkStored,
+  consumeStashedExploreTabForHome,
   migrateInstallModalDismissKey,
   migrateLastLocationSlugKey,
-  setThemeDarkStored,
 } from '../lib/appStorage';
 import { appPublicOrigin } from '../lib/publicAppUrl';
 import {
@@ -65,7 +59,7 @@ import PerfilDetalhe, { type PerfilDetalheData } from './PerfilDetalhe';
 import EditarPerfil from './EditarPerfil';
 import { ProUpgradeModal } from '../components/ProUpgradeModal';
 import ProShareCard, { type ProShareCardData } from '../components/ProShareCard';
-import { BottomNavTabButton } from '../components/BottomNavTabButton';
+import { ExploreAppBottomNav } from '../components/ExploreAppBottomNav';
 
 /** Limite de jogadores no rank global. */
 const GLOBAL_RANK_LIMIT = 100;
@@ -109,6 +103,7 @@ export default function ExplorarLocaisPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user, session, signOut } = useAuth();
+  const { darkMode, setTopBarHidden, registerProfileOpener } = useMainExploreShell();
   const [locations, setLocations] = useState<PublicLocationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -144,17 +139,8 @@ export default function ExplorarLocaisPage() {
   const exportCardRef = useRef<HTMLDivElement | null>(null);
   const [exportCardSnapshot, setExportCardSnapshot] = useState<ProShareCardData | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
-  const [qrSheetOpen, setQrSheetOpen] = useState(false);
-  const [shareFeedback, setShareFeedback] = useState<string | null>(null);
-  const [darkMode, setDarkMode] = useState<boolean>(() => {
-    const saved = getThemeDarkStored();
-    if (saved === 'true') return true;
-    if (saved === 'false') return false;
-    return true;
-  });
   const [globalRank, setGlobalRank] = useState<GlobalRankEntry[]>([]);
   const [globalRankSort, setGlobalRankSort] = useState<SortKey>('efficiency');
-  const [showGlobalRankSearch, setShowGlobalRankSearch] = useState(false);
   const [globalRankSearch, setGlobalRankSearch] = useState('');
   const globalRankSearchRef = useRef<HTMLInputElement | null>(null);
   const [selectedGlobalProfile, setSelectedGlobalProfile] = useState<PerfilDetalheData | null>(null);
@@ -167,8 +153,6 @@ export default function ExplorarLocaisPage() {
     modality: string; logo_url: string | null; is_paid: boolean; price_brl: number | null;
   }>>([]);
   const [globalTab, setGlobalTab] = useState<'inicio' | 'rank' | 'eventos' | 'perfil' | 'atleta'>('inicio');
-  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
-  const [showInicioSearchControls, setShowInicioSearchControls] = useState(false);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const highlightedProCard = proCards[0] ?? null;
   const highlightedProCardShareUrl = highlightedProCard?.share_slug
@@ -176,9 +160,8 @@ export default function ExplorarLocaisPage() {
     : null;
   const [isAppInstalled, setIsAppInstalled] = useState(false);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<any>(null);
-  const appShareLink = `${appPublicOrigin()}/`;
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const lastScrollYRef = useRef(0);
+  const openOwnGlobalProfileRef = useRef<() => Promise<void>>(async () => {});
 
   // Produtos
   interface Product {
@@ -229,6 +212,11 @@ export default function ExplorarLocaisPage() {
   }, [searchParams]);
 
   useEffect(() => {
+    const t = consumeStashedExploreTabForHome();
+    if (t) setGlobalTab(t);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -249,10 +237,6 @@ export default function ExplorarLocaisPage() {
     const t = window.setTimeout(() => setShowInstallModal(true), 1200);
     return () => window.clearTimeout(t);
   }, [isAppInstalled]);
-
-  useEffect(() => {
-    setThemeDarkStored(darkMode);
-  }, [darkMode]);
 
   useEffect(() => {
     const standalone =
@@ -610,50 +594,8 @@ export default function ExplorarLocaisPage() {
     }
   }, [globalTab, user]);
 
-  useEffect(() => {
-    if (globalTab !== 'inicio') {
-      setShowInicioSearchControls(false);
-      return;
-    }
-    const onScroll = () => {
-      const y = window.scrollY || 0;
-      const delta = y - lastScrollYRef.current;
-      if (delta > 8) {
-        // Rolou para baixo: esconde busca e modalidades.
-        setShowInicioSearchControls(false);
-      }
-      lastScrollYRef.current = y;
-    };
-    lastScrollYRef.current = window.scrollY || 0;
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, [globalTab]);
-
-  const shareLink = async () => {
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: 'Braska', text: 'Quadras e locais', url: appShareLink });
-      } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(appShareLink);
-        setShareFeedback('Link copiado.');
-        setTimeout(() => setShareFeedback(null), 2200);
-      }
-    } catch {
-      // usuário cancelou compartilhamento
-    }
-  };
-
-  const handleOpenInitialApp = () => {
-    if (isAppInstalled) {
-      window.location.assign('/');
-      return;
-    }
-    setShowInstallModal(true);
-  };
-
   const openOwnGlobalProfile = async () => {
     if (!user) return;
-    setHeaderMenuOpen(false);
     setEditingProfile(false);
 
     const existing = globalRank.find((entry) => entry.user_id === user.id);
@@ -809,9 +751,22 @@ export default function ExplorarLocaisPage() {
 
   const handleGlobalSignOut = async () => {
     await signOut();
-    setHeaderMenuOpen(false);
     navigate('/locais', { replace: true });
   };
+
+  openOwnGlobalProfileRef.current = openOwnGlobalProfile;
+
+  useEffect(() => {
+    registerProfileOpener(() => {
+      void openOwnGlobalProfileRef.current();
+    });
+    return () => registerProfileOpener(null);
+  }, [registerProfileOpener]);
+
+  useEffect(() => {
+    setTopBarHidden(globalTab === 'atleta');
+    return () => setTopBarHidden(false);
+  }, [globalTab, setTopBarHidden]);
 
   const renderLocationCard = useCallback((loc: PublicLocationRow) => {
     const fav = favorites.has(loc.id);
@@ -935,146 +890,13 @@ export default function ExplorarLocaisPage() {
     <div className={`min-h-screen pb-24 ${darkMode ? 'bg-[#07090f] text-white' : 'bg-slate-50 text-slate-900'}`}>
       <GlobalPointsListener />
       {globalTab !== 'atleta' && (
-      <header className={`sticky top-0 z-30 border-b backdrop-blur-xl ${darkMode ? 'border-slate-800/80 bg-[#07090f]/92' : 'border-slate-200 bg-white/92'}`}>
-        <div className="max-w-5xl mx-auto px-4 pt-4 pb-3 sm:pt-5 sm:pb-4 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-          <button
-            type="button"
-            onClick={openOwnGlobalProfile}
-            disabled={!user}
-            className={`flex items-center gap-2 min-w-0 rounded-xl px-1.5 py-1 text-left transition-colors ${
-              user
-                ? darkMode
-                  ? 'hover:bg-slate-800/70'
-                  : 'hover:bg-slate-100'
-                : 'cursor-default'
-            }`}
-            title={user ? 'Abrir meu perfil' : undefined}
-          >
-            {user && (
-              <>
-                {profileAvatarUrl ? (
-                  <img src={profileAvatarUrl} alt={profileName} className="w-9 h-9 rounded-full object-cover border border-slate-600" />
-                ) : (
-                  <div className="w-9 h-9 rounded-full bg-orange-500/20 border border-orange-500/30 flex items-center justify-center text-xs font-bold text-orange-300">
-                    {(profileName?.[0] ?? 'A').toUpperCase()}
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <p className="text-[10px] uppercase tracking-wide text-slate-500 font-bold">Atleta logado</p>
-                  <p className={`text-sm font-semibold truncate max-w-[180px] ${darkMode ? 'text-white' : 'text-slate-900'}`}>{profileName}</p>
-                </div>
-              </>
-            )}
-          </button>
-          <div className="justify-self-center" />
-          <div className="justify-self-end relative">
-            {user && (
-              <>
-                <div className="flex items-center gap-1.5">
-                  {(globalTab === 'inicio' || globalTab === 'rank') && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (globalTab === 'inicio') {
-                          setShowInicioSearchControls((v) => {
-                            const next = !v;
-                            if (next) {
-                              window.requestAnimationFrame(() => searchInputRef.current?.focus());
-                            } else {
-                              searchInputRef.current?.blur();
-                            }
-                            return next;
-                          });
-                          return;
-                        }
-                        setShowGlobalRankSearch((v) => {
-                          const next = !v;
-                          if (next) {
-                            window.requestAnimationFrame(() => globalRankSearchRef.current?.focus());
-                          } else {
-                            setGlobalRankSearch('');
-                          }
-                          return next;
-                        });
-                      }}
-                      className={`inline-flex items-center justify-center w-10 h-10 rounded-xl transition-colors ${
-                        darkMode ? 'text-slate-300 hover:text-white' : 'text-slate-700 hover:text-slate-900'
-                      }`}
-                      aria-label={
-                        globalTab === 'inicio'
-                          ? (showInicioSearchControls ? 'Fechar busca' : 'Abrir busca')
-                          : (showGlobalRankSearch ? 'Fechar busca do rank' : 'Buscar jogador no rank')
-                      }
-                    >
-                      <Search className="w-5 h-5" />
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setHeaderMenuOpen((v) => !v)}
-                    className={`inline-flex items-center justify-center w-12 h-12 rounded-xl transition-colors ${
-                      darkMode ? 'text-slate-200 hover:text-white' : 'text-slate-700 hover:text-slate-900'
-                    }`}
-                    aria-label="Abrir menu"
-                  >
-                    <Menu className="w-6 h-6" />
-                  </button>
-                </div>
-                {headerMenuOpen && (
-                  <div className={`absolute right-0 mt-2 w-56 rounded-xl border shadow-xl p-2 z-20 ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
-                    {tenantFirstLocationSlug && profilePlayerCode && (
-                      <button
-                        type="button"
-                        onClick={() => { navigate(`/${tenantFirstLocationSlug}`); setHeaderMenuOpen(false); }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm font-semibold inline-flex items-center gap-2 ${darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700'}`}
-                      >
-                        <User className="w-4 h-4 shrink-0" />
-                        Visão de jogador
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => { setQrSheetOpen(true); setHeaderMenuOpen(false); }}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm font-semibold ${darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700'}`}
-                    >
-                      QR do app
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setDarkMode((v) => !v); setHeaderMenuOpen(false); }}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm font-semibold ${darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700'}`}
-                    >
-                      {darkMode ? 'Modo claro' : 'Modo escuro'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { handleOpenInitialApp(); setHeaderMenuOpen(false); }}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-sm font-semibold ${darkMode ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700'}`}
-                    >
-                      Abrir app inicial
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleGlobalSignOut}
-                      className="w-full text-left px-3 py-2 rounded-lg text-sm font-semibold text-red-400 hover:bg-red-500/10 inline-flex items-center justify-between"
-                    >
-                      Sair da conta <LogOut className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
+        <>
         {athleteSuccess && (
           <p className="max-w-5xl mx-auto px-4 pb-2 text-xs text-emerald-300">{athleteSuccess}</p>
         )}
-        {shareFeedback && (
-          <p className="max-w-5xl mx-auto px-4 pb-2 text-xs text-orange-300">{shareFeedback}</p>
-        )}
 
         <AnimatePresence initial={false}>
-          {globalTab === 'inicio' && showInicioSearchControls && (
+          {globalTab === 'inicio' && (
             <motion.section
               initial={{ height: 0, opacity: 0, y: -6 }}
               animate={{ height: 'auto', opacity: 1, y: 0 }}
@@ -1181,57 +1003,47 @@ export default function ExplorarLocaisPage() {
                 </div>
               </div>
 
-              <AnimatePresence initial={false}>
-                {showGlobalRankSearch && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="relative">
-                      <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`} />
-                      <input
-                        ref={globalRankSearchRef}
-                        type="search"
-                        value={globalRankSearch}
-                        onChange={(e) => setGlobalRankSearch(e.target.value)}
-                        placeholder="Buscar por nome (mín. 3 letras)..."
-                        className={`w-full pl-10 pr-10 py-2.5 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50 ${
-                          darkMode ? 'bg-slate-900 border border-slate-700 text-white placeholder-slate-500' : 'bg-white border border-slate-300 text-slate-900 placeholder-slate-400'
-                        }`}
-                      />
-                      {globalRankSearch && (
-                        <button
-                          type="button"
-                          onClick={() => setGlobalRankSearch('')}
-                          aria-label="Limpar busca"
-                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-400 hover:text-white"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                    {globalRankSearch.trim().length > 0 && globalRankSearch.trim().length < 3 && (
-                      <p className={`text-[11px] mt-1.5 px-1 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                        Digite pelo menos 3 letras para filtrar.
-                      </p>
-                    )}
-                    {globalRankSearchActive && (
-                      <p className={`text-[11px] mt-1.5 px-1 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                        {sortedGlobalRank.length} resultado{sortedGlobalRank.length !== 1 ? 's' : ''}
-                      </p>
-                    )}
-                  </motion.div>
+              <div className="flex flex-col gap-1">
+                <div className="relative">
+                  <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`} />
+                  <input
+                    ref={globalRankSearchRef}
+                    type="search"
+                    value={globalRankSearch}
+                    onChange={(e) => setGlobalRankSearch(e.target.value)}
+                    placeholder="Buscar por nome (mín. 3 letras)..."
+                    className={`w-full pl-10 pr-10 py-2.5 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/50 ${
+                      darkMode ? 'bg-slate-900 border border-slate-700 text-white placeholder-slate-500' : 'bg-white border border-slate-300 text-slate-900 placeholder-slate-400'
+                    }`}
+                  />
+                  {globalRankSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setGlobalRankSearch('')}
+                      aria-label="Limpar busca"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-400 hover:text-white"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                {globalRankSearch.trim().length > 0 && globalRankSearch.trim().length < 3 && (
+                  <p className={`text-[11px] mt-1.5 px-1 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                    Digite pelo menos 3 letras para filtrar.
+                  </p>
                 )}
-              </AnimatePresence>
+                {globalRankSearchActive && (
+                  <p className={`text-[11px] mt-1.5 px-1 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                    {sortedGlobalRank.length} resultado{sortedGlobalRank.length !== 1 ? 's' : ''}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}
 
         {(globalTab === 'eventos' || globalTab === 'perfil') && <div className="h-3 sm:h-4" aria-hidden />}
-      </header>
+        </>
       )}
 
       <main className="max-w-5xl mx-auto px-4 pt-0 sm:pt-6 space-y-10">
@@ -1275,7 +1087,10 @@ export default function ExplorarLocaisPage() {
                 Nenhum torneio em aberto no momento.
               </div>
             ) : (
-              <div className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory scrollbar-none -mx-4 px-4" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+              <div
+                className="flex gap-3 overflow-x-auto pb-3 snap-x snap-mandatory scrollbar-none"
+                style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}
+              >
                 {homeTournaments.map((t) => {
                   const dateStr = new Date(t.start_date + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
                   return (
@@ -2152,106 +1967,20 @@ export default function ExplorarLocaisPage() {
         </div>
       )}
 
-      <AnimatePresence>
-        {qrSheetOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex min-h-[100dvh] items-center justify-center overflow-y-auto p-4 sm:p-6"
-          >
-            <button type="button" className="absolute inset-0 bg-black/70" onClick={() => setQrSheetOpen(false)} aria-label="Fechar" />
-            <motion.div
-              initial={{ scale: 0.96, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.96, opacity: 0 }}
-              transition={{ type: 'spring', damping: 26, stiffness: 320 }}
-              className={`relative z-10 my-auto w-full max-w-sm rounded-3xl border p-5 shadow-2xl flex flex-col items-center ${darkMode ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}
-            >
-              <div className="flex w-full items-center justify-between mb-3 shrink-0">
-                <h3 className={`font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>Compartilhar aplicativo</h3>
-                <button type="button" onClick={() => setQrSheetOpen(false)} className={`p-2 rounded-xl ${darkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100'}`}>
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="rounded-2xl bg-white p-3 w-fit mx-auto">
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(appShareLink)}`}
-                  alt="QR Code do aplicativo"
-                  className="w-52 h-52"
-                />
-              </div>
-              <p className="text-xs text-slate-400 mt-3 text-center break-all">{appShareLink}</p>
-              <div className="mt-4 grid w-full grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => window.open('https://webqr.com/', '_blank', 'noopener,noreferrer')}
-                  className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm font-semibold"
-                >
-                  <ScanLine className="w-4 h-4" /> Scanner
-                </button>
-                <button
-                  type="button"
-                  onClick={shareLink}
-                  className="inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-sm font-bold"
-                >
-                  <Share2 className="w-4 h-4" /> Compartilhar
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {user && (
-        <nav
-          className={`fixed bottom-0 left-0 right-0 border-t backdrop-blur-lg z-50 transition-colors duration-300 ${
-            darkMode ? 'bg-slate-900/95 border-slate-800' : 'bg-white/95 border-slate-200'
-          }`}
-          style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
-        >
-          <div className="max-w-5xl mx-auto px-4 py-2 flex items-center justify-around">
-            <BottomNavTabButton
-              active={globalTab === 'inicio'}
-              onClick={() => setGlobalTab('inicio')}
-              icon={<Home className="w-5 h-5" />}
-              label="Início"
-              darkMode={darkMode}
-            />
-            <BottomNavTabButton
-              active={globalTab === 'rank'}
-              onClick={() => {
-                setSelectedGlobalProfile(null);
-                setGlobalTab('rank');
-              }}
-              icon={<Trophy className="w-5 h-5" />}
-              label="Rank"
-              darkMode={darkMode}
-            />
-            <BottomNavTabButton
-              active={globalTab === 'eventos'}
-              onClick={() => setGlobalTab('eventos')}
-              icon={<Calendar className="w-5 h-5" />}
-              label="Eventos"
-              darkMode={darkMode}
-            />
-            <BottomNavTabButton
-              active={false}
-              onClick={() => navigate('/treinos')}
-              icon={<Dumbbell className="w-5 h-5" />}
-              label="Treinos"
-              darkMode={darkMode}
-              pulseBadge
-            />
-            <BottomNavTabButton
-              active={globalTab === 'perfil'}
-              onClick={() => setGlobalTab('perfil')}
-              icon={<User className="w-5 h-5" />}
-              label="Perfil"
-              darkMode={darkMode}
-            />
-          </div>
-        </nav>
+        <ExploreAppBottomNav
+          darkMode={darkMode}
+          exploreActive={globalTab === 'atleta' ? null : globalTab}
+          treinosActive={false}
+          onSelectInicio={() => setGlobalTab('inicio')}
+          onSelectRank={() => {
+            setSelectedGlobalProfile(null);
+            setGlobalTab('rank');
+          }}
+          onSelectEventos={() => setGlobalTab('eventos')}
+          onSelectPerfil={() => setGlobalTab('perfil')}
+          onSelectTreinos={() => navigate('/treinos')}
+        />
       )}
 
       {!user && (

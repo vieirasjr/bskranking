@@ -21,7 +21,7 @@ export const FORMAT_LABEL: Record<TournamentFormat, string> = {
 
 export const FORMAT_DESCRIPTION: Record<TournamentFormat, string> = {
   ROUND_ROBIN:        'Cada equipe enfrenta todas as outras. Ideal para poucas equipes.',
-  KNOCKOUT:           'Confrontos diretos. Quem perde está fora. Ideal quando o nº de equipes é potência de 2.',
+  KNOCKOUT:           'Confrontos diretos até restar um campeão. Funciona com qualquer nº de equipes (bye e fases decrescentes por metade).',
   DOUBLE_ELIMINATION: 'Só é eliminado com duas derrotas. Mais justo, mas com mais jogos.',
   GROUP_STAGE:        'Times divididos em grupos, classificados avançam ao mata-mata.',
   CROSS_GROUPS:       'Vencedores de grupos se cruzam na fase seguinte.',
@@ -30,19 +30,9 @@ export const FORMAT_DESCRIPTION: Record<TournamentFormat, string> = {
 };
 
 /**
- * Potência de 2 (2, 4, 8, 16, 32, ...). Se a quantidade de equipes não é
- * potência de 2, o knockout fica com slots vazios (BYEs) — pouco elegante.
- */
-function isPowerOfTwo(n: number): boolean {
-  return n >= 2 && (n & (n - 1)) === 0;
-}
-
-/**
  * Recomenda o formato com base no nº de equipes reais (ou max_teams se ainda
- * não houver inscritos). A lógica prioriza:
- *   - Brackets "limpos": Knockout só quando N é potência de 2
- *   - Round Robin para N pequeno/não-pot2 (evita bracket cheio de BYEs)
- *   - Knockout com BYEs para N grande não-potência-de-2 (menos jogos que RR)
+ * não houver inscritos). O mata-mata usa duas metades (árvore decrescente
+ * em cada lado até a final central), então qualquer N ≥ 2 funciona bem.
  */
 export function recommendFormat(
   teamsCount: number | null | undefined,
@@ -51,14 +41,9 @@ export function recommendFormat(
   const n = teamsCount ?? 0;
   if (n < 2) return 'KNOCKOUT';
   if (n <= 3) return 'ROUND_ROBIN';
-  if (isPowerOfTwo(n) && n <= 16) return 'KNOCKOUT';
-  if (n <= 12) return 'ROUND_ROBIN';
   return 'KNOCKOUT';
 }
 
-/**
- * Estima quantos jogos o formato vai gerar com N equipes.
- */
 export function estimateMatchCount(
   format: TournamentFormat,
   teamsCount: number | null | undefined
@@ -67,9 +52,9 @@ export function estimateMatchCount(
   if (n < 2) return 0;
   switch (format) {
     case 'ROUND_ROBIN':        return (n * (n - 1)) / 2;
-    case 'KNOCKOUT':           return n - 1;              // single-elim elimina 1 por jogo
-    case 'HOME_AWAY':          return n * (n - 1);        // round robin em ida/volta
-    case 'DOUBLE_ELIMINATION': return Math.max(0, 2 * n - 2); // aproximação
+    case 'KNOCKOUT':           return n - 1;
+    case 'HOME_AWAY':          return n * (n - 1);
+    case 'DOUBLE_ELIMINATION': return Math.max(0, 2 * n - 2);
     case 'GROUP_STAGE':        return estimateGroupStage(n);
     case 'CROSS_GROUPS':       return estimateGroupStage(n);
     case 'SWISS':              return n * Math.ceil(Math.log2(n)) / 2;
@@ -78,15 +63,11 @@ export function estimateMatchCount(
 }
 
 function estimateGroupStage(n: number): number {
-  // 2 grupos, aproximação: round robin dentro dos grupos + mata-mata (semis+final)
   const perGroup = Math.ceil(n / 2);
   const groupMatches = 2 * (perGroup * (perGroup - 1)) / 2;
-  return groupMatches + 3; // 2 semis + 1 final
+  return groupMatches + 3;
 }
 
-/**
- * Formatos cuja geração já está implementada no sistema.
- */
 export const IMPLEMENTED_FORMATS: TournamentFormat[] = ['KNOCKOUT', 'ROUND_ROBIN'];
 
 export interface SimpleTeam {
@@ -102,14 +83,8 @@ export interface GeneratedMatch {
   team_b_id: string | null;
   group_label?: string | null;
   status: 'pending' | 'bye';
-  /** índice (0-based) para referenciar a próxima partida desta chave */
   next_index?: number;
   next_slot?: 'A' | 'B';
-}
-
-function nextPowerOfTwo(n: number): number {
-  if (n <= 1) return 2;
-  return Math.pow(2, Math.ceil(Math.log2(n)));
 }
 
 /**
@@ -124,61 +99,184 @@ function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+type HalfRoot =
+  | { kind: 'match'; idx: number }
+  | { kind: 'team'; teamId: string };
+
 /**
- * Gera um chaveamento eliminatório (knockout) simples.
- * Suporta qualquer nº de equipes — completa com BYEs até chegar à próxima
- * potência de 2.
+ * Constrói metade do mata-mata: em cada "camada externa" há ⌊n/2⌋ jogos;
+ * times ímpares sobem de bye. Ex.: 5 equipes → 2 jogos + 1 bye, depois 1 jogo + 1 bye, etc.
+ * (12 do lado → 3 jogos na 1ª rodada da metade, como em chave clássico.)
+ */
+function buildHalfMatches(teams: SimpleTeam[]): { matches: GeneratedMatch[]; root: HalfRoot } {
+  if (teams.length === 0) throw new Error('buildHalfMatches: lista vazia');
+  if (teams.length === 1) {
+    return { matches: [], root: { kind: 'team', teamId: teams[0].id } };
+  }
+
+  type Slot =
+    | { kind: 'team'; teamId: string }
+    | { kind: 'winner'; matchIdx: number };
+
+  let round = 1;
+  let current: Slot[] = teams.map((t) => ({ kind: 'team', teamId: t.id }));
+  const matches: GeneratedMatch[] = [];
+
+  while (current.length > 1) {
+    const g = Math.floor(current.length / 2);
+    const next: Slot[] = [];
+    let pos = 0;
+    for (let i = 0; i < g; i++) {
+      const a = current[i * 2]!;
+      const b = current[i * 2 + 1]!;
+      const parentIdx = matches.length;
+      const gm: GeneratedMatch = {
+        round,
+        position: pos,
+        team_a_id: a.kind === 'team' ? a.teamId : null,
+        team_b_id: b.kind === 'team' ? b.teamId : null,
+        status: 'pending',
+      };
+      if (a.kind === 'winner') {
+        matches[a.matchIdx].next_index = parentIdx;
+        matches[a.matchIdx].next_slot = 'A';
+      }
+      if (b.kind === 'winner') {
+        matches[b.matchIdx].next_index = parentIdx;
+        matches[b.matchIdx].next_slot = 'B';
+      }
+      matches.push(gm);
+      next.push({ kind: 'winner', matchIdx: parentIdx });
+      pos++;
+    }
+    if (current.length % 2 === 1) {
+      next.push(current[current.length - 1]!);
+    }
+    current = next;
+    round++;
+  }
+
+  const last = current[0]!;
+  if (last.kind === 'team') {
+    return { matches, root: { kind: 'team', teamId: last.teamId } };
+  }
+  return { matches, root: { kind: 'match', idx: last.matchIdx } };
+}
+
+const HALF_LEFT = 'H1';
+const HALF_RIGHT = 'H2';
+
+/**
+ * Dois chaveamentos independentes (metade esquerda + metade direita), cada um com
+ * árvore que diminui dos bordos ao centro; a final recebe os dois campeões das metades.
+ * `group_label`: H1 | H2 para o layout; final com null.
+ */
+function buildSplitKnockout(teams: SimpleTeam[]): GeneratedMatch[] {
+  const n = teams.length;
+  const nL = Math.ceil(n / 2);
+  const leftTeams = teams.slice(0, nL);
+  const rightTeams = teams.slice(nL);
+
+  const leftBuilt = buildHalfMatches(leftTeams);
+  const rightBuilt = buildHalfMatches(rightTeams);
+
+  const leftM = leftBuilt.matches.map((m) => ({ ...m, group_label: HALF_LEFT }));
+  const rightM = rightBuilt.matches.map((m) => ({ ...m, group_label: HALF_RIGHT }));
+
+  const lenL = leftM.length;
+  const combined: GeneratedMatch[] = [...leftM, ...rightM];
+
+  for (let i = lenL; i < combined.length; i++) {
+    const m = combined[i];
+    if (m.next_index !== undefined) m.next_index += lenL;
+  }
+
+  let finalRound = 1;
+  if (combined.length > 0) {
+    finalRound = Math.max(...combined.map((m) => m.round)) + 1;
+  }
+
+  const finalMatch: GeneratedMatch = {
+    round: finalRound,
+    position: 0,
+    team_a_id: null,
+    team_b_id: null,
+    group_label: null,
+    status: 'pending',
+  };
+
+  const finalIdx = combined.length;
+  combined.push(finalMatch);
+
+  if (leftBuilt.root.kind === 'match') {
+    const li = leftBuilt.root.idx;
+    combined[li].next_index = finalIdx;
+    combined[li].next_slot = 'A';
+  } else {
+    finalMatch.team_a_id = leftBuilt.root.teamId;
+  }
+
+  if (rightBuilt.root.kind === 'match') {
+    const ri = rightBuilt.root.idx + lenL;
+    combined[ri].next_index = finalIdx;
+    combined[ri].next_slot = 'B';
+  } else {
+    finalMatch.team_b_id = rightBuilt.root.teamId;
+  }
+
+  return combined;
+}
+
+/**
+ * Gera um chaveamento eliminatório (knockout).
+ * N ≥ 3: duas metades com árvore decrescente até a final central.
+ * N = 2: uma única final.
  */
 export function generateKnockout(teams: SimpleTeam[]): GeneratedMatch[] {
-  const total = nextPowerOfTwo(teams.length);
+  const n = teams.length;
+  if (n < 2) return [];
   const seeded = shuffle(teams);
-  // Preenche com null (BYE) até completar `total`
-  const slots: (SimpleTeam | null)[] = [...seeded];
-  while (slots.length < total) slots.push(null);
+  if (n === 2) return buildCleanKnockout(seeded);
+  return buildSplitKnockout(seeded);
+}
 
+function buildCleanKnockout(teams: SimpleTeam[]): GeneratedMatch[] {
+  const total = teams.length;
   const matches: GeneratedMatch[] = [];
   const rounds = Math.log2(total);
+  const idxMap = new Map<string, number>();
 
-  // Contabiliza índices por rodada para saber onde cada vencedor vai
-  // Vencedor de round R posição P vai para round R+1 posição floor(P/2), slot A se P par, B se ímpar.
   let globalIdx = 0;
-  const firstRoundIdxMap: Record<string, number> = {}; // key = `${round}:${position}`
   for (let r = 1; r <= rounds; r++) {
     const matchesInRound = total / Math.pow(2, r);
     for (let p = 0; p < matchesInRound; p++) {
-      const isFirstRound = r === 1;
-      const a = isFirstRound ? slots[p * 2] : null;
-      const b = isFirstRound ? slots[p * 2 + 1] : null;
-      const isBye = isFirstRound && (!a || !b) && !(a === null && b === null);
+      const isFirst = r === 1;
+      const a = isFirst ? teams[p * 2] : null;
+      const b = isFirst ? teams[p * 2 + 1] : null;
       matches.push({
         round: r,
         position: p,
         team_a_id: a?.id ?? null,
         team_b_id: b?.id ?? null,
-        status: isBye ? 'bye' : 'pending',
+        group_label: null,
+        status: 'pending',
       });
-      firstRoundIdxMap[`${r}:${p}`] = globalIdx;
-      globalIdx++;
+      idxMap.set(`${r}:${p}`, globalIdx++);
     }
   }
 
-  // Preenche next_index/slot
   matches.forEach((m) => {
     if (m.round >= rounds) return;
     const nextR = m.round + 1;
     const nextP = Math.floor(m.position / 2);
     const slot: 'A' | 'B' = m.position % 2 === 0 ? 'A' : 'B';
-    const nextIdx = firstRoundIdxMap[`${nextR}:${nextP}`];
-    m.next_index = nextIdx;
+    m.next_index = idxMap.get(`${nextR}:${nextP}`);
     m.next_slot = slot;
   });
 
   return matches;
 }
 
-/**
- * Gera partidas de round-robin (cada time joga com todos).
- */
 export function generateRoundRobin(teams: SimpleTeam[]): GeneratedMatch[] {
   const matches: GeneratedMatch[] = [];
   let pos = 0;
@@ -206,7 +304,6 @@ export function generateBracket(
     case 'ROUND_ROBIN':
       return generateRoundRobin(teams);
     default:
-      // Fallback: knockout até implementarmos os demais
       return generateKnockout(teams);
   }
 }
